@@ -6,6 +6,7 @@
 <title>GMT system map</title>
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
+<script src="live.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
@@ -86,8 +87,8 @@
 <script>
 // ---------- Configure ----------
 const MAPBOX_TOKEN = "pk.eyJ1Ijoid2hvZGdzb24iLCJhIjoiY212Z3o3bXhtMDBkODJ5cHYwaDRtM2J4ZiJ9.zwDLsKOUp_iLM28iDg2-Rg";   // restrict this token to your domains in your Mapbox account
-const API_BASE = "https://gmt-system-map.YOUR-ACCOUNT.workers.dev";  // the Worker; use "" if the Worker also serves this page
-const REFRESH_MS = 20000;                       // how often live buses and arrival times update
+const SWIFTLY_KEY = "__SWIFTLY_KEY__";          // filled in automatically when the site is published (GitHub secret SWIFTLY_KEY)
+const REFRESH_MS = 15000;                       // how often live buses and arrival times update
 // --------------------------------
 
 let routeParam = new URLSearchParams(location.search).get("route");
@@ -98,7 +99,7 @@ let openPopup = null, openStopId = null;
 mapboxgl.accessToken = MAPBOX_TOKEN;
 const map = new mapboxgl.Map({
   container: "map", style: "mapbox://styles/mapbox/light-v11",
-  center: [-73.15, 44.45], zoom: 10.5, cooperativeGestures: true,
+  center: [-73.15, 44.45], zoom: 10.5,
 });
 map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
 map.addControl(new mapboxgl.GeolocateControl({ showUserHeading: true }), "top-right");
@@ -108,7 +109,8 @@ let onScreen = true;
 new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) tick(); }).observe(document.getElementById("map"));
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 const canPoll = () => onScreen && !document.hidden;
-const liveReady = API_BASE === "" || !API_BASE.includes("YOUR-ACCOUNT");
+const liveReady = !SWIFTLY_KEY.startsWith("__");
+GMTLive.configure({ key: liveReady ? SWIFTLY_KEY : "", dataDir: DIR });
 
 map.on("load", async () => {
   map.addImage("heading", arrowImage(), { sdf: true });
@@ -190,11 +192,9 @@ function tick() {
 // ---------- live buses ----------
 async function refreshBuses() {
   const status = document.getElementById("status");
-  if (!liveReady) { status.textContent = "Live buses aren’t connected yet. Showing routes and stops."; return; }
+  if (!liveReady) { status.textContent = "Live buses aren’t connected yet. Showing scheduled times."; return; }
   try {
-    const res = await fetch(`${API_BASE}/api/vehicles`);
-    if (!res.ok) throw new Error();
-    const data = await res.json();
+    const data = await GMTLive.vehicles();
     data.features = data.features.filter((f) => routes[f.properties.route_id] && (!routeParam || f.properties.route_id === routeParam));
     const counts = {};
     for (const f of data.features) {
@@ -283,11 +283,8 @@ function renderStopList() {
 }
 
 async function refreshRouteArrivals() {
-  if (!liveReady) return;
   try {
-    const res = await fetch(`${API_BASE}/api/arrivals?route=${encodeURIComponent(routeParam)}`);
-    if (!res.ok) throw new Error();
-    routeArrivals = (await res.json()).arrivals;
+    routeArrivals = (await GMTLive.arrivals({ route: routeParam })).arrivals;
     const ids = routeStops[routeParam][activeDir].stops;
     document.querySelectorAll("[data-next]").forEach((el) => {
       if (el.dataset.next !== ids[ids.length - 1]) el.innerHTML = summary(routeArrivals[el.dataset.next]?.[activeDir]);
@@ -315,11 +312,9 @@ async function showStop(id, fly) {
 
 async function refreshPopup() {
   const id = openStopId;
-  if (!liveReady) { if (openPopup) openPopup.setHTML(stopHtml(stopsById[id], "error")); return; }
   try {
-    const res = await fetch(`${API_BASE}/api/arrivals?stop=${encodeURIComponent(id)}`);
-    const body = await res.json();
-    if (id === openStopId && openPopup) openPopup.setHTML(stopHtml(stopsById[id], res.ok ? (body.arrivals[id] || []) : "error"));
+    const body = await GMTLive.arrivals({ stop: id });
+    if (id === openStopId && openPopup) openPopup.setHTML(stopHtml(stopsById[id], body.arrivals[id] || []));
   } catch {
     if (id === openStopId && openPopup) openPopup.setHTML(stopHtml(stopsById[id], "error"));
   }
