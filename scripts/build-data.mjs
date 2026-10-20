@@ -146,7 +146,9 @@ for (const [routeId, dirs] of Object.entries(routeStops)) if (!drawn.has(routeId
 }
 
 // ---------- stops, with amenities ----------
-const AMENITY_COLUMNS = { shelter: "Shelter", bench: "Bench", bike_rack: "Bike rack", trash_can: "Trash can", lighting: "Lighting", real_time_sign: "Arrival sign" };
+// amenities.csv column -> label shown in the stop popup. Add a column here to show a new amenity.
+const AMENITY_COLUMNS = { shelter: "Shelter", seating: "Seating", schedule_box: "Schedule box",
+  bike_rack: "Bike rack", trash_can: "Trash can", lighting: "Lighting", real_time_sign: "Arrival sign" };
 const amenities = new Map();
 if (amenitiesFile) {
   for (const row of parseCsv(fs.readFileSync(amenitiesFile, "utf8"))) {
@@ -194,4 +196,5 @@ write("calendar.json", cal);
 write("headsigns.json", headsigns);
 
 console.log(`Built ${routeList.length} routes, ${stopFeatures.length} stops, ${Object.keys(headsigns).length} trips` +
-  (amenitiesFile ? `, amenities for ${amenities.size} stops` : "") + ` -> public/data/`);
+  (amenitiesFile ? `, amenities for ${stopFeatures.filter((f) => amenities.has(f.properties.stop_id)).length} of them` +
+    ` (${amenities.size} rows in ${path.basename(amenitiesFile)})` : "") + ` -> public/data/`);
