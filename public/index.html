@@ -50,8 +50,8 @@
   .stop-row::before { content: ""; position: absolute; left: 22px; top: 0; bottom: 0; width: 3px; background: var(--route); }
   li:first-child .stop-row::before { top: 50%; } li:last-child .stop-row::before { bottom: 50%; }
   .stop-dot { position: relative; z-index: 1; width: 12px; height: 12px; margin: 3px 0 0 2px; border-radius: 50%; background: #fff; border: 3px solid var(--route); box-sizing: border-box; }
-  .stop-name { font-size: .88rem; font-weight: 600; line-height: 1.3; }
-  .stop-next { font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .stop-name { display: block; font-size: .88rem; font-weight: 600; line-height: 1.3; }
+  .stop-next { display: block; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 1px; }
   .stop-next .now { color: var(--live); font-weight: 600; }
 
   .mapboxgl-popup-content { font-family: inherit; padding: 12px 14px 10px; min-width: 220px; border-radius: 8px; }
@@ -90,7 +90,7 @@ const API_BASE = "https://gmt-system-map.YOUR-ACCOUNT.workers.dev";  // the Work
 const REFRESH_MS = 20000;                       // how often live buses and arrival times update
 // --------------------------------
 
-const routeParam = new URLSearchParams(location.search).get("route");
+let routeParam = new URLSearchParams(location.search).get("route");
 const DIR = "data/";
 let routes = {}, routeStops = {}, stopsById = {}, hidden = new Set(), activeDir = null;
 let openPopup = null, openStopId = null;
@@ -108,6 +108,7 @@ let onScreen = true;
 new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) tick(); }).observe(document.getElementById("map"));
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 const canPoll = () => onScreen && !document.hidden;
+const liveReady = API_BASE === "" || !API_BASE.includes("YOUR-ACCOUNT");
 
 map.on("load", async () => {
   map.addImage("heading", arrowImage(), { sdf: true });
@@ -123,6 +124,10 @@ map.on("load", async () => {
   stops.features.forEach((f) => (stopsById[f.properties.stop_id] = { ...f.properties, coords: f.geometry.coordinates }));
 
   if (routeParam && !routes[routeParam]) {
+    const byNumber = meta.routes.find((r) => r.short_name === routeParam);
+    if (byNumber) routeParam = byNumber.route_id;
+  }
+  if (routeParam && !routes[routeParam]) {
     document.getElementById("panel").innerHTML = `<header><a class="back" href="?">All routes</a><h1>Route ${esc(routeParam)} isn’t in the current schedule</h1></header>`;
     return;
   }
@@ -131,15 +136,15 @@ map.on("load", async () => {
   const routeColor = routeParam ? routes[routeParam].color : "#42524a";
 
   map.addSource("routes", { type: "geojson", data: lines });
-  map.addLayer({ id: "route-casing", type: "line", source: "routes", filter: only,
+  map.addLayer({ id: "route-casing", type: "line", source: "routes", ...(only && { filter: only }),
     layout: { "line-join": "round", "line-cap": "round" },
     paint: { "line-color": "#fff", "line-width": ["interpolate", ["linear"], ["zoom"], 9, 3, 15, 10] } });
-  map.addLayer({ id: "route-lines", type: "line", source: "routes", filter: only,
+  map.addLayer({ id: "route-lines", type: "line", source: "routes", ...(only && { filter: only }),
     layout: { "line-join": "round", "line-cap": "round" },
     paint: { "line-color": ["get", "color"], "line-width": ["interpolate", ["linear"], ["zoom"], 9, 1.5, 15, 6] } });
 
   map.addSource("stops", { type: "geojson", data: stops });
-  map.addLayer({ id: "stops", type: "circle", source: "stops", filter: stopFilter,
+  map.addLayer({ id: "stops", type: "circle", source: "stops", ...(stopFilter && { filter: stopFilter }),
     minzoom: routeParam ? 0 : 12.5,
     paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 3, 16, 7],
              "circle-color": "#fff", "circle-stroke-color": routeColor,
@@ -149,24 +154,23 @@ map.on("load", async () => {
              "circle-stroke-color": "#1c2a22", "circle-stroke-width": 2.5 } });
 
   map.addSource("buses", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  // Each route gets its own bus badge: a bus pictogram and the route number in the route's colors.
+  Object.values(routes).forEach((r) => map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }));
   map.addLayer({ id: "bus-heading", type: "symbol", source: "buses", filter: ["!=", ["get", "heading"], null],
-    layout: { "icon-image": "heading", "icon-size": 0.8, "icon-rotate": ["get", "heading"],
-              "icon-rotation-alignment": "map", "icon-allow-overlap": true },
-    paint: { "icon-color": ["get", "color"] } });
-  map.addLayer({ id: "bus-dots", type: "circle", source: "buses",
-    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 8, 15, 12],
-             "circle-color": ["get", "color"], "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
-  map.addLayer({ id: "bus-labels", type: "symbol", source: "buses",
-    layout: { "text-field": ["get", "short_name"], "text-size": ["interpolate", ["linear"], ["zoom"], 9, 9, 15, 12],
-              "text-font": ["DIN Pro Bold", "Arial Unicode MS Bold"], "text-allow-overlap": true },
-    paint: { "text-color": ["get", "text_color"] } });
+    layout: { "icon-image": "heading", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map",
+              "icon-allow-overlap": true, "icon-ignore-placement": true },
+    paint: { "icon-color": ["get", "color"], "icon-halo-color": "#fff", "icon-halo-width": 1.5 } });
+  map.addLayer({ id: "buses", type: "symbol", source: "buses",
+    layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]],
+              "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
+              "icon-allow-overlap": true, "icon-ignore-placement": true } });
 
   fitTo(lines.features.filter((f) => !routeParam || f.properties.route_id === routeParam));
   routeParam ? buildRoutePanel() : buildSystemPanel();
 
   map.on("click", "stops", (e) => showStop(e.features[0].properties.stop_id));
-  map.on("click", "bus-dots", (e) => showBus(e.features[0].properties, e.lngLat));
-  for (const l of ["stops", "bus-dots"]) {
+  map.on("click", "buses", (e) => showBus(e.features[0].properties, e.lngLat));
+  for (const l of ["stops", "buses"]) {
     map.on("mouseenter", l, () => (map.getCanvas().style.cursor = "pointer"));
     map.on("mouseleave", l, () => (map.getCanvas().style.cursor = ""));
   }
@@ -186,6 +190,7 @@ function tick() {
 // ---------- live buses ----------
 async function refreshBuses() {
   const status = document.getElementById("status");
+  if (!liveReady) { status.textContent = "Live buses aren’t connected yet. Showing routes and stops."; return; }
   try {
     const res = await fetch(`${API_BASE}/api/vehicles`);
     if (!res.ok) throw new Error();
@@ -222,7 +227,7 @@ function buildSystemPanel() {
       return `<li class="route-row"><input type="checkbox" checked data-route="${esc(id)}" id="cb-${esc(id)}" aria-label="Show route ${esc(r.short_name)}">
         <label for="cb-${esc(id)}">${chip(r)}</label>
         <label for="cb-${esc(id)}">${esc(r.long_name)} <span class="live-count" data-count="${esc(id)}"></span></label>
-        <a href="?route=${encodeURIComponent(id)}">Route map</a></li>`;
+        <a href="?route=${encodeURIComponent(r.short_name)}">Route map</a></li>`;
     }).join("")}</ul>`);
   document.getElementById("route-list").addEventListener("change", (e) => {
     const id = e.target.dataset.route; e.target.checked ? hidden.delete(id) : hidden.add(id); applyFilter();
@@ -235,7 +240,7 @@ function buildSystemPanel() {
 function applyFilter() {
   if (routeParam) return;
   const keep = hidden.size ? ["!", ["in", ["get", "route_id"], ["literal", [...hidden]]]] : null;
-  ["route-casing", "route-lines", "bus-dots", "bus-labels"].forEach((l) => map.setFilter(l, keep));
+  ["route-casing", "route-lines", "buses"].forEach((l) => map.setFilter(l, keep));
   map.setFilter("bus-heading", keep ? ["all", ["!=", ["get", "heading"], null], keep] : ["!=", ["get", "heading"], null]);
   // A stop stays visible while any of its routes is shown.
   const visible = Object.keys(routes).filter((id) => !hidden.has(id));
@@ -278,6 +283,7 @@ function renderStopList() {
 }
 
 async function refreshRouteArrivals() {
+  if (!liveReady) return;
   try {
     const res = await fetch(`${API_BASE}/api/arrivals?route=${encodeURIComponent(routeParam)}`);
     if (!res.ok) throw new Error();
@@ -309,6 +315,7 @@ async function showStop(id, fly) {
 
 async function refreshPopup() {
   const id = openStopId;
+  if (!liveReady) { if (openPopup) openPopup.setHTML(stopHtml(stopsById[id], "error")); return; }
   try {
     const res = await fetch(`${API_BASE}/api/arrivals?stop=${encodeURIComponent(id)}`);
     const body = await res.json();
@@ -361,14 +368,46 @@ function when(epoch) {
 const clock = (epoch) => new Date(epoch * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
 function fitTo(features) {
   const b = new mapboxgl.LngLatBounds();
-  features.forEach((f) => f.geometry.coordinates.forEach((c) => b.extend(c)));
+  features.forEach((f) => f.geometry.coordinates.forEach(([lon, lat]) => {
+    if (lon > -75 && lon < -70 && lat > 42 && lat < 46) b.extend([lon, lat]); // stay within Vermont and nearby
+  }));
   if (!b.isEmpty()) map.fitBounds(b, { padding: { top: 40, bottom: 40, left: innerWidth > 640 ? 330 : 40, right: 50 }, duration: 0 });
 }
+// Heading pointer: a small triangle on a ring around the bus badge, rotated to the bus's direction.
 function arrowImage() {
-  const s = 48, c = document.createElement("canvas"); c.width = c.height = s;
+  const S = 96, c = document.createElement("canvas"); c.width = c.height = S;
   const g = c.getContext("2d");
-  g.beginPath(); g.moveTo(s / 2, 1); g.lineTo(s / 2 + 9, 13); g.lineTo(s / 2 - 9, 13); g.closePath(); g.fill();
-  return { width: s, height: s, data: g.getImageData(0, 0, s, s).data };
+  g.beginPath(); g.moveTo(S / 2, 4); g.lineTo(S / 2 + 10, 20); g.lineTo(S / 2 - 10, 20); g.closePath(); g.fill();
+  return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
+}
+
+// Route-colored badge with a bus pictogram and the route number, drawn at 2x for sharp screens.
+function busBadge(r) {
+  const k = 2, h = 24 * k, pad = 5 * k, icon = 14 * k, gap = 4 * k, radius = 7 * k, stroke = 2 * k;
+  const font = `700 ${13 * k}px "Public Sans", system-ui, sans-serif`;
+  const label = String(r.short_name || "");
+  const m = document.createElement("canvas").getContext("2d"); m.font = font;
+  const w = Math.ceil(pad + icon + (label ? gap + m.measureText(label).width : 0) + pad);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  const rr = (x, y, ww, hh, rad) => { g.beginPath(); g.moveTo(x + rad, y); g.arcTo(x + ww, y, x + ww, y + hh, rad);
+    g.arcTo(x + ww, y + hh, x, y + hh, rad); g.arcTo(x, y + hh, x, y, rad); g.arcTo(x, y, x + ww, y, rad); g.closePath(); };
+  rr(stroke / 2, stroke / 2, w - stroke, h - stroke, radius);
+  g.fillStyle = r.color || "#555"; g.fill();
+  g.lineWidth = stroke; g.strokeStyle = "#fff"; g.stroke();
+  // bus pictogram (front view)
+  const fg = r.text_color || "#fff", bx = pad, by = (h - icon) / 2, u = icon / 14;
+  g.fillStyle = fg;
+  rr(bx + 1 * u, by, 12 * u, 11.5 * u, 2.5 * u); g.fill();
+  g.fillRect(bx + 2.5 * u, by + 11 * u, 2.5 * u, 3 * u); g.fillRect(bx + 9 * u, by + 11 * u, 2.5 * u, 3 * u);
+  g.fillStyle = r.color || "#555";
+  rr(bx + 2.5 * u, by + 2 * u, 9 * u, 5 * u, 1 * u); g.fill();
+  g.beginPath(); g.arc(bx + 4 * u, by + 9.3 * u, 1 * u, 0, 7); g.arc(bx + 10 * u, by + 9.3 * u, 1 * u, 0, 7); g.fill();
+  if (label) {
+    g.fillStyle = fg; g.font = font; g.textBaseline = "middle";
+    g.fillText(label, pad + icon + gap, h / 2 + 1 * k);
+  }
+  return { width: w, height: h, data: g.getImageData(0, 0, w, h).data };
 }
 function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 </script>
