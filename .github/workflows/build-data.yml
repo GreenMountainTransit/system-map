@@ -1,0 +1,51 @@
+# Rebuilds public/data from GMT's published GTFS every night and publishes the site.
+# Also runs when amenities.csv or the build script changes, or by hand (Actions tab -> Run workflow).
+name: Build map data and publish
+
+on:
+  schedule:
+    - cron: "15 8 * * *"   # 4:15 AM Eastern (daylight time), before morning service
+  push:
+    branches: [main]
+    paths: ["amenities.csv", "scripts/**", "public/**", ".github/workflows/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  GTFS_URL: "http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip"   # GMT GTFS, published by Trillium
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Download GTFS
+        run: |
+          curl -fsSL "$GTFS_URL" -o gtfs.zip
+          unzip -q -o gtfs.zip -d gtfs
+      - name: Build data
+        run: |
+          if [ -f amenities.csv ]; then node scripts/build-data.mjs gtfs amenities.csv; else node scripts/build-data.mjs gtfs; fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
