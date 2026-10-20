@@ -1,0 +1,2 @@
+stop_id,shelter,bench,bike_rack,trash_can,lighting,real_time_sign,notes
+EXAMPLE_STOP_ID,yes,yes,no,yes,yes,no,Shelter faces away from the street

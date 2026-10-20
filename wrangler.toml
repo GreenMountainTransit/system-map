@@ -1,0 +1,14 @@
+name = "gmt-system-map"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+# The map page and data are hosted on GitHub Pages; the Worker reads the same data from there.
+# Must end with the folder that contains routes.json, stops.geojson, sched/, etc.
+[vars]
+DATA_BASE = "https://greenmountaintransit.github.io/system-map/data/"
+
+# Alternative: let the Worker serve the page itself instead of GitHub Pages.
+# Remove DATA_BASE above, set API_BASE = "" in public/index.html, and uncomment:
+# [assets]
+# directory = "./public"
+# binding = "ASSETS"
