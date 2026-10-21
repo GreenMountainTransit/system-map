@@ -26,12 +26,22 @@
   }
 
   // ---------- Swiftly requests ----------
+  // Every open map shares the key's rate limit, so: reuse a fetched feed for FEED_MAX_AGE, and if Swiftly
+  // says "too many requests" (429), pause all live requests and back off (1 min, doubling up to 10 min).
+  // While paused the map shows scheduled times, then picks live data back up on its own.
   const feeds = new Map(); // url -> { at, promise }
+  let pausedUntil = 0, backoff = 60000;
   function swiftly(path, as) {
+    if (Date.now() < pausedUntil) return Promise.reject(new Error("Swiftly rate limit: paused"));
     const hit = feeds.get(path);
     if (hit && Date.now() - hit.at < FEED_MAX_AGE) return hit.promise;
     const promise = fetch(API + path, { headers: { Authorization: KEY } }).then((r) => {
+      if (r.status === 429) {
+        pausedUntil = Date.now() + backoff; backoff = Math.min(backoff * 2, 600000);
+        throw new Error("Swiftly rate limit");
+      }
       if (!r.ok) throw new Error(`Swiftly ${r.status}`);
+      backoff = 60000;
       return as === "json" ? r.json() : r.arrayBuffer();
     });
     promise.catch(() => feeds.delete(path));
@@ -146,22 +156,39 @@
     if (ex) { ex.add.forEach((s) => on.add(s)); ex.rm.forEach((s) => on.delete(s)); }
     return on;
   }
+  // Where each realtime update falls in the scheduled trip. Matched by stop ID first (Swiftly's
+  // stop_sequence numbering can differ from the published GTFS), using the sequence number only to tell
+  // apart a stop a loop visits twice, or when the feed leaves out stop IDs.
+  function positions(tu, trip) {
+    tu._pos ??= new Map();
+    if (!tu._pos.has(trip.t)) tu._pos.set(trip.t, tu.updates.map((u) => {
+      if (u.stop) {
+        const hits = trip.st.map((x, i) => (x[0] === u.stop ? i : -1)).filter((i) => i >= 0);
+        if (hits.length === 1) return hits[0];
+        if (hits.length > 1) return hits.find((i) => trip.st[i][2] === u.seq) ?? hits[0];
+      }
+      return u.seq != null ? trip.st.findIndex((x) => x[2] === u.seq) : -1;
+    }));
+    return tu._pos.get(trip.t);
+  }
   function applyRealtime(tu, trip, idx, scheduledEpoch, dayMidnight) {
     if (!tu) return { epoch: scheduledEpoch, live: false };
     if (tu.canceled) return null;
-    const [stopId, , seq] = trip.st[idx];
-    const exact = tu.updates.find((u) => (u.seq != null ? u.seq === seq : u.stop === stopId));
+    const pos = positions(tu, trip);
+    const k = pos.indexOf(idx), exact = k >= 0 ? tu.updates[k] : null;
     if (exact) {
       if (exact.skipped) return null;
       if (exact.time) return { epoch: exact.time, live: true };
       if (exact.delay != null) return { epoch: scheduledEpoch + exact.delay, live: true };
     }
-    let delay = null;
-    for (const u of tu.updates) {
-      if ((u.seq ?? Infinity) >= seq) break;
-      if (u.delay != null) delay = u.delay;
-      else if (u.time) { const s = trip.st.find((x) => x[2] === u.seq); if (s) delay = u.time - (dayMidnight + s[1]); }
-    }
+    // Otherwise carry forward the delay from the nearest earlier update on this trip.
+    let delay = null, at = -1;
+    tu.updates.forEach((u, j) => {
+      const p = pos[j];
+      if (p < 0 || p >= idx || p < at) return;
+      const d = u.delay != null ? u.delay : u.time ? u.time - (dayMidnight + trip.st[p][1]) : null;
+      if (d != null) { delay = d; at = p; }
+    });
     return delay != null ? { epoch: scheduledEpoch + delay, live: true } : { epoch: scheduledEpoch, live: false };
   }
   // A trip_id repeats every service day; only one day's instance gets the live update.

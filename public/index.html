@@ -192,6 +192,9 @@
   .sp-body { flex: 1; overflow-y: auto; padding: 12px 16px 16px; overscroll-behavior: contain; }
   .sp-body .alltimes { max-height: none; overflow: visible; }
   .sp-body .pop { min-width: 0; }
+  .src-line { margin: -2px 0 8px; font-size: .74rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .src-line.live { color: var(--live); }
+  .src-line .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px rgba(10,125,59,.18); }
   .sp-sub { margin: 0 0 6px; font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
   #wrap.stop-open .mapboxgl-ctrl-top-right, #wrap.stop-open .mapboxgl-ctrl-bottom-right { right: 372px; } /* keep controls and the Mapbox logo visible */
   .mapboxgl-ctrl-top-right, .mapboxgl-ctrl-bottom-right { transition: right .2s; }
@@ -363,7 +366,6 @@ map.on("style.load", async () => {
 function addOverlay() {
   const slot = (s) => (basemap.standard ? { slot: s } : {});
   const add = (layer, s) => { if (!map.getLayer(layer.id)) map.addLayer({ ...layer, ...slot(s) }); };
-  if (!map.hasImage("heading")) map.addImage("heading", arrowImage(), { sdf: true });
   if (!map.hasImage("route-arrow")) map.addImage("route-arrow", chevronImage(), { sdf: true, pixelRatio: 2 });
   Object.values(routes).forEach((r) => { if (!map.hasImage(`bus-${r.route_id}`)) map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }); });
   if (!map.getSource("routes")) map.addSource("routes", { type: "geojson", data: linesData });
@@ -406,10 +408,6 @@ function addOverlay() {
     layout: { "text-field": ["format", ["get", "name"], { "font-scale": 1 }, "\n", {}, "Scheduled timepoint", { "font-scale": 0.82 }],
       "text-size": 12, "text-anchor": "top", "text-offset": [0, 0.9], "text-max-width": 12, "text-optional": true },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
-  add({ id: "bus-heading", type: "symbol", source: "buses", filter: ["!=", ["get", "heading"], null],
-    layout: { "icon-image": "heading", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map",
-      "icon-allow-overlap": true, "icon-ignore-placement": true },
-    paint: { "icon-color": ["get", "color"], "icon-halo-color": "#fff", "icon-halo-width": 1.5 } }, "top");
   add({ id: "buses", type: "symbol", source: "buses",
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
       "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
@@ -424,10 +422,14 @@ const FREQ = [
   { tier: 4, color: "#8b979f", label: "Less than hourly", dashed: true },
 ];
 // Tier for the chosen time of week: 1 = every 15 min or better ... 4 = less than hourly; 0 = no service then.
-// h is the longest wait between buses, so "at least every h min" is never an overstatement.
-const freqHeadline = (h) => (h >= 120 ? `A bus at least every ${Math.floor(h / 60)}+ hours` : `A bus at least every ${h} min`);
+// h is the longest wait between buses (both directions). Tiers allow 2 minutes of leeway, because routes
+// sharing a street never line up to the minute: a 13/17-minute alternation still counts as every 15 minutes.
+const LEEWAY = 2;
+const tierOf = (h) => (h == null ? 0 : h <= 15 + LEEWAY ? 1 : h <= 30 + LEEWAY ? 2 : h <= 60 + LEEWAY ? 3 : 4);
+const freqHeadline = (h) => FREQ[tierOf(h) - 1].label;
+const waitText = (h) => `Longest wait between buses: ${h >= 120 ? `${Math.floor(h / 60)}+ hours` : `${h} min`}`;
 const tierExpr = () => { const h = ["get", "h_" + freqPeriod];
-  return ["case", ["==", h, null], 0, ["<=", h, 15], 1, ["<=", h, 30], 2, ["<=", h, 60], 3, 4]; };
+  return ["case", ["==", h, null], 0, ["<=", h, 15 + LEEWAY], 1, ["<=", h, 30 + LEEWAY], 2, ["<=", h, 60 + LEEWAY], 3, 4]; };
 function applyFreq() {
   if (!map.getLayer("freq-lines")) return;
   const t = tierExpr(), on = ["in", t, ["literal", [...freqTiers]]];
@@ -467,13 +469,11 @@ function applyFilters() {
   map.setFilter("stops", stopFilter);
   map.setFilter("timepoint-labels", ["all", stopFilter, ["==", ["get", "timepoint"], true]]);
   map.setFilter("buses", onRoute);
-  map.setFilter("bus-heading", ["all", onRoute, ["!=", ["get", "heading"], null]]);
   // While a route is hovered, everything else steps back: other lines, their casings and their buses.
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
   map.setPaintProperty("route-lines", "line-opacity", any ? ["case", isHl, 1, 0.2] : 1);
   map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
   map.setPaintProperty("buses", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
-  map.setPaintProperty("bus-heading", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
   const arrowFade = ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.95, 16.3, 0.95, 17, 0];
   map.setPaintProperty("route-arrows", "icon-opacity", any ? ["case", isHl, arrowFade, 0] : arrowFade);
 }
@@ -504,10 +504,11 @@ map.on("mousemove", (e) => {
       ids.slice(0, 5).map((id) => routeTipRow(routes[id], ids.length <= 3)).join("") +
       (ids.length > 5 ? `<p class="more">and ${ids.length - 5} more routes. Click the stop for details.</p>` : `<p class="more">Click for next arrivals.</p>`));
   } else if (f.layer.id === "freq-lines" || f.layer.id === "freq-low") {
-    const h = p["h_" + freqPeriod], t = FREQ[(h <= 15 ? 1 : h <= 30 ? 2 : h <= 60 ? 3 : 4) - 1], many = String(p.routes).includes(",");
+    const h = p["h_" + freqPeriod], t = FREQ[tierOf(h) - 1], many = String(p.routes).includes(",");
     const per = FREQ_PERIODS.find((x) => x.id === freqPeriod);
     showTip(e.point, `<h3><span style="display:inline-block;width:18px;height:5px;border-radius:3px;background:${t.color}"></span>${freqHeadline(h)}</h3>
-      <p class="t-freq" style="margin:0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${p.oneway ? "one direction" : "both directions"} · ${per.note}</p>`);
+      <p style="margin:0">${waitText(h)}</p>
+      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${p.oneway ? "one direction" : "both directions"} · ${per.note}</p>`);
   } else if (f.layer.id === "buses") {
     const r = routes[p.route_id];
     highlight([p.route_id]);
@@ -558,6 +559,7 @@ map.on("click", (e) => {
   } else {
     const h = p["h_" + freqPeriod], per = FREQ_PERIODS.find((x) => x.id === freqPeriod), many = String(p.routes).includes(",");
     html = `<div class="pop"><h2>${freqHeadline(h)}</h2>
+      <p style="margin:0 0 4px;font-size:.86rem">${waitText(h)}</p>
       <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${p.oneway ? "one direction" : "both directions"} · ${per.note}</p></div>`;
   }
   openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "min(330px, 92vw)" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
@@ -615,7 +617,7 @@ function buildSystemPanel() {
       <ul class="tiers" aria-label="Filter by frequency">${FREQ.map((t) => `<li><button type="button" data-tier="${t.tier}" aria-pressed="${freqTiers.has(t.tier)}">
         <span class="swatch ${t.dashed ? "dashed" : ""}" style="--c:${t.color};--w:${[0, 7, 5, 3.5, 2.5][t.tier]}px"></span><span>${t.label}</span>
         <span class="tick" aria-hidden="true">${ICON.check}</span></button></li>`).join("")}</ul>
-      <p class="freq-note">Frequencies cover service in both directions: where one direction runs less often, the map shows that one. One-way loops show their single direction. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
+      <p class="freq-note">Based on the longest wait between buses, with 2 minutes of leeway for routes that don’t line up exactly. Covers both directions: where one direction runs less often, the map shows that one. One-way loops show their single direction. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
     </div>` : `
     <div class="scroll">
       <div class="legend-bar"><span id="vis-count" aria-live="polite"></span>
@@ -818,14 +820,14 @@ function closeStop() {
 addEventListener("keydown", (e) => { if (e.key === "Escape" && openStopId && !e.target.closest?.("#q")) closeStop(); });
 async function refreshPopup(announce) {
   const id = openStopId; if (!id) return;
-  let arrivals = "error", allTimes = null;
+  let arrivals = "error", allTimes = null, feedLive = false;
   const only = routeParam ? [routeParam] : null; // on a route page, only that route's buses
-  try { arrivals = (await GMTLive.arrivals({ stop: id, only })).arrivals[id] || []; } catch {}
+  try { const r = await GMTLive.arrivals({ stop: id, only }); arrivals = r.arrivals[id] || []; feedLive = r.live; } catch {}
   if (showAllTimes) try { allTimes = (await GMTLive.arrivals({ stop: id, all: true, only })).arrivals[id] || []; } catch {}
   if (id !== openStopId) return;
   const body = stopPanel.querySelector(".sp-body"); if (!body) return;
   const scrollTop = body.scrollTop;
-  body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes);
+  body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
   body.scrollTop = scrollTop;
   body.querySelector("#see-all")?.addEventListener("click", () => { showAllTimes = !showAllTimes; refreshPopup(); });
   if (announce && Array.isArray(arrivals)) {
@@ -847,7 +849,7 @@ function allTimesHtml(list) {
       <p class="at-times">${l.map((a, i) => `<span class="${a.past ? "past" : ""}${i === n ? " next" : ""}${a.live && !a.past ? " live" : ""}">${clock(a.time)}</span>`).join("")}</p></div>`;
   }).join("")}</div><p class="src">Past times are grayed out. Green times are live predictions.</p>`;
 }
-function stopHtml(s, arrivals, allTimes) {
+function stopHtml(s, arrivals, allTimes, feedLive) {
 
   let body;
   if (arrivals === null) body = `<p class="none">Loading arrivals…</p>`;
@@ -877,7 +879,12 @@ function stopHtml(s, arrivals, allTimes) {
   const about = `<details><summary>About ${rs.length === 1 ? "this route" : `these ${rs.length} routes`}</summary><div class="about">${rs.map((r) =>
     `${chip(r)}<p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
   const seeAll = arrivals === "error" ? "" : `<button type="button" id="see-all" class="see-all" aria-expanded="${showAllTimes}">${showAllTimes ? "Hide all times" : "See all times today"}</button>${showAllTimes ? allTimesHtml(allTimes) : ""}`;
-  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${body}${seeAll}${featHtml}${about}
+  // Say where the times come from, so riders (and staff) can tell live predictions from the timetable.
+  const source = arrivals === null || arrivals === "error" ? ""
+    : !liveReady ? `<p class="src-line">Scheduled times. Live predictions aren’t connected yet.</p>`
+    : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions · updated ${clock(Date.now() / 1000)}</p>`
+    : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
+  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${about}
     ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
 }
 
@@ -1123,14 +1130,6 @@ function chevronImage() {
   g.beginPath(); g.moveTo(7.5, 5.5); g.lineTo(15.5, 12); g.lineTo(7.5, 18.5); g.stroke();
   return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
 }
-// Heading pointer: a small triangle on a ring around the bus badge, rotated to the bus's direction.
-function arrowImage() {
-  const S = 96, c = document.createElement("canvas"); c.width = c.height = S;
-  const g = c.getContext("2d");
-  g.beginPath(); g.moveTo(S / 2, 4); g.lineTo(S / 2 + 10, 20); g.lineTo(S / 2 - 10, 20); g.closePath(); g.fill();
-  return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
-}
-
 // Route-colored badge with a bus pictogram and the route number, drawn at 2x for sharp screens.
 function busBadge(r) {
   const k = 2, h = 24 * k, pad = 5 * k, icon = 14 * k, gap = 4 * k, radius = 7 * k, stroke = 2 * k;
