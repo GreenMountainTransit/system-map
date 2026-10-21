@@ -619,7 +619,7 @@ function buildSystemPanel() {
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
         <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
       </div>
-      ${searchBox(true)}</header>
+      ${view === "frequency" ? "" : searchBox(true)}</header>
     ${legend}`, view !== "frequency");
   document.querySelectorAll(".viewtoggle button").forEach((b) => b.onclick = () => setView(b.dataset.view));
   document.querySelectorAll("[data-period]").forEach((b) => b.onclick = () => { freqPeriod = b.dataset.period; buildSystemPanel(); applyFreq(); });
