@@ -203,6 +203,11 @@
   .src-line { margin: -2px 0 8px; font-size: .74rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .src-line.live { color: var(--live); }
   .src-line .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px rgba(10,125,59,.18); }
+  .sv-box { margin-top: 10px; font-size: .8rem; border-top: 1px solid var(--line); padding-top: 8px; }
+  .sv-box summary { cursor: pointer; color: var(--gmt); font-weight: 600; }
+  .sv-body iframe { display: block; width: 100%; aspect-ratio: 4 / 3; border: 0; border-radius: 8px; margin-top: 8px; background: var(--chip-bg); }
+  .sv-note { margin: 6px 0 0; font-size: .74rem; color: var(--muted); line-height: 1.4; }
+  .sv-note a { color: var(--gmt); font-weight: 600; white-space: nowrap; }
   .sp-sub { margin: 0 0 6px; font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
   #wrap.stop-open .mapboxgl-ctrl-top-right, #wrap.stop-open .mapboxgl-ctrl-bottom-right { right: 372px; } /* keep controls and the Mapbox logo visible */
   .mapboxgl-ctrl-top-right, .mapboxgl-ctrl-bottom-right { transition: right .2s; }
@@ -255,6 +260,7 @@
 <script>
 // ---------- Configure ----------
 const MAPBOX_TOKEN = "pk.eyJ1Ijoid2hvZGdzb24iLCJhIjoiY212Z3o3bXhtMDBkODJ5cHYwaDRtM2J4ZiJ9.zwDLsKOUp_iLM28iDg2-Rg";
+const GOOGLE_KEY = "__GOOGLE_KEY__";            // optional, for the embedded Street View (GitHub secret GOOGLE_MAPS_KEY); without it, a link opens Google Street View
 const SWIFTLY_KEY = "__SWIFTLY_KEY__";          // filled in automatically when the site is published (GitHub secret SWIFTLY_KEY)
 const REFRESH_MS = 15000;                       // how often live buses and arrival times update
 const HOME_BOUNDS = [[-73.30, 44.35], [-72.95, 44.60]]; // opening view: Burlington area out to Shelburne, Essex and Williston
@@ -281,6 +287,7 @@ let basemap = BASEMAPS[0];
 let liveBusesOn = true; // riders can switch live buses off; remembered on their device
 try { liveBusesOn = localStorage.getItem("gmt-live-buses") !== "off"; } catch {}
 let view = new URLSearchParams(location.search).get("view") === "frequency" ? "frequency" : "routes";
+let svOpen = false, svCam = null; // Street View section open?  camera marker on the map
 let picking = false; // false: the legend shows its defaults; true: the rider has picked specific routes
 let freqData;
 const isPhone = () => innerWidth <= 640;
@@ -382,6 +389,8 @@ function addOverlay() {
   if (!map.getSource("stops")) map.addSource("stops", { type: "geojson", data: stopsData });
   if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
   const sat = basemap.id === "satellite";
+  // Local routes draw on top of commuter, Sunday, shopping and school routes where they overlap.
+  const onTop = ["match", ["get", "group"], "local", 1, 0];
   const width = (a, b) => ["interpolate", ["linear"], ["zoom"], 9, a, 15, b];
 
   if (!map.getSource("freq")) map.addSource("freq", { type: "geojson", data: freqData });
@@ -390,17 +399,17 @@ function addOverlay() {
   add({ id: "freq-lines", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "round" }, paint: {} }, "middle");
   add({ id: "freq-low", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "butt" },
     paint: { "line-color": FREQ[3].color, "line-width": width(1.2, 3), "line-dasharray": [2, 1.5] } }, "middle");
-  add({ id: "route-glow", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
+  add({ id: "route-glow", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": onTop },
     paint: { "line-color": ["get", "color"], "line-width": width(6, 14), "line-blur": width(3, 6), "line-opacity": 0.35 } }, "middle");
-  add({ id: "route-casing", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
+  add({ id: "route-casing", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": onTop },
     paint: { "line-color": sat ? "#000" : "#fff", "line-opacity": sat ? 0.5 : 1, "line-width": width(3.5, 10) } }, "middle");
-  add({ id: "route-lines", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
+  add({ id: "route-lines", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": onTop },
     paint: { "line-color": ["get", "color"], "line-width": width(1.8, 6) } }, "middle");
 
   // Subtle direction arrows along each route (route shapes follow the direction buses travel).
   // They appear once you zoom in a little, grow and spread out with zoom, and fade away when very close.
   add({ id: "route-arrows", type: "symbol", source: "routes", minzoom: 12, maxzoom: 17,
-    layout: { "symbol-placement": "line", "icon-image": "route-arrow", "icon-rotation-alignment": "map",
+    layout: { "symbol-placement": "line", "icon-image": "route-arrow", "icon-rotation-alignment": "map", "symbol-sort-key": ["-", 1, onTop],
       "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 12, 90, 16, 180],
       "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.65, 14, 0.95, 16, 1.2],
       "icon-allow-overlap": true, "icon-ignore-placement": true },
@@ -420,7 +429,12 @@ function addOverlay() {
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
   add({ id: "buses", type: "symbol", source: "buses",
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
-      "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
+      "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop] } }, "top"); // local buses drawn last (on top)
+  // Street View camera marker: where the street photo is taken from, pointing at the stop.
+  if (!map.hasImage("sv-cone")) map.addImage("sv-cone", coneImage(), { pixelRatio: 2 });
+  if (!map.getSource("sv")) map.addSource("sv", { type: "geojson", data: svData() });
+  add({ id: "sv-cam", type: "symbol", source: "sv",
+    layout: { "icon-image": "sv-cone", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
   applyView();
 }
 
@@ -602,7 +616,7 @@ async function refreshBuses() {
     liveCounts = {};
     for (const f of data.features) {
       const r = routes[f.properties.route_id];
-      Object.assign(f.properties, { color: r.color, short_name: r.short_name });
+      Object.assign(f.properties, { color: r.color, short_name: r.short_name, group: r.group });
       liveCounts[r.route_id] = (liveCounts[r.route_id] || 0) + 1;
     }
     lastBuses = data;
@@ -801,7 +815,7 @@ const stopPanel = document.getElementById("stop-panel");
 function showStop(id, fly) {
   const s = stopsById[id]; if (!s) return;
   const wasOpen = !!openStopId;
-  openStopId = id; hideTip(); showAllTimes = false;
+  openStopId = id; hideTip(); showAllTimes = false; svOpen = false; setCamera(null);
   openPopup?.remove();
   highlight(s.routes.filter((rid) => visibleRoutes().includes(rid)));
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
@@ -825,7 +839,7 @@ function showStop(id, fly) {
 }
 function closeStop() {
   if (!openStopId) return;
-  openStopId = null; showAllTimes = false;
+  openStopId = null; showAllTimes = false; svOpen = false; setCamera(null);
   stopPanel.hidden = true; stopPanel.innerHTML = ""; stopPanel.style.height = "";
   document.getElementById("wrap").classList.remove("stop-open");
   highlight([]);
@@ -840,10 +854,12 @@ async function refreshPopup(announce) {
   if (showAllTimes) try { allTimes = (await GMTLive.arrivals({ stop: id, all: true, only })).arrivals[id] || []; } catch {}
   if (id !== openStopId) return;
   const body = stopPanel.querySelector(".sp-body"); if (!body) return;
-  const scrollTop = body.scrollTop;
+  const scrollTop = body.scrollTop, keepSv = body.querySelector("#sv-box[data-wired]");
   body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
+  if (keepSv) body.querySelector("#sv-box")?.replaceWith(keepSv); // keep the loaded Street View as is
   body.scrollTop = scrollTop;
   body.querySelector("#see-all")?.addEventListener("click", () => { showAllTimes = !showAllTimes; refreshPopup(); });
+  wireStreetView(body, stopsById[id]);
   if (announce && Array.isArray(arrivals)) {
     const s = stopsById[id];
     document.getElementById("announce").textContent = `${s.name}. ` + (arrivals.length
@@ -890,6 +906,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
     `<li class="${no ? "no" : ""}"><span class="ico" aria-hidden="true">${ICON[icon]}</span>${esc(label)}</li>`).join("")}</ul>` : "";
 
   const rs = (routeParam ? [routeParam] : s.routes).map((id) => routes[id]).filter(Boolean);
+  const sv = s.sv ? `<details class="sv-box" id="sv-box" ${svOpen ? "open" : ""}><summary>Street View</summary><div class="sv-body"></div></details>` : "";
   const about = `<details><summary>About ${rs.length === 1 ? "this route" : `these ${rs.length} routes`}</summary><div class="about">${rs.map((r) =>
     `${chip(r)}<p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
   const seeAll = arrivals === "error" ? "" : `<button type="button" id="see-all" class="see-all" aria-expanded="${showAllTimes}">${showAllTimes ? "Hide all times" : "See all times today"}</button>${showAllTimes ? allTimesHtml(allTimes) : ""}`;
@@ -898,8 +915,46 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
     : !liveReady ? `<p class="src-line">Scheduled times. Live predictions aren’t connected yet.</p>`
     : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions · updated ${clock(Date.now() / 1000)}</p>`
     : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
-  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${about}
+  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${sv}${about}
     ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
+}
+
+// ---------- Street View (collapsed until opened; nothing loads before that) ----------
+function svData() {
+  return { type: "FeatureCollection", features: svCam ? [{ type: "Feature", properties: { heading: svCam[2] }, geometry: { type: "Point", coordinates: [svCam[0], svCam[1]] } }] : [] };
+}
+function setCamera(cam) { svCam = cam; map.getSource("sv")?.setData(svData()); }
+function wireStreetView(root, s) {
+  const box = root.querySelector("#sv-box"); if (!box || !s.sv || box.dataset.wired) return;
+  box.dataset.wired = "1";
+  const [lon, lat, heading] = s.sv;
+  const fill = () => {
+    const bodyEl = box.querySelector(".sv-body");
+    if (bodyEl.dataset.loaded) return;
+    bodyEl.dataset.loaded = "1";
+    const link = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}&heading=${heading}&pitch=0&fov=80`;
+    const hasKey = !GOOGLE_KEY.startsWith("__");
+    bodyEl.innerHTML = (hasKey
+      ? `<iframe title="Google Street View of ${esc(s.name)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen
+          src="https://www.google.com/maps/embed/v1/streetview?key=${encodeURIComponent(GOOGLE_KEY)}&location=${lat},${lon}&heading=${heading}&pitch=0&fov=80"></iframe>`
+      : "") +
+      `<p class="sv-note">Looking from the street toward the stop. The camera on the map shows where the photo is taken. Street View imagery may be a few years old.
+        <a href="${link}" target="_blank" rel="noopener">Open in Google Maps ↗</a></p>`;
+  };
+  box.addEventListener("toggle", () => {
+    svOpen = box.open;
+    if (box.open) { fill(); setCamera(s.sv); } else setCamera(null);
+  });
+  if (box.open) { fill(); setCamera(s.sv); }
+}
+// Camera marker: a small wedge pointing the way the Street View photo looks, with a dot at the camera.
+function coneImage() {
+  const S = 72, c = document.createElement("canvas"); c.width = c.height = S;
+  const g = c.getContext("2d"), cx = S / 2, cy = S / 2;
+  g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, 30, -Math.PI / 2 - 0.55, -Math.PI / 2 + 0.55); g.closePath();
+  g.fillStyle = "rgba(11,92,173,.28)"; g.fill(); g.strokeStyle = "rgba(11,92,173,.8)"; g.lineWidth = 2; g.stroke();
+  g.beginPath(); g.arc(cx, cy, 7, 0, 7); g.fillStyle = "#0b5cad"; g.fill(); g.lineWidth = 3; g.strokeStyle = "#fff"; g.stroke();
+  return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
 }
 
 // ---------- search: routes and stops ----------
