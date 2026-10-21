@@ -1,5 +1,7 @@
-# Rebuilds public/data from GMT's published GTFS every night and publishes the site.
-# Also runs when amenities.csv or the build script changes, or by hand (Actions tab -> Run workflow).
+# Rebuilds the map data from GMT's published GTFS every night and publishes the site.
+# Also runs when map files change, or by hand (Actions tab -> Build map data and publish -> Run workflow).
+# If the GTFS is missing, broken, expired or only covers future dates, the build stops and the
+# current site stays up; GitHub emails the repo admins about the failed run.
 name: Build map data and publish
 
 on:
@@ -9,6 +11,15 @@ on:
     branches: [main]
     paths: ["amenities.csv", "route-info.json", "scripts/**", "public/**", ".github/workflows/**"]
   workflow_dispatch:
+    inputs:
+      gtfs_url:
+        description: "Optional, for testing: a different GTFS .zip link (for example an older feed). Leave blank for GMT's current feed."
+        required: false
+        default: ""
+      build_date:
+        description: "Optional, for testing: build as if it were this date (YYYY-MM-DD). Leave blank for today."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -20,7 +31,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GTFS_URL: "http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip"   # GMT GTFS, published by Trillium
+  GTFS_URL: ${{ github.event.inputs.gtfs_url || 'http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip' }}   # GMT GTFS, published by Trillium
+  BUILD_DATE: ${{ github.event.inputs.build_date }}
 
 jobs:
   build:
@@ -32,11 +44,15 @@ jobs:
           node-version: 20
       - name: Download GTFS
         run: |
-          curl -fsSL "$GTFS_URL" -o gtfs.zip
+          echo "Using $GTFS_URL"
+          curl -fsSL --retry 3 --retry-delay 30 "$GTFS_URL" -o gtfs.zip
           unzip -q -o gtfs.zip -d gtfs
+          # Some zips put the files in a subfolder; use whichever folder holds routes.txt.
+          dir=$(dirname "$(find gtfs -name routes.txt | head -1)")
+          echo "GTFS_DIR=$dir" >> "$GITHUB_ENV"
       - name: Build data
         run: |
-          if [ -f amenities.csv ]; then node scripts/build-data.mjs gtfs amenities.csv; else node scripts/build-data.mjs gtfs; fi
+          if [ -f amenities.csv ]; then node scripts/build-data.mjs "$GTFS_DIR" amenities.csv; else node scripts/build-data.mjs "$GTFS_DIR"; fi
       - name: Add Swiftly key from the repository secret
         env:
           SWIFTLY_KEY: ${{ secrets.SWIFTLY_KEY }}
@@ -58,3 +74,23 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # GitHub switches off scheduled workflows in public repos after 60 days with no repository activity.
+  # If nothing has been committed for 45 days, this adds an empty commit so the nightly updates never stop.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep the nightly schedule active
+        run: |
+          days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "Last commit was $days days ago."
+          if [ "$days" -ge 45 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898299+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep nightly map updates active"
+            git push
+          fi
