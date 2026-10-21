@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GMT system map</title>
+<meta name="description" content="Live map of Green Mountain Transit routes, stops, buses and arrival times.">
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
 <script src="live.js"></script>
@@ -11,256 +12,469 @@
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink: #1c2a22; --muted: #5b6b61; --panel: #fff; --line: #dfe5e0; --hover: #f2f6f3;
-    --gmt: #00703c; --focus: #0b5cad; --live: #0a7d3b; --warn: #a3361b;
+    --ink: #1c2a22; --muted: #56655c; --faint: #8a978f; --panel: #fff; --line: #e1e7e3; --hover: #f1f5f2;
+    --gmt: #00703c; --focus: #0b5cad; --live: #0a7d3b; --warn: #a3361b; --chip-bg: #eef3ef;
+    --panel-w: 330px;
     font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   html, body { margin: 0; height: 100%; color: var(--ink); }
-  #wrap { position: relative; height: 100%; min-height: 440px; }
+  #wrap { position: relative; height: 100%; min-height: 460px; overflow: hidden; }
   #map { position: absolute; inset: 0; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  button { font: inherit; color: inherit; }
 
+  /* ---------- panel ---------- */
   #panel {
-    position: absolute; top: 12px; left: 12px; z-index: 2; width: 300px;
-    max-height: calc(100% - 24px); display: flex; flex-direction: column;
-    background: var(--panel); border-radius: 10px; box-shadow: 0 2px 14px rgba(20,40,30,.18);
+    position: absolute; top: 12px; left: 12px; bottom: 12px; z-index: 2; width: var(--panel-w);
+    display: flex; flex-direction: column; background: var(--panel); border-radius: 12px;
+    box-shadow: 0 2px 16px rgba(20,40,30,.16); overflow: hidden;
   }
-  #panel header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
-  #panel h1 { font-size: 1.05rem; line-height: 1.3; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; }
+  #panel.fit { bottom: auto; max-height: calc(100% - 24px); }
+  #panel header { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+  #panel h1 { font-size: 1.08rem; line-height: 1.3; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; }
   .status { font-size: .8rem; color: var(--muted); margin: 0; }
   .status.problem { color: var(--warn); }
-  .back { display: inline-block; font-size: .82rem; color: var(--gmt); font-weight: 600; text-decoration: none; margin-bottom: 6px; }
-  .bar { display: flex; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-  .bar button { background: none; border: 0; padding: 0; color: var(--gmt); font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; }
+  .back { display: inline-flex; align-items: center; gap: 4px; font-size: .82rem; color: var(--gmt); font-weight: 600; text-decoration: none; margin-bottom: 8px; }
+  .search { margin-top: 10px; position: relative; }
+  .search input { width: 100%; box-sizing: border-box; font: inherit; font-size: .88rem; padding: 8px 10px 8px 32px;
+    border: 1px solid #c9d3cc; border-radius: 8px; background: #fff; color: var(--ink); }
+  .search svg { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--faint); pointer-events: none; }
+  .scroll { overflow-y: auto; overflow-x: hidden; flex: 1; overscroll-behavior: contain; }
+
+  /* legend groups */
+  .group { border-bottom: 1px solid var(--line); }
+  .group-head { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 10px; padding: 0 16px; }
+  .group-toggle { display: flex; align-items: center; gap: 6px; background: none; border: 0; padding: 11px 0; cursor: pointer;
+    font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); text-align: left; }
+  .group-toggle .count { font-weight: 600; color: var(--faint); letter-spacing: 0; }
+  .group-toggle svg { width: 14px; height: 14px; margin-left: auto; transition: transform .15s; }
+  .group-toggle[aria-expanded=false] svg { transform: rotate(-90deg); }
+  .rows { list-style: none; margin: 0; padding: 0 0 6px; }
+  .rows[hidden] { display: none; }
+  .route-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 6px 10px 6px 16px; }
+  .route-row:hover, .route-row.hl { background: var(--hover); }
+  .route-row label { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; cursor: pointer; min-width: 0; }
+  .rname { font-size: .9rem; line-height: 1.25; overflow-wrap: anywhere; }
+  .rfreq { grid-column: 2; font-size: .76rem; color: var(--muted); line-height: 1.3; }
+  .rfreq .lv { color: var(--live); font-weight: 600; }
+  .route-go { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--gmt); text-decoration: none; }
+  .route-go:hover { background: #e3eee7; }
+  .route-go svg { width: 18px; height: 18px; }
+  input[type=checkbox] { accent-color: var(--gmt); margin: 0; width: 16px; height: 16px; }
+  .route-row.off .chip { opacity: .45; } .route-row.off .rname { color: var(--muted); }
+
+  .chip { display: inline-block; min-width: 2.2rem; text-align: center; border-radius: 5px; font-weight: 700; font-size: .8rem; padding: 2px 5px; box-sizing: border-box; line-height: 1.35; }
+
+  /* route view */
+  .route-about { font-size: .86rem; line-height: 1.45; margin: 8px 0 0; color: var(--ink); }
+  .svc { margin: 8px 0 0; font-size: .8rem; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; color: var(--muted); }
+  .svc dt { font-weight: 600; color: var(--ink); } .svc dd { margin: 0; }
   .tabs { display: flex; border-bottom: 1px solid var(--line); }
-  .tabs button { flex: 1; background: none; border: 0; border-bottom: 3px solid transparent; padding: 9px 8px 7px; font: inherit; font-size: .85rem; color: var(--muted); cursor: pointer; }
+  .tabs button { flex: 1; background: none; border: 0; border-bottom: 3px solid transparent; padding: 10px 8px 8px; font-size: .84rem; color: var(--muted); cursor: pointer; }
   .tabs button[aria-selected=true] { color: var(--ink); font-weight: 600; border-bottom-color: var(--route, var(--gmt)); }
-  .list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
-
-  .chip { display: inline-block; min-width: 2.1rem; text-align: center; border-radius: 4px; font-weight: 700; font-size: .8rem; padding: 2px 4px; box-sizing: border-box; }
-  .route-row { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 8px; padding: 6px 16px; font-size: .9rem; }
-  .route-row:hover { background: var(--hover); }
-  .route-row a { color: var(--gmt); font-size: .8rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
-  .route-row .live-count { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  input[type=checkbox] { accent-color: var(--gmt); margin: 0; }
-
-  /* Ordered stop list on a route page: a line runs through the stop dots */
-  .stop-row { position: relative; width: 100%; display: grid; grid-template-columns: 18px 1fr; gap: 10px; text-align: left;
-    background: none; border: 0; padding: 7px 16px 7px 14px; font: inherit; color: inherit; cursor: pointer; }
+  .stop-list { list-style: none; margin: 0; padding: 4px 0; }
+  .stop-row { position: relative; width: 100%; display: grid; grid-template-columns: 18px 1fr; gap: 10px; text-align: left; background: none; border: 0; padding: 7px 16px 7px 14px; cursor: pointer; }
   .stop-row:hover { background: var(--hover); }
   .stop-row::before { content: ""; position: absolute; left: 22px; top: 0; bottom: 0; width: 3px; background: var(--route); }
-  li:first-child .stop-row::before { top: 50%; } li:last-child .stop-row::before { bottom: 50%; }
+  .stop-list li:first-child .stop-row::before { top: 50%; } .stop-list li:last-child .stop-row::before { bottom: 50%; }
   .stop-dot { position: relative; z-index: 1; width: 12px; height: 12px; margin: 3px 0 0 2px; border-radius: 50%; background: #fff; border: 3px solid var(--route); box-sizing: border-box; }
+  .stop-row.tp .stop-dot { width: 16px; height: 16px; margin: 1px 0 0; border-width: 4px; }
   .stop-name { display: block; font-size: .88rem; font-weight: 600; line-height: 1.3; }
+  .tp-tag { display: inline-block; margin-left: 6px; font-size: .68rem; font-weight: 600; color: var(--muted); background: var(--chip-bg); border-radius: 3px; padding: 1px 5px; vertical-align: 1px; }
   .stop-next { display: block; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 1px; }
   .stop-next .now { color: var(--live); font-weight: 600; }
 
-  .mapboxgl-popup-content { font-family: inherit; padding: 12px 14px 10px; min-width: 220px; border-radius: 8px; }
-  .pop h2 { font-size: .95rem; margin: 0 22px 2px 0; line-height: 1.3; }
-  .pop .sub { font-size: .78rem; color: var(--muted); margin: 0 0 8px; }
-  .pop ol { list-style: none; margin: 0 0 8px; padding: 0; }
-  .pop li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid var(--line); font-size: .85rem; }
-  .pop li:first-child { border-top: 0; }
+  /* ---------- hover tooltip ---------- */
+  #tip { position: absolute; z-index: 5; pointer-events: none; max-width: 300px; background: #fff; border-radius: 8px;
+    box-shadow: 0 4px 18px rgba(20,40,30,.22); padding: 10px 12px; font-size: .82rem; line-height: 1.4; }
+  #tip[hidden] { display: none; }
+  #tip h3 { font-size: .9rem; margin: 0 0 4px; display: flex; align-items: center; gap: 6px; }
+  #tip .t-route { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin-top: 6px; }
+  #tip .t-route .chip, .pop .about .chip { align-self: start; }
+  #tip .t-route p { margin: 0; } #tip .t-desc { color: var(--ink); } #tip .t-freq { color: var(--muted); font-size: .76rem; }
+  #tip .more { color: var(--muted); margin: 6px 0 0; font-size: .76rem; }
+
+  /* ---------- popup ---------- */
+  .mapboxgl-popup-content { font-family: inherit; padding: 14px 16px 12px; border-radius: 10px; box-shadow: 0 4px 20px rgba(20,40,30,.2); }
+  .mapboxgl-popup-close-button { font-size: 20px; width: 28px; height: 28px; right: 4px; top: 4px; color: var(--muted); }
+  .pop { min-width: 240px; }
+  .pop h2 { font-size: 1rem; margin: 0 26px 2px 0; line-height: 1.3; }
+  .pop .sub { font-size: .78rem; color: var(--muted); margin: 0 0 10px; }
+  .pop .sub .tp { color: var(--ink); font-weight: 600; }
+  .pop ol { list-style: none; margin: 0 0 10px; padding: 0; }
+  .pop ol li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--line); font-size: .86rem; }
+  .pop ol li:first-child { border-top: 0; }
   .pop .when { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   .pop .when small { display: block; font-weight: 400; font-size: .7rem; color: var(--muted); }
   .pop .when.live small { color: var(--live); }
-  .pop .none { font-size: .85rem; color: var(--muted); margin: 4px 0 8px; }
-  .pop .amen { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; }
-  .pop .amen span { font-size: .72rem; background: #eef3ef; border-radius: 3px; padding: 2px 6px; }
-  .pop .notes { font-size: .75rem; color: var(--muted); margin: 4px 0 0; }
+  .pop .none { font-size: .85rem; color: var(--muted); margin: 4px 0 10px; }
+  .feats { list-style: none; margin: 0 0 4px; padding: 10px 0 0; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 6px; }
+  .feats li { display: inline-flex; align-items: center; gap: 5px; font-size: .74rem; background: var(--chip-bg); border-radius: 999px; padding: 3px 9px 3px 4px; }
+  .feats .ico { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #fff; color: var(--gmt); }
+  .feats .ico svg { width: 16px; height: 16px; }
+  .feats li.no { background: #f7efe9; color: #7a3b22; } .feats li.no .ico { color: #a3361b; }
+  .pop details { margin-top: 8px; font-size: .8rem; }
+  .pop summary { cursor: pointer; color: var(--gmt); font-weight: 600; }
+  .pop .about { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; margin-top: 8px; align-items: start; }
+  .pop .about p { margin: 0 0 6px; line-height: 1.4; } .pop .about .f { color: var(--muted); font-size: .74rem; display: block; }
+  .pop .src { font-size: .68rem; color: var(--faint); margin: 8px 0 0; }
+
+  /* ---------- basemap picker ---------- */
+  .basemaps { display: flex; background: #fff; border-radius: 8px; box-shadow: 0 0 0 2px rgba(0,0,0,.1); overflow: hidden; }
+  .basemaps button { border: 0; background: #fff; padding: 6px 10px; font-size: .78rem; cursor: pointer; color: var(--ink); }
+  .basemaps button + button { border-left: 1px solid var(--line); }
+  .mapboxgl-ctrl.basemaps button[aria-pressed=true], .mapboxgl-ctrl.basemaps button[aria-pressed=true]:hover { background: var(--gmt); color: #fff; font-weight: 600; }
+  .mapboxgl-ctrl.basemaps button { width: auto; height: auto; }
 
   #toggle { display: none; }
   @media (max-width: 640px) {
-    #panel { width: auto; right: 12px; max-height: 50%; }
+    :root { --panel-w: auto; }
+    #panel { right: 12px; bottom: auto; max-height: 55%; }
     #panel.collapsed > :not(header) { display: none; }
-    #toggle { display: inline; float: right; background: none; border: 0; color: var(--gmt); font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; padding: 0; }
+    #panel.collapsed .search { display: none; }
+    #toggle { display: inline-flex; float: right; background: var(--chip-bg); border: 0; border-radius: 6px; padding: 4px 10px; color: var(--gmt); font-size: .82rem; font-weight: 600; cursor: pointer; }
+    #tip { display: none !important; }
+    .basemaps button { padding: 5px 8px; }
+    .mapboxgl-ctrl-top-right { top: auto; bottom: 28px; } /* keep controls clear of the panel on phones */
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div id="map" role="region" aria-label="Transit map"></div>
-  <aside id="panel" aria-label="Map controls"></aside>
+  <div id="map" role="region" aria-label="Map of Green Mountain Transit routes, stops and live buses. The panel lists the same routes and stops for keyboard and screen reader use."></div>
+  <aside id="panel" aria-label="Routes and stops"></aside>
+  <div id="tip" role="tooltip" hidden></div>
+  <div id="announce" class="sr-only" aria-live="polite"></div>
 </div>
 
 <script>
 // ---------- Configure ----------
-const MAPBOX_TOKEN = "pk.eyJ1Ijoid2hvZGdzb24iLCJhIjoiY212Z3o3bXhtMDBkODJ5cHYwaDRtM2J4ZiJ9.zwDLsKOUp_iLM28iDg2-Rg";   // restrict this token to your domains in your Mapbox account
+const MAPBOX_TOKEN = "pk.eyJ1Ijoid2hvZGdzb24iLCJhIjoiY212Z3o3bXhtMDBkODJ5cHYwaDRtM2J4ZiJ9.zwDLsKOUp_iLM28iDg2-Rg";
 const SWIFTLY_KEY = "__SWIFTLY_KEY__";          // filled in automatically when the site is published (GitHub secret SWIFTLY_KEY)
 const REFRESH_MS = 15000;                       // how often live buses and arrival times update
+const HOME_BOUNDS = [[-73.30, 44.35], [-72.95, 44.60]]; // opening view: Burlington area out to Shelburne, Essex and Williston
+const BASEMAPS = [
+  { id: "standard", label: "Map", url: "mapbox://styles/mapbox/standard", standard: true },
+  { id: "light", label: "Light", url: "mapbox://styles/mapbox/light-v11" },
+  { id: "satellite", label: "Satellite", url: "mapbox://styles/mapbox/satellite-streets-v12" },
+];
 // --------------------------------
 
 let routeParam = new URLSearchParams(location.search).get("route");
 const DIR = "data/";
-let routes = {}, routeStops = {}, stopsById = {}, hidden = new Set(), activeDir = null;
-let openPopup = null, openStopId = null;
-
-mapboxgl.accessToken = MAPBOX_TOKEN;
-const map = new mapboxgl.Map({
-  container: "map", style: "mapbox://styles/mapbox/light-v11",
-  center: [-73.15, 44.45], zoom: 10.5,
-});
-map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
-map.addControl(new mapboxgl.GeolocateControl({ showUserHeading: true }), "top-right");
-
-// Only poll while someone can actually see the map (saves requests when the iframe is scrolled away).
-let onScreen = true;
-new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) tick(); }).observe(document.getElementById("map"));
-document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
-const canPoll = () => onScreen && !document.hidden;
 const liveReady = !SWIFTLY_KEY.startsWith("__");
 GMTLive.configure({ key: liveReady ? SWIFTLY_KEY : "", dataDir: DIR });
 
-map.on("load", async () => {
-  map.addImage("heading", arrowImage(), { sdf: true });
-  let lines, stops, meta;
-  try {
-    [lines, stops, meta] = await Promise.all(["routes.geojson", "stops.geojson", "routes.json"].map((f) => fetch(DIR + f).then((r) => r.json())));
-  } catch {
-    document.getElementById("panel").innerHTML = `<header><h1>Map data is missing</h1><p class="status problem">Run the build script and redeploy.</p></header>`;
+let routes = {}, groups = [], routeStops = {}, stopsById = {}, linesData, stopsData;
+let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "FeatureCollection", features: [] };
+let openPopup = null, openStopId = null, routeArrivals = {}, activeDir = null;
+let basemap = BASEMAPS[0];
+try { basemap = BASEMAPS.find((b) => b.id === localStorage.getItem("gmt-basemap")) || basemap; } catch {}
+
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const isSunday = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(new Date()) === "Sun";
+const panelPad = () => ({ top: 40, bottom: 40, right: 60, left: innerWidth > 640 ? 370 : 40 });
+
+mapboxgl.accessToken = MAPBOX_TOKEN;
+const map = new mapboxgl.Map({
+  container: "map", style: basemap.url, bounds: HOME_BOUNDS, fitBoundsOptions: { padding: panelPad() },
+  dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, // flat 2D map
+  logoPosition: "bottom-right", // keep the Mapbox logo clear of the panel
+});
+map.touchZoomRotate.disableRotation();
+map.keyboard.disableRotation();
+map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+map.addControl(new mapboxgl.GeolocateControl({ showUserHeading: true }), "top-right");
+map.addControl({
+  onAdd() {
+    const el = document.createElement("div");
+    el.className = "mapboxgl-ctrl basemaps"; el.setAttribute("role", "group"); el.setAttribute("aria-label", "Basemap");
+    el.innerHTML = BASEMAPS.map((b) => `<button type="button" data-id="${b.id}" aria-pressed="${b.id === basemap.id}">${b.label}</button>`).join("");
+    el.onclick = (e) => {
+      const b = BASEMAPS.find((x) => x.id === e.target.dataset.id);
+      if (!b || b.id === basemap.id) return;
+      basemap = b;
+      try { localStorage.setItem("gmt-basemap", b.id); } catch {}
+      el.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.id === b.id));
+      map.setStyle(b.url, { diff: false }); // full reload so our layers are re-added on style.load
+    };
+    return el;
+  },
+  onRemove() {},
+}, "top-right");
+
+// Only poll while someone can see the map.
+let onScreen = true;
+new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) tick(); }).observe(document.getElementById("map"));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+
+// ---------- data ----------
+const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"].map((f) => fetch(DIR + f).then((r) => r.json())))
+  .then(([lines, stops, meta]) => {
+    linesData = lines; stopsData = stops;
+    meta.routes.forEach((r) => (routes[r.route_id] = r));
+    groups = meta.groups.length ? meta.groups : [{ id: "local", name: "Routes", default: "on" }];
+    routeStops = meta.stops;
+    stops.features.forEach((f) => (stopsById[f.properties.stop_id] = { ...f.properties, coords: f.geometry.coordinates }));
+    if (routeParam && !routes[routeParam]) routeParam = meta.routes.find((r) => r.short_name === routeParam)?.route_id || routeParam;
+    for (const r of meta.routes) {
+      const g = groups.find((x) => x.id === r.group);
+      if (g && (g.default === "off" || (g.default === "sundays" && !isSunday))) hidden.add(r.route_id);
+    }
+  });
+
+dataReady.then(() => {
+  if (routeParam && !routes[routeParam]) {
+    panel(`<header><a class="back" href="?">${ICON.back} All routes</a><h1>Route ${esc(routeParam)} isn’t in the current schedule</h1></header>`);
     return;
   }
-  meta.routes.forEach((r) => (routes[r.route_id] = r));
-  routeStops = meta.stops;
-  stops.features.forEach((f) => (stopsById[f.properties.stop_id] = { ...f.properties, coords: f.geometry.coordinates }));
-
-  if (routeParam && !routes[routeParam]) {
-    const byNumber = meta.routes.find((r) => r.short_name === routeParam);
-    if (byNumber) routeParam = byNumber.route_id;
-  }
-  if (routeParam && !routes[routeParam]) {
-    document.getElementById("panel").innerHTML = `<header><a class="back" href="?">All routes</a><h1>Route ${esc(routeParam)} isn’t in the current schedule</h1></header>`;
-    return;
-  }
-  const only = routeParam ? ["==", ["get", "route_id"], routeParam] : null;
-  const stopFilter = routeParam ? ["in", `|${routeParam}|`, ["get", "routes_key"]] : null;
-  const routeColor = routeParam ? routes[routeParam].color : "#42524a";
-
-  map.addSource("routes", { type: "geojson", data: lines });
-  map.addLayer({ id: "route-casing", type: "line", source: "routes", ...(only && { filter: only }),
-    layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": "#fff", "line-width": ["interpolate", ["linear"], ["zoom"], 9, 3, 15, 10] } });
-  map.addLayer({ id: "route-lines", type: "line", source: "routes", ...(only && { filter: only }),
-    layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": ["get", "color"], "line-width": ["interpolate", ["linear"], ["zoom"], 9, 1.5, 15, 6] } });
-
-  map.addSource("stops", { type: "geojson", data: stops });
-  map.addLayer({ id: "stops", type: "circle", source: "stops", ...(stopFilter && { filter: stopFilter }),
-    minzoom: routeParam ? 0 : 12.5,
-    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 3, 16, 7],
-             "circle-color": "#fff", "circle-stroke-color": routeColor,
-             "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 11, 1.5, 16, 3] } });
-  map.addLayer({ id: "stop-selected", type: "circle", source: "stops", filter: ["==", ["get", "stop_id"], ""],
-    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 6, 16, 11], "circle-color": "rgba(0,0,0,0)",
-             "circle-stroke-color": "#1c2a22", "circle-stroke-width": 2.5 } });
-
-  map.addSource("buses", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-  // Each route gets its own bus badge: a bus pictogram and the route number in the route's colors.
-  Object.values(routes).forEach((r) => map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }));
-  map.addLayer({ id: "bus-heading", type: "symbol", source: "buses", filter: ["!=", ["get", "heading"], null],
-    layout: { "icon-image": "heading", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map",
-              "icon-allow-overlap": true, "icon-ignore-placement": true },
-    paint: { "icon-color": ["get", "color"], "icon-halo-color": "#fff", "icon-halo-width": 1.5 } });
-  map.addLayer({ id: "buses", type: "symbol", source: "buses",
-    layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]],
-              "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
-              "icon-allow-overlap": true, "icon-ignore-placement": true } });
-
-  fitTo(lines.features.filter((f) => !routeParam || f.properties.route_id === routeParam));
   routeParam ? buildRoutePanel() : buildSystemPanel();
+}).catch(() => panel(`<header><h1>Map data is missing</h1><p class="status problem">Run the build workflow and try again.</p></header>`));
 
-  map.on("click", "stops", (e) => showStop(e.features[0].properties.stop_id));
-  map.on("click", "buses", (e) => showBus(e.features[0].properties, e.lngLat));
-  for (const l of ["stops", "buses"]) {
-    map.on("mouseenter", l, () => (map.getCanvas().style.cursor = "pointer"));
-    map.on("mouseleave", l, () => (map.getCanvas().style.cursor = ""));
+// Overlay layers are re-added whenever the basemap changes.
+map.on("style.load", async () => {
+  if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: false, showTransitLabels: false, lightPreset: "day" }))
+    try { map.setConfigProperty("basemap", k, v); } catch {}
+  await dataReady.catch(() => {});
+  if (!linesData) return;
+  addOverlay();
+  if (!addOverlay.fitted && routeParam && routes[routeParam]) {
+    fitTo(linesData.features.filter((f) => f.properties.route_id === routeParam));
+    addOverlay.fitted = true;
   }
-  tick();
-  setInterval(() => canPoll() && tick(), REFRESH_MS);
+  tick(true);
 });
 
+function addOverlay() {
+  const slot = (s) => (basemap.standard ? { slot: s } : {});
+  const add = (layer, s) => { if (!map.getLayer(layer.id)) map.addLayer({ ...layer, ...slot(s) }); };
+  if (!map.hasImage("heading")) map.addImage("heading", arrowImage(), { sdf: true });
+  Object.values(routes).forEach((r) => { if (!map.hasImage(`bus-${r.route_id}`)) map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }); });
+  if (!map.getSource("routes")) map.addSource("routes", { type: "geojson", data: linesData });
+  if (!map.getSource("stops")) map.addSource("stops", { type: "geojson", data: stopsData });
+  if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
+  const sat = basemap.id === "satellite";
+  const width = (a, b) => ["interpolate", ["linear"], ["zoom"], 9, a, 15, b];
+
+  add({ id: "route-glow", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": ["get", "color"], "line-width": width(10, 22), "line-blur": width(4, 8), "line-opacity": 0.7 } }, "middle");
+  add({ id: "route-casing", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": sat ? "#000" : "#fff", "line-opacity": sat ? 0.5 : 1, "line-width": width(3.5, 10) } }, "middle");
+  add({ id: "route-lines", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": ["get", "color"], "line-width": width(1.8, 6) } }, "middle");
+
+  const stopStroke = routeParam ? routes[routeParam].color : "#2b3a31";
+  const tp = ["==", ["get", "timepoint"], true];
+  add({ id: "stops", type: "circle", source: "stops", minzoom: routeParam ? 0 : 12,
+    paint: { "circle-color": "#fff", "circle-stroke-color": stopStroke,
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, ["case", tp, 4, 2.5], 16, ["case", tp, 8, 6]],
+      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 11, ["case", tp, 2, 1.2], 16, ["case", tp, 3.5, 2.5]] } }, "top");
+  add({ id: "stop-selected", type: "circle", source: "stops", filter: ["==", ["get", "stop_id"], openStopId || ""],
+    paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, 7, 16, 13], "circle-color": "rgba(0,0,0,0)",
+      "circle-stroke-color": "#1c2a22", "circle-stroke-width": 2.5 } }, "top");
+  add({ id: "timepoint-labels", type: "symbol", source: "stops", minzoom: 14.5,
+    layout: { "text-field": ["format", ["get", "name"], { "font-scale": 1 }, "\n", {}, "Scheduled timepoint", { "font-scale": 0.82 }],
+      "text-size": 12, "text-anchor": "top", "text-offset": [0, 0.9], "text-max-width": 12, "text-optional": true },
+    paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
+  add({ id: "bus-heading", type: "symbol", source: "buses", filter: ["!=", ["get", "heading"], null],
+    layout: { "icon-image": "heading", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map",
+      "icon-allow-overlap": true, "icon-ignore-placement": true },
+    paint: { "icon-color": ["get", "color"], "icon-halo-color": "#fff", "icon-halo-width": 1.5 } }, "top");
+  add({ id: "buses", type: "symbol", source: "buses",
+    layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
+      "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
+  applyFilters();
+}
+
+// ---------- visibility and highlight ----------
+function visibleRoutes() {
+  if (routeParam) return [routeParam];
+  return Object.keys(routes).filter((id) => !hidden.has(id));
+}
+function applyFilters() {
+  if (!map.getLayer("route-lines")) return;
+  const vis = visibleRoutes();
+  const onRoute = ["in", ["get", "route_id"], ["literal", vis]];
+  const atStop = vis.length ? ["any", ...vis.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : ["==", ["get", "stop_id"], "__none__"];
+  ["route-casing", "route-lines"].forEach((l) => map.setFilter(l, onRoute));
+  map.setFilter("route-glow", ["all", onRoute, ["in", ["get", "route_id"], ["literal", highlighted]]]);
+  map.setFilter("stops", atStop);
+  map.setFilter("timepoint-labels", ["all", atStop, ["==", ["get", "timepoint"], true]]);
+  map.setFilter("buses", onRoute);
+  map.setFilter("bus-heading", ["all", onRoute, ["!=", ["get", "heading"], null]]);
+  map.setPaintProperty("route-lines", "line-opacity", highlighted.length ? ["case", ["in", ["get", "route_id"], ["literal", highlighted]], 1, 0.22] : 1);
+  map.setPaintProperty("route-casing", "line-opacity", highlighted.length ? ["case", ["in", ["get", "route_id"], ["literal", highlighted]], 1, 0.3] : (basemap.id === "satellite" ? 0.5 : 1));
+}
+function highlight(ids) {
+  const next = (ids || []).filter((id) => routes[id]);
+  if (next.join() === highlighted.join()) return;
+  highlighted = next;
+  document.querySelectorAll(".route-row").forEach((el) => el.classList.toggle("hl", highlighted.includes(el.dataset.route)));
+  applyFilters();
+}
+
+// ---------- hover tooltips (mouse only; the same details are in popups and the panel) ----------
+const tip = document.getElementById("tip");
+map.on("mousemove", (e) => {
+  if (!map.getLayer("route-lines")) return;
+  const b = 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
+  const f = map.queryRenderedFeatures(box, { layers: ["buses", "stops", "route-lines"] })[0];
+  map.getCanvas().style.cursor = f ? "pointer" : "";
+  if (!f) { hideTip(); if (!openStopId) highlight([]); return; }
+  const p = f.properties;
+  if (f.layer.id === "stops") {
+    const s = stopsById[p.stop_id];
+    const ids = s.routes.filter((id) => visibleRoutes().includes(id));
+    highlight(ids);
+    showTip(e.point, `<h3>${esc(s.name)}</h3>${s.timepoint ? `<p class="t-freq" style="margin:0">Scheduled timepoint</p>` : ""}` +
+      ids.slice(0, 5).map((id) => routeTipRow(routes[id], ids.length <= 3)).join("") +
+      (ids.length > 5 ? `<p class="more">and ${ids.length - 5} more routes. Click the stop for details.</p>` : `<p class="more">Click for next arrivals.</p>`));
+  } else if (f.layer.id === "buses") {
+    const r = routes[p.route_id];
+    highlight([p.route_id]);
+    showTip(e.point, `<h3>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h3><p class="t-freq" style="margin:0">Bus ${esc(p.label)} · live location</p>`);
+  } else {
+    const r = routes[p.route_id];
+    highlight([p.route_id]);
+    showTip(e.point, `<h3>${chip(r)} ${esc(r.long_name)}</h3>${r.description ? `<p style="margin:0">${esc(r.description)}</p>` : ""}<p class="t-freq" style="margin:4px 0 0">${esc(freqText(r))}</p>`);
+  }
+});
+map.getCanvasContainer().addEventListener("mouseleave", () => { hideTip(); if (!openStopId) highlight([]); });
+function routeTipRow(r, withDesc) {
+  return `<div class="t-route">${chip(r)}<div><p><strong>${esc(r.long_name)}</strong></p>${withDesc && r.description ? `<p class="t-desc">${esc(r.description)}</p>` : ""}<p class="t-freq">${esc(freqText(r))}</p></div></div>`;
+}
+function showTip(pt, html) {
+  tip.innerHTML = html; tip.hidden = false;
+  const W = document.getElementById("wrap").clientWidth, H = document.getElementById("wrap").clientHeight;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(pt.x + 16, W - w - 8) + "px";
+  tip.style.top = (pt.y + 16 + h > H ? pt.y - h - 12 : pt.y + 16) + "px";
+}
+function hideTip() { tip.hidden = true; }
+
+map.on("click", "stops", (e) => showStop(e.features[0].properties.stop_id));
+map.on("click", "buses", (e) => {
+  const p = e.features[0].properties, r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
+  new mapboxgl.Popup({ offset: 14, maxWidth: "300px" }).setLngLat(e.lngLat).setHTML(
+    `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
+     <p class="sub">Bus ${esc(p.label)} · location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`).addTo(map);
+});
+
+// ---------- live data ----------
 let lastTick = 0;
-function tick() {
-  if (Date.now() - lastTick < 5000 || !map.getSource("buses")) return;
+function tick(force) {
+  if (!map.getSource("buses") || (!force && Date.now() - lastTick < 5000)) return;
+  if (!onScreen || document.hidden) return;
   lastTick = Date.now();
   refreshBuses();
   if (routeParam) refreshRouteArrivals();
   if (openStopId) refreshPopup();
 }
+setInterval(() => tick(), REFRESH_MS);
 
-// ---------- live buses ----------
 async function refreshBuses() {
   const status = document.getElementById("status");
-  if (!liveReady) { status.textContent = "Live buses aren’t connected yet. Showing scheduled times."; return; }
+  if (!liveReady) { if (status) status.textContent = "Live buses aren’t connected yet. Showing scheduled times."; return; }
   try {
     const data = await GMTLive.vehicles();
-    data.features = data.features.filter((f) => routes[f.properties.route_id] && (!routeParam || f.properties.route_id === routeParam));
-    const counts = {};
+    data.features = data.features.filter((f) => routes[f.properties.route_id]);
+    liveCounts = {};
     for (const f of data.features) {
       const r = routes[f.properties.route_id];
-      Object.assign(f.properties, { color: r.color, text_color: r.text_color, short_name: r.short_name });
-      counts[r.route_id] = (counts[r.route_id] || 0) + 1;
+      Object.assign(f.properties, { color: r.color, short_name: r.short_name });
+      liveCounts[r.route_id] = (liveCounts[r.route_id] || 0) + 1;
     }
-    map.getSource("buses").setData(data);
-    applyFilter();
-    const n = data.features.length;
-    status.textContent = `${n} bus${n === 1 ? "" : "es"} running now · updated ${clock(Date.now() / 1000)}`;
-    status.classList.remove("problem");
-    document.querySelectorAll("[data-count]").forEach((el) => (el.textContent = counts[el.dataset.count] ? `${counts[el.dataset.count]} live` : ""));
+    lastBuses = data;
+    map.getSource("buses")?.setData(data);
+    const n = visibleRoutes().reduce((sum, id) => sum + (liveCounts[id] || 0), 0);
+    if (status) { status.textContent = `${n} bus${n === 1 ? "" : "es"} running now · updated ${clock(Date.now() / 1000)}`; status.classList.remove("problem"); }
+    document.querySelectorAll("[data-live]").forEach((el) => {
+      const c = liveCounts[el.dataset.live]; el.innerHTML = c ? ` · <span class="lv">${c} live</span>` : "";
+    });
   } catch {
-    status.textContent = "Live bus locations are unavailable right now. Showing scheduled times.";
-    status.classList.add("problem");
+    if (status) { status.textContent = "Live bus locations are unavailable right now. Showing scheduled times."; status.classList.add("problem"); }
   }
 }
 
 // ---------- system panel ----------
 function buildSystemPanel() {
-  const ids = Object.keys(routes).sort((a, b) => (routes[a].sort - routes[b].sort) || routes[a].short_name.localeCompare(routes[b].short_name, undefined, { numeric: true }));
+  const byGroup = groups.map((g) => ({ ...g, ids: Object.values(routes).filter((r) => r.group === g.id)
+    .sort((a, b) => (a.sort - b.sort) || a.short_name.localeCompare(b.short_name, undefined, { numeric: true })).map((r) => r.route_id) }))
+    .filter((g) => g.ids.length);
   panel(`
-    <header>${toggleBtn()}<h1>All routes and live buses</h1>
+    <header>${toggleBtn("Routes")}<h1>All routes and live buses</h1>
       <p class="status" id="status" aria-live="polite">Loading buses…</p>
-      <p class="status">Zoom in and select a stop to see its next arrivals.</p></header>
-    <div class="bar"><button id="all">Show all</button><button id="none">Hide all</button></div>
-    <ul class="list" id="route-list">${ids.map((id) => {
-      const r = routes[id];
-      return `<li class="route-row"><input type="checkbox" checked data-route="${esc(id)}" id="cb-${esc(id)}" aria-label="Show route ${esc(r.short_name)}">
-        <label for="cb-${esc(id)}">${chip(r)}</label>
-        <label for="cb-${esc(id)}">${esc(r.long_name)} <span class="live-count" data-count="${esc(id)}"></span></label>
-        <a href="?route=${encodeURIComponent(r.short_name)}">Route map</a></li>`;
-    }).join("")}</ul>`);
-  document.getElementById("route-list").addEventListener("change", (e) => {
-    const id = e.target.dataset.route; e.target.checked ? hidden.delete(id) : hidden.add(id); applyFilter();
-  });
-  const setAll = (on) => { document.querySelectorAll("#route-list input").forEach((cb) => { cb.checked = on; on ? hidden.delete(cb.dataset.route) : hidden.add(cb.dataset.route); }); applyFilter(); };
-  document.getElementById("all").onclick = () => setAll(true);
-  document.getElementById("none").onclick = () => setAll(false);
-}
+      ${searchBox(Object.values(stopsById))}</header>
+    <div class="scroll">${byGroup.map((g) => `
+      <section class="group" data-group="${esc(g.id)}">
+        <div class="group-head">
+          <input type="checkbox" data-group-cb="${esc(g.id)}" aria-label="Show all ${esc(g.name)}">
+          <button type="button" class="group-toggle" aria-expanded="${!g.collapsed}" aria-controls="rows-${esc(g.id)}">
+            ${esc(g.name)} <span class="count">${g.ids.length}</span>${ICON.chevron}</button>
+        </div>
+        <ul class="rows" id="rows-${esc(g.id)}" ${g.collapsed ? "hidden" : ""}>${g.ids.map(routeRow).join("")}</ul>
+      </section>`).join("")}
+    </div>`, true);
 
-function applyFilter() {
-  if (routeParam) return;
-  const keep = hidden.size ? ["!", ["in", ["get", "route_id"], ["literal", [...hidden]]]] : null;
-  ["route-casing", "route-lines", "buses"].forEach((l) => map.setFilter(l, keep));
-  map.setFilter("bus-heading", keep ? ["all", ["!=", ["get", "heading"], null], keep] : ["!=", ["get", "heading"], null]);
-  // A stop stays visible while any of its routes is shown.
-  const visible = Object.keys(routes).filter((id) => !hidden.has(id));
-  map.setFilter("stops", hidden.size ? ["any", ...visible.map((id) => ["in", `|${id}|`, ["get", "routes_key"]]), false] : null);
+  const syncGroups = () => byGroup.forEach((g) => {
+    const cb = document.querySelector(`[data-group-cb="${g.id}"]`), on = g.ids.filter((id) => !hidden.has(id)).length;
+    cb.checked = on === g.ids.length; cb.indeterminate = on > 0 && on < g.ids.length;
+  });
+  const syncRows = () => document.querySelectorAll(".route-row").forEach((row) => {
+    const off = hidden.has(row.dataset.route); row.classList.toggle("off", off); row.querySelector("input").checked = !off;
+  });
+  syncRows(); syncGroups();
+  const scroll = document.querySelector(".scroll");
+  scroll.addEventListener("change", (e) => {
+    if (e.target.dataset.route) { e.target.checked ? hidden.delete(e.target.dataset.route) : hidden.add(e.target.dataset.route); }
+    else if (e.target.dataset.groupCb) {
+      const g = byGroup.find((x) => x.id === e.target.dataset.groupCb);
+      g.ids.forEach((id) => (e.target.checked ? hidden.delete(id) : hidden.add(id)));
+    }
+    syncRows(); syncGroups(); applyFilters(); refreshBuses();
+  });
+  scroll.addEventListener("click", (e) => {
+    const t = e.target.closest(".group-toggle"); if (!t) return;
+    const open = t.getAttribute("aria-expanded") !== "true";
+    t.setAttribute("aria-expanded", open); document.getElementById(t.getAttribute("aria-controls")).hidden = !open;
+  });
+  // Hovering or focusing a route in the list highlights it on the map.
+  const rowOf = (e) => e.target.closest?.(".route-row");
+  scroll.addEventListener("mouseover", (e) => { const r = rowOf(e); if (r && !hidden.has(r.dataset.route)) highlight([r.dataset.route]); });
+  scroll.addEventListener("mouseleave", () => highlight([]));
+  scroll.addEventListener("focusin", (e) => { const r = rowOf(e); if (r && !hidden.has(r.dataset.route)) highlight([r.dataset.route]); });
+  scroll.addEventListener("focusout", () => highlight([]));
+}
+function routeRow(id) {
+  const r = routes[id];
+  return `<li class="route-row" data-route="${esc(id)}">
+    <input type="checkbox" id="cb-${esc(id)}" data-route="${esc(id)}" aria-describedby="d-${esc(id)}">
+    <label for="cb-${esc(id)}">${chip(r)}<span class="rname">${esc(r.long_name)}</span>
+      <span class="rfreq">${esc(freqText(r))}<span data-live="${esc(id)}"></span></span></label>
+    <span class="sr-only" id="d-${esc(id)}">${esc(r.description || "")}</span>
+    <a class="route-go" href="?route=${encodeURIComponent(r.short_name)}" aria-label="Route ${esc(r.short_name)} map, stops and arrival times" title="Route map and stops">${ICON.arrow}</a>
+  </li>`;
 }
 
 // ---------- single-route panel ----------
-let routeArrivals = {};
 function buildRoutePanel() {
   const r = routes[routeParam], dirs = Object.keys(routeStops[routeParam] || {});
   activeDir = dirs[0];
   document.documentElement.style.setProperty("--route", r.color);
   document.title = `Route ${r.short_name} ${r.long_name} · GMT system map`;
+  const ids = [...new Set(dirs.flatMap((d) => routeStops[routeParam][d].stops))];
   panel(`
-    <header>${toggleBtn()}<a class="back" href="?">All routes</a>
+    <header>${toggleBtn("Stops")}<a class="back" href="?">${ICON.back} All routes</a>
       <h1>${chip(r)} ${esc(r.long_name)}</h1>
-      <p class="status" id="status" aria-live="polite">Loading buses…</p></header>
+      ${r.description ? `<p class="route-about">${esc(r.description)}</p>` : ""}
+      ${serviceTable(r)}
+      <p class="status" id="status" aria-live="polite" style="margin-top:8px">Loading buses…</p>
+      ${searchBox(ids.map((id) => stopsById[id]).filter(Boolean))}</header>
     ${dirs.length > 1 ? `<div class="tabs" role="tablist">${dirs.map((d) =>
       `<button role="tab" data-dir="${esc(d)}" aria-selected="${d === activeDir}">To ${esc(routeStops[routeParam][d].headsign || "direction " + d)}</button>`).join("")}</div>` : ""}
-    <ol class="list" id="stop-list"></ol>`);
+    <div class="scroll"><ol class="stop-list" id="stop-list"></ol></div>`, true);
   document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
     activeDir = b.dataset.dir;
     document.querySelectorAll(".tabs button").forEach((x) => x.setAttribute("aria-selected", x === b));
@@ -268,20 +482,18 @@ function buildRoutePanel() {
   });
   renderStopList();
 }
-
 function renderStopList() {
   const ids = routeStops[routeParam][activeDir].stops;
   const ol = document.getElementById("stop-list");
   ol.innerHTML = ids.map((id, i) => {
     const s = stopsById[id]; if (!s) return "";
-    const last = i === ids.length - 1;
-    const next = last ? "Last stop" : summary(routeArrivals[id]?.[activeDir]);
-    return `<li><button class="stop-row" data-stop="${esc(id)}"><span class="stop-dot"></span>
-      <span><span class="stop-name">${esc(s.name)}</span><span class="stop-next" data-next="${esc(id)}">${next}</span></span></button></li>`;
+    const next = i === ids.length - 1 ? "Last stop" : summary(routeArrivals[id]?.[activeDir]);
+    return `<li><button class="stop-row ${s.timepoint ? "tp" : ""}" data-stop="${esc(id)}"><span class="stop-dot"></span>
+      <span><span class="stop-name">${esc(s.name)}${s.timepoint ? `<span class="tp-tag">Timepoint</span>` : ""}</span>
+      <span class="stop-next" data-next="${esc(id)}">${next}</span></span></button></li>`;
   }).join("");
   ol.onclick = (e) => { const b = e.target.closest("[data-stop]"); if (b) showStop(b.dataset.stop, true); };
 }
-
 async function refreshRouteArrivals() {
   try {
     routeArrivals = (await GMTLive.arrivals({ route: routeParam })).arrivals;
@@ -289,70 +501,142 @@ async function refreshRouteArrivals() {
     document.querySelectorAll("[data-next]").forEach((el) => {
       if (el.dataset.next !== ids[ids.length - 1]) el.innerHTML = summary(routeArrivals[el.dataset.next]?.[activeDir]);
     });
-  } catch { /* keep last values; status line already reports feed problems */ }
+  } catch {}
 }
-
-// Arrivals at a stop for this route, shown in the list: "4 min · 24 min · 2:15 PM"
 function summary(list) {
   if (!list || !list.length) return "No more trips today";
-  return list.map((a, i) => i === 0 && a.live ? `<span class="now">${when(a.time)}</span>` : when(a.time)).join(" · ");
+  return list.map((a, i) => (i === 0 && a.live ? `<span class="now">${when(a.time)}</span>` : when(a.time))).join(" · ");
 }
 
-// ---------- popups ----------
-async function showStop(id, fly) {
+// ---------- stop popup ----------
+function showStop(id, fly) {
   const s = stopsById[id]; if (!s) return;
-  openStopId = id;
-  map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
-  if (fly) map.easeTo({ center: s.coords, zoom: Math.max(map.getZoom(), 15) });
+  openStopId = id; hideTip();
+  highlight(s.routes.filter((rid) => visibleRoutes().includes(rid)));
+  if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
+  if (fly) map.easeTo({ center: s.coords, zoom: Math.max(map.getZoom(), 15), duration: reduceMotion ? 0 : 600 });
   if (openPopup) openPopup.remove();
-  openPopup = new mapboxgl.Popup({ offset: 10, maxWidth: "300px" }).setLngLat(s.coords).setHTML(stopHtml(s, null)).addTo(map);
-  openPopup.on("close", () => { if (openStopId === id) { openStopId = null; map.setFilter("stop-selected", ["==", ["get", "stop_id"], ""]); } });
-  refreshPopup();
+  openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "330px" }).setLngLat(s.coords).setHTML(stopHtml(s, null)).addTo(map);
+  openPopup.on("close", () => {
+    if (openStopId !== id) return;
+    openStopId = null; highlight([]);
+    if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], ""]);
+  });
+  refreshPopup(true);
 }
-
-async function refreshPopup() {
-  const id = openStopId;
-  try {
-    const body = await GMTLive.arrivals({ stop: id });
-    if (id === openStopId && openPopup) openPopup.setHTML(stopHtml(stopsById[id], body.arrivals[id] || []));
-  } catch {
-    if (id === openStopId && openPopup) openPopup.setHTML(stopHtml(stopsById[id], "error"));
+async function refreshPopup(announce) {
+  const id = openStopId; if (!id) return;
+  let arrivals = "error";
+  try { arrivals = (await GMTLive.arrivals({ stop: id })).arrivals[id] || []; } catch {}
+  if (id !== openStopId || !openPopup) return;
+  openPopup.setHTML(stopHtml(stopsById[id], arrivals));
+  if (announce && Array.isArray(arrivals)) {
+    const s = stopsById[id];
+    document.getElementById("announce").textContent = `${s.name}. ` + (arrivals.length
+      ? arrivals.map((a) => `Route ${a.short_name}${a.headsign ? " to " + a.headsign : ""}, ${when(a.time)}${a.live ? "" : ", scheduled"}`).join(". ")
+      : "No more buses today.");
   }
 }
-
 function stopHtml(s, arrivals) {
-  const sub = [s.code && `Stop ${esc(s.code)}`, s.routes.map((r) => routes[r] ? `Route ${esc(routes[r].short_name)}` : "").filter(Boolean).join(", ")].filter(Boolean).join(" · ");
+  const sub = [s.code && `Stop #${esc(s.code)}`, s.timepoint && `<span class="tp">Scheduled timepoint</span>`].filter(Boolean).join(" · ");
   let body;
   if (arrivals === null) body = `<p class="none">Loading arrivals…</p>`;
   else if (arrivals === "error") body = `<p class="none">Arrival times are unavailable right now.</p>`;
   else if (!arrivals.length) body = `<p class="none">No more buses scheduled at this stop today.</p>`;
-  else body = `<ol>${arrivals.map((a) => `<li>${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })}
+  else body = `<ol aria-label="Next arrivals">${arrivals.map((a) => `<li>${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })}
       <span>${esc(a.headsign ? "To " + a.headsign : "")}</span>
       <span class="when ${a.live ? "live" : ""}">${when(a.time)}<small>${a.live ? "Live" : "Scheduled"}</small></span></li>`).join("")}</ol>`;
-  const amen = [...(s.amenities || [])];
-  if (s.wheelchair === "yes") amen.unshift("Wheelchair accessible");
-  if (s.wheelchair === "no") amen.unshift("Not wheelchair accessible");
-  return `<div class="pop"><h2>${esc(s.name)}</h2><p class="sub">${sub}</p>${body}
-    ${amen.length ? `<div class="amen">${amen.map((x) => `<span>${esc(x)}</span>`).join("")}</div>` : ""}
-    ${s.amenity_notes ? `<p class="notes">${esc(s.amenity_notes)}</p>` : ""}</div>`;
+
+  const feats = [];
+  if (s.ada_pad === "yes") feats.push(["wheelchair", "ADA boarding pad"]);
+  else if (s.ada_pad === "no") feats.push(["wheelchair", "No ADA boarding pad", true]);
+  else if (s.wheelchair === "yes") feats.push(["wheelchair", "Wheelchair accessible"]);
+  else if (s.wheelchair === "no") feats.push(["wheelchair", "Not wheelchair accessible", true]);
+  const has = (x) => (s.amenities || []).includes(x);
+  if (has("Shelter")) feats.push(["shelter", "Shelter"]);
+  if (has("Seating")) feats.push(["seat", "Seating"]);
+  if (has("Schedule box")) feats.push(["schedule", "Posted schedule"]);
+  const n = s.nearby;
+  if (n?.food) feats.push(["food", "Food nearby"]);
+  if (n?.shopping) feats.push(["shop", "Shopping nearby"]);
+  if (n?.restroom) feats.push(["restroom", "Public restroom nearby"]);
+  const featHtml = feats.length ? `<ul class="feats" aria-label="At and near this stop">${feats.map(([icon, label, no]) =>
+    `<li class="${no ? "no" : ""}"><span class="ico" aria-hidden="true">${ICON[icon]}</span>${esc(label)}</li>`).join("")}</ul>` : "";
+
+  const rs = s.routes.map((id) => routes[id]).filter(Boolean);
+  const about = `<details><summary>About ${rs.length === 1 ? "this route" : `these ${rs.length} routes`}</summary><div class="about">${rs.map((r) =>
+    `${chip(r)}<p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
+  return `<div class="pop"><h2>${esc(s.name)}</h2><p class="sub">${sub}</p>${body}${featHtml}${about}
+    ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
 }
 
-function showBus(p, lngLat) {
-  const r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
-  new mapboxgl.Popup({ offset: 12, closeButton: false }).setLngLat(lngLat).setHTML(
-    `<div class="pop"><h2>${chip(r)} ${esc(r.long_name || "")}</h2>
-     <p class="sub">${p.headsign ? `To ${esc(p.headsign)} · ` : ""}${p.label ? `Bus ${esc(p.label)} · ` : ""}location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`
-  ).addTo(map);
+// ---------- stop search ----------
+function searchBox(list) {
+  const opts = list.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name))
+    .map((s) => `<option value="${esc(stopLabel(s))}"></option>`).join("");
+  queueMicrotask(() => {
+    const input = document.getElementById("stop-search"); if (!input) return;
+    const find = () => { const s = list.find((x) => x && stopLabel(x) === input.value); if (s) { showStop(s.stop_id, true); input.blur(); } };
+    input.addEventListener("change", find); input.addEventListener("input", find);
+  });
+  return `<div class="search">${ICON.search}<label for="stop-search" class="sr-only">Find a stop by name or number</label>
+    <input id="stop-search" list="stop-options" placeholder="Find a stop by name or number" autocomplete="off"><datalist id="stop-options">${opts}</datalist></div>`;
 }
+const stopLabel = (s) => `${s.name}${s.code ? ` (#${s.code})` : ""}`;
 
-// ---------- small helpers ----------
-function panel(html) {
+// ---------- service text ----------
+const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAYS_LONG = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"];
+function daysLabel(d) {
+  const k = d.map((x) => (x ? 1 : 0)).join("");
+  if (k === "1111111") return "Daily";
+  if (k === "1111110") return "Mon–Sat";
+  if (k === "1111100") return "Weekdays";
+  if (k === "0000011") return "Weekends";
+  if (k === "0000000") return "No trips in the next two weeks";
+  const on = d.map((x, i) => (x ? i : -1)).filter((i) => i >= 0);
+  return on.length === 1 ? `${DAYS_LONG[on[0]]} only` : on.map((i) => DAY[i]).join(", ");
+}
+function every(min) {
+  if (min === 60) return "hourly";
+  if (min > 60 && min % 60 === 0) return `every ${min / 60} hours`;
+  return `every ${min} min`;
+}
+function freqText(r) {
+  const s = r.service; if (!s) return "";
+  const days = daysLabel(s.days);
+  const main = s.weekday || s.saturday || s.sunday;
+  if (!main) return days;
+  const weekdaysOnly = s.days.slice(0, 5).some(Boolean) && !s.days[5] && !s.days[6];
+  const how = main.headway ? every(main.headway) : `${main.trips} trip${main.trips === 1 ? "" : "s"} each way`;
+  const qualifier = main === s.weekday && !weekdaysOnly && s.days.slice(0, 5).filter(Boolean).length > 1 ? " on weekdays" : "";
+  return `${days} · ${how}${qualifier}`;
+}
+function serviceTable(r) {
+  const s = r.service; if (!s) return "";
+  const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  const row = (label, d) => `<dt>${label}</dt><dd>${d ? `${d.headway ? cap(every(d.headway)) : `${d.trips} trip${d.trips === 1 ? "" : "s"} each way`}, ${clock(dayEpoch(d.first))}–${clock(dayEpoch(d.last))}` : "No service"}</dd>`;
+  const onlyDays = s.weekday && s.days.slice(0, 5).filter(Boolean).length < 5 && s.days.slice(0, 5).some(Boolean) ? ` (${daysLabel([...s.days.slice(0, 5), false, false])})` : "";
+  return `<dl class="svc">${row("Weekdays" + onlyDays, s.weekday)}${row("Saturday", s.saturday)}${row("Sunday", s.sunday)}</dl>`;
+}
+// Seconds after midnight (Vermont time) -> epoch, so times display correctly in any visitor time zone.
+const dayEpoch = (secs) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return Math.floor(Date.now() / 1000) - (+p.hour * 3600 + +p.minute * 60 + +p.second) + secs;
+};
+
+// ---------- helpers ----------
+function panel(html, fill) {
   const el = document.getElementById("panel"); el.innerHTML = html;
+  el.classList.toggle("fit", !fill);
   const t = document.getElementById("toggle");
-  if (innerWidth <= 640) { el.classList.add("collapsed"); t.setAttribute("aria-expanded", "false"); }
-  t.onclick = () => t.setAttribute("aria-expanded", String(!el.classList.toggle("collapsed")));
+  if (t) {
+    if (innerWidth <= 640) { el.classList.add("collapsed"); t.setAttribute("aria-expanded", "false"); }
+    t.onclick = () => t.setAttribute("aria-expanded", String(!el.classList.toggle("collapsed")));
+  }
 }
-const toggleBtn = () => `<button id="toggle" aria-expanded="true">${routeParam ? "Stops" : "Routes"}</button>`;
+const toggleBtn = (label) => `<button id="toggle" aria-expanded="true">${label}</button>`;
 const chip = (r) => `<span class="chip" style="background:${esc(r.color || "#555")};color:${esc(r.text_color || "#fff")}">${esc(r.short_name || "")}</span>`;
 function when(epoch) {
   const mins = Math.floor((epoch - Date.now() / 1000) / 60);
@@ -363,11 +647,26 @@ function when(epoch) {
 const clock = (epoch) => new Date(epoch * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
 function fitTo(features) {
   const b = new mapboxgl.LngLatBounds();
-  features.forEach((f) => f.geometry.coordinates.forEach(([lon, lat]) => {
-    if (lon > -75 && lon < -70 && lat > 42 && lat < 46) b.extend([lon, lat]); // stay within Vermont and nearby
-  }));
-  if (!b.isEmpty()) map.fitBounds(b, { padding: { top: 40, bottom: 40, left: innerWidth > 640 ? 330 : 40, right: 50 }, duration: 0 });
+  features.forEach((f) => f.geometry.coordinates.forEach(([lon, lat]) => { if (lon > -75 && lon < -70 && lat > 42 && lat < 46) b.extend([lon, lat]); }));
+  if (!b.isEmpty()) map.fitBounds(b, { padding: panelPad(), duration: 0 });
 }
+function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+const svg = (d, fill) => `<svg viewBox="0 0 24 24" fill="${fill ? "currentColor" : "none"}" stroke="${fill ? "none" : "currentColor"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  food: svg('<path d="M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 1-3.5 3.5-3.5 7 0 2 1 3 3.5 3"/>'),
+  shop: svg('<path d="M5 8h14l-1.2 12.2a1 1 0 0 1-1 .8H7.2a1 1 0 0 1-1-.8L5 8z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/>'),
+  restroom: svg('<circle cx="7" cy="4.5" r="1.8"/><circle cx="17" cy="4.5" r="1.8"/><path d="M5 8h4l-.6 6H8v6H6v-6h-.4zM15.2 8h3.6l1.7 7H19v5h-4v-5h-1.5z"/><rect x="11.4" y="3" width="1.2" height="18"/>', true),
+  wheelchair: svg('<circle cx="11" cy="4" r="2" fill="currentColor" stroke="none"/><path d="M11 7.5v6h5.5l2.5 5.5"/><path d="M8.5 10.5a5.5 5.5 0 1 0 6.9 7"/>'),
+  shelter: svg('<path d="M3 9l9-5 9 5"/><path d="M5 8v12M19 8v12M8 15h8"/>'),
+  seat: svg('<path d="M4 11h16M5 15h14M6 15v5M18 15v5M6 11V6M18 11V6"/>'),
+  schedule: svg('<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>'),
+  search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'),
+  chevron: svg('<path d="M6 9l6 6 6-6"/>'),
+  arrow: svg('<path d="M9 6l6 6-6 6"/>'),
+  back: svg('<path d="M15 6l-6 6 6 6"/>').replace("<svg", '<svg width="14" height="14"'),
+};
+
 // Heading pointer: a small triangle on a ring around the bus badge, rotated to the bus's direction.
 function arrowImage() {
   const S = 96, c = document.createElement("canvas"); c.width = c.height = S;
@@ -404,7 +703,6 @@ function busBadge(r) {
   }
   return { width: w, height: h, data: g.getImageData(0, 0, w, h).data };
 }
-function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 </script>
 </body>
 </html>
