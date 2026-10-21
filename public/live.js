@@ -3,6 +3,7 @@
 //   GMTLive.arrivals({ stop })    -> { stopId: [next 3 arrivals, all routes] }
 //   GMTLive.arrivals({ route })   -> { stopId: { directionId: [next 3 arrivals] } }
 //   GMTLive.arrivals({ stop, all: true }) -> { stopId: [every departure today, past ones marked] }
+//   Add only: [routeId] to limit a stop's departures to certain routes (used on single-route pages).
 // Arrivals combine the published schedule (data/ folder) with Swiftly's GTFS-realtime
 // trip updates: live predictions where Swiftly has them, scheduled times otherwise.
 (function () {
@@ -172,7 +173,7 @@
     return best === day ? tu : null;
   }
 
-  async function arrivals({ stop, route, all }) {
+  async function arrivals({ stop, route, all, only }) {
     const [meta, cal, stops] = await Promise.all([data("routes.json"), data("calendar.json"), data("stops.geojson")]);
     // Live predictions are optional: if Swiftly can't be reached, scheduled times still show.
     let tus = new Map(), live = true;
@@ -182,6 +183,7 @@
     let routeIds;
     if (route) routeIds = meta.stops[route] ? [route] : [];
     else routeIds = stops.features.find((x) => x.properties.stop_id === stop)?.properties.routes || [];
+    if (only) routeIds = routeIds.filter((id) => only.includes(id));
 
     const clock = localClock();
     const days = [-1, 0, 1].map((offset) => {
