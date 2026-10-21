@@ -1,5 +1,7 @@
 # GMT system map
 
+**Looking after the map? Start with [MAINTENANCE.md](MAINTENANCE.md)**, a step-by-step guide for routine tasks, fixes and checks.
+
 A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 
 - **System map**: https://greenmountaintransit.github.io/system-map/ shows every route and live bus, with a Routes / Frequency switch. Stops appear when you zoom in.
@@ -8,7 +10,7 @@ A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 
 Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
-Other features: search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
+Other features: local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
 
 ## What's in the repo
 
@@ -20,6 +22,7 @@ Other features: search for routes and stops, a clickable legend with route group
 | `scripts/prepare-amenities.mjs` | Turns the field-survey exports into `amenities.csv`. |
 | `route-info.json` | Route descriptions and legend groups (edit by hand). |
 | `amenities.csv` | Shelter, seating, schedule box and ADA pad for each stop. |
+| `MAINTENANCE.md` | How to run and fix the map without a developer. |
 | `.github/workflows/build-data.yml` | Nightly (and on every change): downloads GMT's GTFS, builds the data, adds the Swiftly key, publishes the site. |
 
 The Swiftly API key is stored as a repository secret, not in the code. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
@@ -30,8 +33,9 @@ The Swiftly API key is stored as a repository secret, not in the code. The workf
 
 1. **Pages**: in the repo's **Settings → Pages**, set **Source** to **GitHub Actions**.
 2. **Swiftly key**: in **Settings → Secrets and variables → Actions**, click **New repository secret**. Name: `SWIFTLY_KEY`. Value: GMT's Swiftly API key.
-3. **Mapbox token**: in `public/index.html`, `MAPBOX_TOKEN` must be a public token (starts with `pk.`) with URL restriction `https://greenmountaintransit.github.io`.
-4. **Publish**: run the workflow from the **Actions** tab (**Build map data and publish → Run workflow**).
+3. **Street View (optional)**: add a Google Maps Embed API key as the secret `GOOGLE_MAPS_KEY` to show Street View inside stop details (free; see MAINTENANCE.md). Without it, stop details link out to Google Maps.
+4. **Mapbox token**: in `public/index.html`, `MAPBOX_TOKEN` must be a public token (starts with `pk.`) with URL restriction `https://greenmountaintransit.github.io`.
+5. **Publish**: run the workflow from the **Actions** tab (**Build map data and publish → Run workflow**).
 
 ## Embedding in CivicPlus
 
