@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GMT system map</title>
 <meta name="description" content="Live map of Green Mountain Transit routes, stops, buses and arrival times.">
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet">
@@ -60,10 +60,6 @@
   .viewtoggle { display: flex; margin-top: 10px; background: var(--chip-bg); border-radius: 8px; padding: 3px; }
   .viewtoggle button { flex: 1; border: 0; background: none; border-radius: 6px; padding: 6px 8px; font-size: .84rem; cursor: pointer; color: var(--muted); }
   .viewtoggle button[aria-pressed=true] { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
-  .focus-pill { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px 10px; margin-top: 10px; padding: 8px 10px; background: var(--chip-bg); border-radius: 8px; font-size: .82rem; }
-  .focus-pill span { min-width: 0; } .fp-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 18px; }
-  .fp-actions a, .fp-actions button { white-space: nowrap; }
-  .focus-pill a, .focus-pill button { font-size: .8rem; font-weight: 600; color: var(--gmt); text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; }
   .freq-legend { padding: 14px 16px; }
   .periods { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
   .periods button { border: 1px solid #c9d3cc; background: #fff; border-radius: 999px; padding: 5px 11px; font-size: .8rem; cursor: pointer; color: var(--ink); }
@@ -111,6 +107,8 @@
   .route-go:hover { background: #e3eee7; }
   .route-go svg { width: 18px; height: 18px; }
   input[type=checkbox] { accent-color: var(--gmt); margin: 0; width: 16px; height: 16px; }
+  .route-row { transition: opacity .15s; }
+  .scroll.has-hl .route-row:not(.hl) { opacity: .38; }
   .route-row.off .chip { opacity: .45; } .route-row.off .rname { color: var(--muted); }
 
   .chip { display: inline-block; min-width: 2.2rem; text-align: center; border-radius: 5px; font-weight: 700; font-size: .8rem; padding: 2px 5px; box-sizing: border-box; line-height: 1.35; }
@@ -145,6 +143,7 @@
   #tip .more { color: var(--muted); margin: 6px 0 0; font-size: .76rem; }
 
   /* ---------- popup ---------- */
+  .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
   .mapboxgl-popup-content { font-family: inherit; padding: 14px 16px 12px; border-radius: 10px; box-shadow: 0 4px 20px rgba(20,40,30,.2); }
   .mapboxgl-popup-close-button { font-size: 20px; width: 28px; height: 28px; right: 4px; top: 4px; color: var(--muted); }
   .pop { min-width: 240px; }
@@ -176,16 +175,35 @@
   .mapboxgl-ctrl.basemaps button[aria-pressed=true], .mapboxgl-ctrl.basemaps button[aria-pressed=true]:hover { background: var(--gmt); color: #fff; font-weight: 600; }
   .mapboxgl-ctrl.basemaps button { width: auto; height: auto; }
 
+  .legend-bar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 9px 16px; background: #fff; border-bottom: 1px solid var(--line); font-size: .78rem; color: var(--muted); }
+  .legend-bar span { flex: 1; }
+  .legend-bar button { background: none; border: 0; padding: 4px 0; font-size: .8rem; font-weight: 600; color: var(--gmt); cursor: pointer; }
+  .legend-hint { margin: 8px 16px 2px; font-size: .74rem; color: var(--faint); }
+  .pop-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 8px; }
+  .pop-actions button, .pop-actions a { background: none; border: 0; padding: 0; font: inherit; font-size: .82rem; font-weight: 600; color: var(--gmt); text-decoration: none; cursor: pointer; }
   #toggle { display: none; }
   @media (max-width: 640px) {
     :root { --panel-w: auto; }
-    #panel { right: 12px; bottom: auto; max-height: 55%; }
+    /* bottom sheet */
+    #panel, #panel.fit { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 72%; border-radius: 16px 16px 0 0;
+      box-shadow: 0 -4px 20px rgba(20,40,30,.18); padding-bottom: env(safe-area-inset-bottom, 0px); }
     #panel.collapsed > :not(header) { display: none; }
-    #panel.collapsed .search { display: none; }
-    #toggle { display: inline-flex; float: right; background: var(--chip-bg); border: 0; border-radius: 6px; padding: 4px 10px; color: var(--gmt); font-size: .82rem; font-weight: 600; cursor: pointer; }
+    #panel.collapsed .viewtoggle, #panel.collapsed .route-about, #panel.collapsed .svc, #panel.collapsed .back { display: none; }
+    #panel header { padding-top: 6px; }
+    #panel h1 { font-size: 1rem; padding-right: 70px; }
+    #toggle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 26px; margin: 0 0 4px; padding: 0;
+      background: none; border: 0; cursor: pointer; color: var(--gmt); font-size: .76rem; font-weight: 600; position: relative; }
+    #toggle .grip { width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; }
+    #toggle .t-label { position: absolute; right: 0; top: 30px; background: var(--chip-bg); border-radius: 6px; padding: 4px 10px; }
+    #panel:not(.collapsed) #toggle .t-label::after { content: " ▾"; } #panel.collapsed #toggle .t-label::after { content: " ▴"; }
+    .route-row { padding: 9px 10px 9px 16px; } .route-go { width: 40px; height: 40px; }
+    input[type=checkbox] { width: 20px; height: 20px; }
+    .search input { font-size: 16px; } /* stops iOS zooming in on focus */
+    #q-list { max-height: 45vh; }
     #tip { display: none !important; }
-    .basemaps button { padding: 5px 8px; }
-    .mapboxgl-ctrl-top-right { top: auto; bottom: 28px; } /* keep controls clear of the panel on phones */
+    .basemaps button { padding: 7px 9px; }
+    .mapboxgl-popup-content { padding: 12px 14px 10px; }
+    .alltimes { max-height: 160px; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -221,7 +239,10 @@ let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "
 let openPopup = null, openStopId = null, routeArrivals = {}, activeDir = null;
 let basemap = BASEMAPS[0];
 let view = new URLSearchParams(location.search).get("view") === "frequency" ? "frequency" : "routes";
-let focused = null, hiddenBeforeFocus = null, freqData;
+let picking = false; // false: the legend shows its defaults; true: the rider has picked specific routes
+let freqData;
+const isPhone = () => innerWidth <= 640;
+let sheetOpen = !isPhone();
 let freqPeriod = "mid", freqTiers = new Set([1, 2, 3, 4]), showAllTimes = false;
 const FREQ_PERIODS = [
   { id: "peak", label: "Weekday rush hour", short: "Rush hour", note: "weekdays 7–9 AM and 4–6 PM" },
@@ -232,7 +253,10 @@ try { basemap = BASEMAPS.find((b) => b.id === localStorage.getItem("gmt-basemap"
 
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const isSunday = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(new Date()) === "Sun";
-const panelPad = () => ({ top: 40, bottom: 40, right: 60, left: innerWidth > 640 ? 370 : 40 });
+// Keep fitted routes clear of the panel: beside it on desktop, above the bottom sheet on phones.
+const panelPad = () => isPhone()
+  ? { top: 60, left: 24, right: 56, bottom: (document.getElementById("panel")?.offsetHeight || 140) + 24 }
+  : { top: 40, bottom: 40, right: 60, left: 370 };
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 const map = new mapboxgl.Map({
@@ -402,14 +426,19 @@ function applyFilters() {
   map.setFilter("timepoint-labels", ["all", stopFilter, ["==", ["get", "timepoint"], true]]);
   map.setFilter("buses", onRoute);
   map.setFilter("bus-heading", ["all", onRoute, ["!=", ["get", "heading"], null]]);
-  map.setPaintProperty("route-lines", "line-opacity", highlighted.length ? ["case", ["in", ["get", "route_id"], ["literal", highlighted]], 1, 0.5] : 1);
-  map.setPaintProperty("route-casing", "line-opacity", highlighted.length ? ["case", ["in", ["get", "route_id"], ["literal", highlighted]], 1, 0.5] : (basemap.id === "satellite" ? 0.5 : 1));
+  // While a route is hovered, everything else steps back: other lines, their casings and their buses.
+  const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
+  map.setPaintProperty("route-lines", "line-opacity", any ? ["case", isHl, 1, 0.2] : 1);
+  map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
+  map.setPaintProperty("buses", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
+  map.setPaintProperty("bus-heading", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
 }
 function highlight(ids) {
   const next = (ids || []).filter((id) => routes[id]);
   if (next.join() === highlighted.join()) return;
   highlighted = next;
   document.querySelectorAll(".route-row").forEach((el) => el.classList.toggle("hl", highlighted.includes(el.dataset.route)));
+  document.querySelector(".scroll")?.classList.toggle("has-hl", highlighted.length > 0); // fade the other legend rows too
   applyFilters();
 }
 
@@ -458,12 +487,36 @@ function showTip(pt, html) {
 }
 function hideTip() { tip.hidden = true; }
 
-map.on("click", "stops", (e) => showStop(e.features[0].properties.stop_id));
-map.on("click", "buses", (e) => {
-  const p = e.features[0].properties, r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
-  new mapboxgl.Popup({ offset: 14, maxWidth: "300px" }).setLngLat(e.lngLat).setHTML(
-    `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
-     <p class="sub">Bus ${esc(p.label)} · location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`).addTo(map);
+map.on("click", (e) => {
+  if (!map.getLayer("route-lines")) return;
+  const b = isPhone() ? 12 : 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
+  const freq = view === "frequency" && !routeParam;
+  const f = map.queryRenderedFeatures(box, { layers: freq ? ["buses", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"] })[0];
+  if (!f) return;
+  const p = f.properties;
+  hideTip();
+  if (f.layer.id === "stops") return showStop(p.stop_id);
+  if (openPopup) openPopup.remove();
+  let html;
+  if (f.layer.id === "buses") {
+    const r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
+    html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
+      <p class="sub">Bus ${esc(p.label)} · location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`;
+  } else if (f.layer.id === "route-lines") {
+    const r = routes[p.route_id];
+    highlight([r.route_id]);
+    html = `<div class="pop"><h2>${chip(r)} ${esc(r.long_name)}</h2>${r.description ? `<p class="route-about" style="margin:0 0 6px">${esc(r.description)}</p>` : ""}
+      <p class="sub">${esc(freqText(r))}</p>
+      <div class="pop-actions">${routeParam ? "" : `<button type="button" data-solo="${esc(r.route_id)}">Show only this route</button>`}
+      <a href="?route=${encodeURIComponent(r.short_name)}">Stops and times ›</a></div></div>`;
+  } else {
+    const h = p["h_" + freqPeriod], per = FREQ_PERIODS.find((x) => x.id === freqPeriod), many = String(p.routes).includes(",");
+    html = `<div class="pop"><h2>${h >= 120 ? `About every ${Math.round(h / 60)} hours` : `About every ${h} min`}</h2>
+      <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${per.note}</p></div>`;
+  }
+  openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "min(330px, 92vw)" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+  openPopup.on("close", () => { if (!openStopId) highlight([]); });
+  openPopup.getElement().querySelector("[data-solo]")?.addEventListener("click", (ev) => { openPopup.remove(); focusRoute(ev.target.dataset.solo); });
 });
 
 // ---------- live data ----------
@@ -518,7 +571,11 @@ function buildSystemPanel() {
         <span class="tick" aria-hidden="true">${ICON.check}</span></button></li>`).join("")}</ul>
       <p class="freq-note">Click a frequency to show or hide it. Hover over a street for its exact frequency and routes. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
     </div>` : `
-    <div class="scroll">${byGroup.map((g) => `
+    <div class="scroll">
+      <div class="legend-bar"><span id="vis-count" aria-live="polite"></span>
+        <button type="button" id="show-all">Show all</button><button type="button" id="hide-all">Hide all</button></div>
+      <p class="legend-hint">Tap a route to show just that route. Tap others to add them.</p>
+      ${byGroup.map((g) => `
       <section class="group" data-group="${esc(g.id)}">
         <div class="group-head">
           <input type="checkbox" data-group-cb="${esc(g.id)}" aria-label="Show all ${esc(g.name)}">
@@ -535,8 +592,7 @@ function buildSystemPanel() {
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
         <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
       </div>
-      ${searchBox(true)}
-      <div id="focus-pill"></div></header>
+      ${searchBox(true)}</header>
     ${legend}`, view !== "frequency");
   document.querySelectorAll(".viewtoggle button").forEach((b) => b.onclick = () => setView(b.dataset.view));
   document.querySelectorAll("[data-period]").forEach((b) => b.onclick = () => { freqPeriod = b.dataset.period; buildSystemPanel(); applyFreq(); });
@@ -547,7 +603,6 @@ function buildSystemPanel() {
     document.querySelectorAll("[data-tier]").forEach((x) => x.setAttribute("aria-pressed", freqTiers.has(+x.dataset.tier)));
     applyFreq();
   });
-  renderFocusPill();
   refreshBuses();
   if (view === "frequency") return;
 
@@ -558,18 +613,28 @@ function buildSystemPanel() {
   const syncRows = () => document.querySelectorAll(".route-row").forEach((row) => {
     const off = hidden.has(row.dataset.route); row.classList.toggle("off", off); row.querySelector("input").checked = !off;
   });
-  syncRows(); syncGroups();
-  buildSystemPanel.sync = () => { syncRows(); syncGroups(); };
+  const syncCount = () => {
+    const n = Object.keys(routes).length - hidden.size, el = document.getElementById("vis-count");
+    if (el) el.textContent = `Showing ${n} of ${Object.keys(routes).length} routes`;
+  };
+  syncRows(); syncGroups(); syncCount();
+  buildSystemPanel.sync = () => { syncRows(); syncGroups(); syncCount(); };
   const scroll = document.querySelector(".scroll");
   scroll.addEventListener("change", (e) => {
-    if (focused) { focused = null; hiddenBeforeFocus = null; renderFocusPill(); }
-    if (e.target.dataset.route) { e.target.checked ? hidden.delete(e.target.dataset.route) : hidden.add(e.target.dataset.route); }
-    else if (e.target.dataset.groupCb) {
+    const id = e.target.dataset.route;
+    if (id) {
+      if (!picking) { hidden = new Set(Object.keys(routes).filter((x) => x !== id)); picking = true; } // first tap: just this route
+      else e.target.checked ? hidden.delete(id) : hidden.add(id);                                       // then: add or remove routes
+    } else if (e.target.dataset.groupCb) {
       const g = byGroup.find((x) => x.id === e.target.dataset.groupCb);
-      g.ids.forEach((id) => (e.target.checked ? hidden.delete(id) : hidden.add(id)));
-    }
-    syncRows(); syncGroups(); applyFilters(); refreshBuses();
+      g.ids.forEach((x) => (e.target.checked ? hidden.delete(x) : hidden.add(x)));
+      picking = true;
+    } else return;
+    if (hidden.size === Object.keys(routes).length) picking = true;
+    buildSystemPanel.sync(); applyFilters(); refreshBuses(); fitVisible();
   });
+  document.getElementById("show-all").onclick = () => { hidden = new Set(); picking = false; buildSystemPanel.sync(); applyFilters(); refreshBuses(); goHome(); };
+  document.getElementById("hide-all").onclick = () => { hidden = new Set(Object.keys(routes)); picking = true; buildSystemPanel.sync(); applyFilters(); refreshBuses(); };
   scroll.addEventListener("click", (e) => {
     const t = e.target.closest(".group-toggle"); if (!t) return;
     const open = t.getAttribute("aria-expanded") !== "true";
@@ -590,29 +655,22 @@ function setView(v) {
   if (v === "frequency" && openPopup) openPopup.remove();
   buildSystemPanel(); applyView();
 }
-// Show just one route (from search); "Show all routes" restores the previous selection.
+// Show just one route (from search), the same as a first tap in the legend.
 function focusRoute(id) {
   if (view === "frequency") setView("routes");
-  if (!focused) hiddenBeforeFocus = new Set(hidden);
-  focused = id;
-  hidden = new Set(Object.keys(routes).filter((x) => x !== id));
-  buildSystemPanel.sync?.(); renderFocusPill(); applyFilters(); refreshBuses();
-  fitTo(linesData.features.filter((f) => f.properties.route_id === id), true);
+  hidden = new Set(Object.keys(routes).filter((x) => x !== id)); picking = true;
+  buildSystemPanel.sync?.(); applyFilters(); refreshBuses(); fitVisible();
+  if (isPhone()) setSheet(false);
   document.getElementById("announce").textContent = `Showing only Route ${routes[id].short_name}, ${routes[id].long_name}.`;
 }
-function clearFocus() {
-  hidden = hiddenBeforeFocus || new Set(); focused = null; hiddenBeforeFocus = null;
-  buildSystemPanel.sync?.(); renderFocusPill(); applyFilters(); refreshBuses();
-  map.fitBounds(HOME_BOUNDS, { padding: panelPad(), duration: reduceMotion ? 0 : 600 });
+// Pan and zoom to whatever routes are showing (the home view when everything is on).
+function fitVisible() {
+  const vis = visibleRoutes();
+  if (!vis.length) return;
+  if (vis.length === Object.keys(routes).length) return goHome();
+  fitTo(linesData.features.filter((f) => vis.includes(f.properties.route_id)), true);
 }
-function renderFocusPill() {
-  const el = document.getElementById("focus-pill"); if (!el) return;
-  if (!focused) { el.innerHTML = ""; return; }
-  const r = routes[focused];
-  el.innerHTML = `<div class="focus-pill">${chip(r)}<span>Showing only <strong>${esc(r.long_name)}</strong></span>
-    <div class="fp-actions"><button type="button" id="clear-focus">Show all routes</button><a href="?route=${encodeURIComponent(r.short_name)}">Stops and arrival times ›</a></div></div>`;
-  document.getElementById("clear-focus").onclick = clearFocus;
-}
+function goHome() { map.fitBounds(HOME_BOUNDS, { padding: panelPad(), duration: reduceMotion ? 0 : 600 }); }
 function routeRow(id) {
   const r = routes[id];
   return `<li class="route-row" data-route="${esc(id)}">
@@ -682,7 +740,8 @@ function showStop(id, fly) {
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
   if (fly) map.easeTo({ center: s.coords, zoom: Math.max(map.getZoom(), 15), duration: reduceMotion ? 0 : 600 });
   if (openPopup) openPopup.remove();
-  openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "330px" }).setLngLat(s.coords).setHTML(stopHtml(s, null)).addTo(map);
+  if (isPhone()) setSheet(false);
+  openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "min(330px, 92vw)" }).setLngLat(s.coords).setHTML(stopHtml(s, null)).addTo(map);
   openPopup.on("close", () => {
     if (openStopId !== id) return;
     openStopId = null; highlight([]);
@@ -891,12 +950,19 @@ function panel(html, fill) {
   const el = document.getElementById("panel"); el.innerHTML = html;
   el.classList.toggle("fit", !fill);
   const t = document.getElementById("toggle");
-  if (t) {
-    if (innerWidth <= 640) { el.classList.add("collapsed"); t.setAttribute("aria-expanded", "false"); }
-    t.onclick = () => t.setAttribute("aria-expanded", String(!el.classList.toggle("collapsed")));
-  }
+  if (t) t.onclick = () => setSheet(!sheetOpen);
+  document.getElementById("q")?.addEventListener("focus", () => { if (isPhone()) setSheet(true); });
+  setSheet(sheetOpen);
 }
-const toggleBtn = (label) => `<button id="toggle" aria-expanded="true">${label}</button>`;
+// On phones the panel is a bottom sheet: collapsed shows the title and search, open shows the list.
+function setSheet(open) {
+  sheetOpen = open;
+  const el = document.getElementById("panel"), t = document.getElementById("toggle");
+  el.classList.toggle("collapsed", isPhone() && !open);
+  if (t) { t.setAttribute("aria-expanded", String(open)); t.querySelector(".sr-only").textContent = open ? "Hide the list" : "Show the list"; }
+}
+addEventListener("resize", () => setSheet(sheetOpen));
+const toggleBtn = (label) => `<button id="toggle" aria-expanded="true"><span class="grip" aria-hidden="true"></span><span class="t-label">${label}</span><span class="sr-only">Show the list</span></button>`;
 const chip = (r) => `<span class="chip" style="background:${esc(r.color || "#555")};color:${esc(r.text_color || "#fff")}">${esc(r.short_name || "")}</span>`;
 function when(epoch) {
   const mins = Math.floor((epoch - Date.now() / 1000) / 60);
