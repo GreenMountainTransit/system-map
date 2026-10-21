@@ -287,9 +287,9 @@ const freqFeatures = [];
         for (let i = 0; i < ids.length - 1; i++) {
           if (ids[i] === ids[i + 1]) continue;
           const key = ids[i] + ">" + ids[i + 1];
-          if (!segs.has(key)) segs.set(key, { coords: pieces[i], times: [], routes: new Set() });
+          if (!segs.has(key)) segs.set(key, { coords: pieces[i], trips: new Map(), routes: new Set() });
           const sg = segs.get(key);
-          sg.routes.add(routeId); sg.times.push(trip.st[i][1]);
+          sg.routes.add(routeId); sg.trips.set(trip.t, [trip.st[i][1], trip.st[i + 1][1]]); // leaves stop i, reaches stop i+1
         }
       }
     }
@@ -308,56 +308,60 @@ const freqFeatures = [];
     }
     return Math.ceil(worst / 60);
   };
-  const directed = [];
-  for (const [key, sg] of segs) {
-    if (!sg.coords || sg.coords.length < 2) continue;
-    const h = {};
-    for (const [w, def] of Object.entries(FREQ_WINDOWS)) h[w] = maxGap(sg.times, def);
-    directed.push({ key, coords: sg.coords, h, routes: sg.routes });
-  }
-  // 2. Both directions: find the service running the opposite way along the same street (it usually
-  //    uses different stops on the other side), and show the worse of the two directions.
+  // Frequency is measured by STREET, not by stop pair: every bus passing a point on the street counts,
+  // whichever route it is and whichever stops it uses (routes on the same street often use different
+  // stop IDs). Each trip is counted once at each point.
+  const directed = [...segs.values()].filter((sg) => sg.coords && sg.coords.length >= 2);
   const M = 111320, kx = Math.cos((44.5 * Math.PI) / 180);
   const xy = ([lon, lat]) => [lon * M * kx, lat * M];
-  const grid = new Map(), CELL = 40; // meters
-  const cellKey = (x, y) => `${Math.floor(x / CELL)}:${Math.floor(y / CELL)}`;
+  const grid = new Map(), CELL = 40, NEAR = 25; // meters
   const samples = directed.map((d, idx) => {
-    const out = [], pts = d.coords.map(xy);
-    for (let i = 0; i < pts.length - 1; i++) {
-      const [ax, ay] = pts[i], [bx, by] = pts[i + 1], L = Math.hypot(bx - ax, by - ay);
-      if (!L) continue;
-      const ux = (bx - ax) / L, uy = (by - ay) / L;
-      for (let t = 0; t < L; t += 25) out.push({ x: ax + ux * t, y: ay + uy * t, ux, uy, idx });
+    const pts = d.coords.map(xy), out = [];
+    const lens = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]));
+    const total = lens.reduce((a, b) => a + b, 0);
+    const at = total < 50 ? [total / 2] : Array.from({ length: Math.floor((total - 30) / 25) + 1 }, (_, i) => 15 + i * 25); // skip the ends, where routes join and leave
+    let seg = 0, acc = 0;
+    for (const dist of at) {
+      while (seg < lens.length - 1 && acc + lens[seg] < dist) acc += lens[seg++];
+      const [ax, ay] = pts[seg], [bx, by] = pts[seg + 1], L = lens[seg] || 1, t = (dist - acc) / L;
+      out.push({ x: ax + (bx - ax) * t, y: ay + (by - ay) * t, ux: (bx - ax) / L, uy: (by - ay) / L, idx, frac: total ? dist / total : 0.5 });
     }
-    for (const sm of out) { const k = cellKey(sm.x, sm.y); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(sm); }
+    for (const sm of out) { const k = `${Math.floor(sm.x / CELL)}:${Math.floor(sm.y / CELL)}`; if (!grid.has(k)) grid.set(k, []); grid.get(k).push(sm); }
     return out;
   });
+  // Each bus's time at this exact point on the street, interpolated between its two stops,
+  // so routes with differently spaced stops line up correctly. Each trip counts once.
+  const gapsAt = (near) => { // near: Map(segment idx -> fraction along that segment)
+    const m = new Map();
+    for (const [i, frac] of near) for (const [t, [t0, t1]] of directed[i].trips) if (!m.has(t)) m.set(t, t0 + (t1 - t0) * frac);
+    const times = [...m.values()];
+    return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => [w, maxGap(times, def)]));
+  };
   for (const [idx, d] of directed.entries()) {
-    const opp = new Map(); // opposite segment idx -> matched samples
+    const props = { oneway: true }, worst = {}, routesHere = new Set(d.routes);
     for (const sm of samples[idx]) {
-      const cx = Math.floor(sm.x / CELL), cy = Math.floor(sm.y / CELL), seen = new Set();
+      // Nearest sample of every other segment within NEAR meters, split by direction.
+      const same = new Map([[idx, sm.frac]]), opp = new Map(), best = new Map();
+      const cx = Math.floor(sm.x / CELL), cy = Math.floor(sm.y / CELL);
       for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) for (const o of grid.get(`${i}:${j}`) || []) {
-        if (o.idx === idx || seen.has(o.idx)) continue;
-        if (Math.hypot(o.x - sm.x, o.y - sm.y) > 30 || o.ux * sm.ux + o.uy * sm.uy > -0.7) continue; // within 30 m, heading the other way
-        seen.add(o.idx); opp.set(o.idx, (opp.get(o.idx) || 0) + 1);
+        if (o.idx === idx) continue;
+        const dist = Math.hypot(o.x - sm.x, o.y - sm.y), dot = o.ux * sm.ux + o.uy * sm.uy;
+        if (dist > NEAR || Math.abs(dot) < 0.8 || (best.has(o.idx) && best.get(o.idx) <= dist)) continue;
+        best.set(o.idx, dist);
+        (dot > 0 ? same : opp).set(o.idx, o.frac);
+      }
+      const g = gapsAt(same), go = opp.size ? gapsAt(opp) : null;
+      if (opp.size) props.oneway = false;
+      [...same.keys(), ...opp.keys()].forEach((i) => directed[i].routes.forEach((r) => routesHere.add(r)));
+      for (const w of Object.keys(FREQ_WINDOWS)) {
+        // Both directions: the less frequent of the two. No bus in one direction at that time: not shown.
+        const v = g[w] == null ? null : go ? (go[w] == null ? null : Math.max(g[w], go[w])) : g[w];
+        worst[w] = worst[w] === undefined ? v : worst[w] == null || v == null ? null : Math.max(worst[w], v);
       }
     }
-    const n = samples[idx].length || 1;
-    d.opposite = [...opp].filter(([, c]) => c / n >= 0.3).map(([o]) => directed[o]);
-  }
-  for (const d of directed) {
-    const props = { oneway: d.opposite.length === 0 };
-    for (const w of Object.keys(FREQ_WINDOWS)) {
-      let h = d.h[w];
-      if (h != null && d.opposite.length) {
-        const back = d.opposite.map((o) => o.h[w]);
-        h = back.some((x) => x == null) ? null : Math.max(h, ...back); // worse direction; none if one direction has no bus then
-      }
-      props["h_" + w] = h;
-    }
+    for (const w of Object.keys(FREQ_WINDOWS)) props["h_" + w] = worst[w] ?? null;
     if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
-    const routesHere = [...new Set([...d.routes, ...d.opposite.flatMap((o) => [...o.routes])])];
-    props.routes = routesHere.map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
+    props.routes = [...routesHere].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
     freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: d.coords } });
   }
 }
