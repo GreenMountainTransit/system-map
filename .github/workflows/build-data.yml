@@ -53,15 +53,22 @@ jobs:
       - name: Build data
         run: |
           if [ -f amenities.csv ]; then node scripts/build-data.mjs "$GTFS_DIR" amenities.csv; else node scripts/build-data.mjs "$GTFS_DIR"; fi
-      - name: Add Swiftly key from the repository secret
+      - name: Add keys from the repository secrets
         env:
           SWIFTLY_KEY: ${{ secrets.SWIFTLY_KEY }}
+          GOOGLE_MAPS_KEY: ${{ secrets.GOOGLE_MAPS_KEY }}
         run: |
           node -e '
-            const fs = require("fs"), f = "public/index.html", key = process.env.SWIFTLY_KEY || "";
-            if (!key) { console.log("No SWIFTLY_KEY secret set: publishing without live buses."); process.exit(0); }
-            fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("__SWIFTLY_KEY__", key));
-            console.log("Swiftly key added.");'
+            const fs = require("fs"), f = "public/index.html";
+            let html = fs.readFileSync(f, "utf8");
+            const add = (secret, placeholder, without) => {
+              const key = process.env[secret] || "";
+              if (!key) return console.log(`No ${secret} secret set: ${without}.`);
+              html = html.replace(placeholder, key); console.log(`${secret} added.`);
+            };
+            add("SWIFTLY_KEY", "__SWIFTLY_KEY__", "publishing without live buses");
+            add("GOOGLE_MAPS_KEY", "__GOOGLE_KEY__", "Street View opens as a link to Google Maps instead of inside the panel");
+            fs.writeFileSync(f, html);'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
