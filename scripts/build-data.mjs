@@ -1,16 +1,19 @@
-// Turns GMT's GTFS schedule (and optional stop amenity sheet) into the files the map uses.
+// Turns GMT's GTFS schedule into the files the map uses, adding stop amenities,
+// route descriptions and nearby places (food, shopping, restrooms) from OpenStreetMap.
 //
 //   node scripts/build-data.mjs <unzipped-gtfs-folder> [amenities.csv]
 //
-// Writes to public/data/. Re-run whenever GMT publishes a new GTFS or the amenity
-// sheet changes, then redeploy (npx wrangler deploy).
+// Also reads route-info.json (descriptions and legend groups) from the repo root.
+// Writes to public/data/. The GitHub workflow runs this nightly and on every change.
 
 import fs from "node:fs";
 import path from "node:path";
 
 const [gtfsDir, amenitiesFile] = process.argv.slice(2);
 if (!gtfsDir) { console.error("Usage: node scripts/build-data.mjs <gtfs-folder> [amenities.csv]"); process.exit(1); }
-const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "public", "data");
+const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+const OUT = path.join(ROOT, "public", "data");
+fs.rmSync(path.join(OUT, "sched"), { recursive: true, force: true });
 fs.mkdirSync(path.join(OUT, "sched"), { recursive: true });
 
 // ---------- CSV ----------
@@ -44,6 +47,7 @@ const read = (file, optional = false) => {
 };
 const toSecs = (t) => { if (!t) return null; const [h, m, s] = t.split(":").map(Number); return h * 3600 + m * 60 + (s || 0); };
 const mostCommon = (arr) => { const m = new Map(); arr.forEach((x) => m.set(x, (m.get(x) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1])[0]?.[0]; };
+const write = (f, obj) => fs.writeFileSync(path.join(OUT, f), JSON.stringify(obj));
 
 const routes = read("routes.txt");
 const trips = read("trips.txt");
@@ -52,12 +56,18 @@ const stopTimes = read("stop_times.txt");
 const shapes = read("shapes.txt", true);
 const calendar = read("calendar.txt", true);
 const calendarDates = read("calendar_dates.txt", true);
+const routeInfo = fs.existsSync(path.join(ROOT, "route-info.json")) ? JSON.parse(fs.readFileSync(path.join(ROOT, "route-info.json"), "utf8")) : { groups: [], routes: {} };
 
-// ---------- stop times per trip (with interpolation for blank non-timepoint times) ----------
+// ---------- stop times per trip, with timepoints and interpolation ----------
+const hasTimepointColumn = stopTimes.length > 0 && "timepoint" in stopTimes[0];
+const timepointStops = new Set();
 const byTrip = new Map();
 for (const st of stopTimes) {
+  const t = toSecs(st.departure_time || st.arrival_time);
+  const isTimepoint = hasTimepointColumn ? st.timepoint === "1" : t != null;
+  if (isTimepoint) timepointStops.add(st.stop_id);
   if (!byTrip.has(st.trip_id)) byTrip.set(st.trip_id, []);
-  byTrip.get(st.trip_id).push([st.stop_id, toSecs(st.departure_time || st.arrival_time), +st.stop_sequence]);
+  byTrip.get(st.trip_id).push([st.stop_id, t, +st.stop_sequence]);
 }
 for (const list of byTrip.values()) {
   list.sort((a, b) => a[2] - b[2]);
@@ -70,111 +80,10 @@ for (const list of byTrip.values()) {
     }
     last = i;
   }
-  // drop anything still untimed at the ends
   for (let i = list.length - 1; i >= 0; i--) if (list[i][1] == null) list.splice(i, 1);
 }
 
-// ---------- per-route schedules and stop order ----------
-const routeById = Object.fromEntries(routes.map((r) => [r.route_id, r]));
-const routeStops = {};      // route_id -> { "0": {headsign, stops:[...]}, "1": ... }
-const stopRoutes = new Map(); // stop_id -> Set(route_id)
-const headsigns = {};        // trip_id -> headsign (used to label live buses)
-
-const tripsByRoute = new Map();
-for (const t of trips) {
-  if (!byTrip.has(t.trip_id) || !routeById[t.route_id]) continue;
-  if (!tripsByRoute.has(t.route_id)) tripsByRoute.set(t.route_id, []);
-  tripsByRoute.get(t.route_id).push(t);
-  headsigns[t.trip_id] = t.trip_headsign || "";
-}
-
-for (const [routeId, list] of tripsByRoute) {
-  const sched = list.map((t) => ({
-    t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0",
-    st: byTrip.get(t.trip_id),
-  }));
-  fs.writeFileSync(path.join(OUT, "sched", `${encodeURIComponent(routeId)}.json`), JSON.stringify(sched));
-
-  routeStops[routeId] = {};
-  const dirs = [...new Set(sched.map((x) => x.d))].sort();
-  for (const d of dirs) {
-    const inDir = sched.filter((x) => x.d === d);
-    const pattern = mostCommon(inDir.map((x) => x.st.map((s) => s[0]).join("|")));
-    const matching = inDir.filter((x) => x.st.map((s) => s[0]).join("|") === pattern);
-    routeStops[routeId][d] = { headsign: mostCommon(matching.map((x) => x.h)) || "", stops: pattern.split("|") };
-  }
-  for (const x of sched) for (const [sid] of x.st) {
-    if (!stopRoutes.has(sid)) stopRoutes.set(sid, new Set());
-    stopRoutes.get(sid).add(routeId);
-  }
-}
-
-// ---------- route lines (most-used shape per route + direction) ----------
-const shapeCount = new Map();
-for (const t of trips) if (t.shape_id && routeById[t.route_id]) {
-  const k = `${t.route_id}|${t.direction_id || "0"}`;
-  if (!shapeCount.has(k)) shapeCount.set(k, new Map());
-  const m = shapeCount.get(k); m.set(t.shape_id, (m.get(t.shape_id) || 0) + 1);
-}
-const chosenShape = new Map();
-for (const [k, m] of shapeCount) chosenShape.set([...m].sort((a, b) => b[1] - a[1])[0][0], k.split("|")[0]);
-const shapePts = new Map();
-for (const s of shapes) if (chosenShape.has(s.shape_id)) {
-  if (!shapePts.has(s.shape_id)) shapePts.set(s.shape_id, []);
-  shapePts.get(s.shape_id).push([+s.shape_pt_sequence, +(+s.shape_pt_lon).toFixed(5), +(+s.shape_pt_lat).toFixed(5)]);
-}
-const routeInfo = (r) => ({
-  route_id: r.route_id,
-  short_name: r.route_short_name || r.route_id,
-  long_name: r.route_long_name || "",
-  color: "#" + (r.route_color || "00703C"),
-  text_color: "#" + (r.route_text_color || "FFFFFF"),
-  sort: Number(r.route_sort_order) || 0,
-});
-const lineFeatures = [];
-for (const [shapeId, pts] of shapePts) {
-  pts.sort((a, b) => a[0] - b[0]);
-  lineFeatures.push({ type: "Feature", properties: routeInfo(routeById[chosenShape.get(shapeId)]),
-    geometry: { type: "LineString", coordinates: pts.map(([, lo, la]) => [lo, la]) } });
-}
-// Fallback for routes with no shapes.txt entries: connect their stops in order.
-const stopById = Object.fromEntries(stops.map((s) => [s.stop_id, s]));
-const drawn = new Set(lineFeatures.map((f) => f.properties.route_id));
-for (const [routeId, dirs] of Object.entries(routeStops)) if (!drawn.has(routeId)) {
-  for (const d of Object.values(dirs)) lineFeatures.push({ type: "Feature", properties: routeInfo(routeById[routeId]),
-    geometry: { type: "LineString", coordinates: d.stops.map((id) => stopById[id]).filter(Boolean).map((s) => [+s.stop_lon, +s.stop_lat]) } });
-}
-
-// ---------- stops, with amenities ----------
-// amenities.csv column -> label shown in the stop popup. Add a column here to show a new amenity.
-const AMENITY_COLUMNS = { shelter: "Shelter", seating: "Seating", schedule_box: "Schedule box",
-  bike_rack: "Bike rack", trash_can: "Trash can", lighting: "Lighting", real_time_sign: "Arrival sign" };
-const amenities = new Map();
-if (amenitiesFile) {
-  for (const row of parseCsv(fs.readFileSync(amenitiesFile, "utf8"))) {
-    const have = Object.entries(AMENITY_COLUMNS).filter(([col]) => /^(y|yes|true|1|x)$/i.test(row[col] || "")).map(([, label]) => label);
-    amenities.set(row.stop_id, { have, notes: row.notes || "" });
-  }
-}
-const stopFeatures = [];
-for (const [sid, rs] of stopRoutes) {
-  const s = stopById[sid];
-  if (!s) continue;
-  const ids = [...rs].sort((a, b) => (routeById[a].route_short_name || a).localeCompare(routeById[b].route_short_name || b, undefined, { numeric: true }));
-  const a = amenities.get(sid);
-  stopFeatures.push({
-    type: "Feature",
-    properties: {
-      stop_id: sid, name: s.stop_name, code: s.stop_code || "",
-      routes: ids, routes_key: "|" + ids.join("|") + "|",
-      wheelchair: s.wheelchair_boarding === "1" ? "yes" : s.wheelchair_boarding === "2" ? "no" : "",
-      amenities: a ? a.have : [], amenity_notes: a ? a.notes : "",
-    },
-    geometry: { type: "Point", coordinates: [+(+s.stop_lon).toFixed(6), +(+s.stop_lat).toFixed(6)] },
-  });
-}
-
-// ---------- service calendar ----------
+// ---------- calendar helpers ----------
 const cal = {
   cal: calendar.map((c) => ({ s: c.service_id, a: c.start_date, b: c.end_date,
     d: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].map((k) => c[k] === "1") })),
@@ -184,17 +93,215 @@ for (const x of calendarDates) {
   cal.ex[x.date] ??= { add: [], rm: [] };
   cal.ex[x.date][x.exception_type === "1" ? "add" : "rm"].push(x.service_id);
 }
+function servicesOn(ymd, dow) {
+  const on = new Set(cal.cal.filter((c) => c.a <= ymd && ymd <= c.b && c.d[dow]).map((c) => c.s));
+  const ex = cal.ex[ymd];
+  if (ex) { ex.add.forEach((s) => on.add(s)); ex.rm.forEach((s) => on.delete(s)); }
+  return on;
+}
+// The next 14 days, starting today in Vermont.
+const todayNY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()); // YYYY-MM-DD
+const upcoming = Array.from({ length: 14 }, (_, i) => {
+  const d = new Date(`${todayNY}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + i);
+  return { ymd: d.toISOString().slice(0, 10).replace(/-/g, ""), dow: (d.getUTCDay() + 6) % 7 };
+});
 
-const routeList = Object.keys(routeStops).map((id) => routeInfo(routeById[id])).sort((a, b) =>
+// ---------- per-route schedules, stop order, service summaries ----------
+const routeById = Object.fromEntries(routes.map((r) => [r.route_id, r]));
+const routeStops = {};
+const stopRoutes = new Map();
+const headsigns = {};
+const tripsByRoute = new Map();
+for (const t of trips) {
+  if (!byTrip.has(t.trip_id) || !routeById[t.route_id]) continue;
+  if (!tripsByRoute.has(t.route_id)) tripsByRoute.set(t.route_id, []);
+  tripsByRoute.get(t.route_id).push(t);
+  headsigns[t.trip_id] = t.trip_headsign || "";
+}
+
+// How often a route runs on a given day: departures at its busiest stop in its busiest direction.
+function daySummary(sched, ymd, dow) {
+  const on = servicesOn(ymd, dow);
+  const running = sched.filter((x) => on.has(x.s));
+  if (!running.length) return null;
+  const dir = mostCommon(running.map((x) => x.d));
+  const inDir = running.filter((x) => x.d === dir);
+  const refStop = mostCommon(inDir.flatMap((x) => x.st.slice(0, -1).map((s) => s[0])));
+  const times = inDir.map((x) => x.st.find((s) => s[0] === refStop)?.[1]).filter((t) => t != null).sort((a, b) => a - b);
+  const all = running.map((x) => x.st[0][1]).sort((a, b) => a - b);
+  const daytime = times.filter((t) => t >= 7 * 3600 && t <= 19 * 3600);
+  let headway = null;
+  if (daytime.length >= 4) {
+    const gaps = daytime.slice(1).map((t, i) => t - daytime[i]).sort((a, b) => a - b);
+    headway = Math.max(5, Math.round(gaps[Math.floor(gaps.length / 2)] / 60 / 5) * 5);
+  }
+  return { trips: inDir.length, headway, first: all[0], last: running.map((x) => x.st[x.st.length - 1][1]).sort((a, b) => b - a)[0] };
+}
+
+const service = {};
+for (const [routeId, list] of tripsByRoute) {
+  const sched = list.map((t) => ({ t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0", st: byTrip.get(t.trip_id) }));
+  fs.writeFileSync(path.join(OUT, "sched", `${encodeURIComponent(routeId)}.json`), JSON.stringify(sched));
+
+  routeStops[routeId] = {};
+  for (const d of [...new Set(sched.map((x) => x.d))].sort()) {
+    const inDir = sched.filter((x) => x.d === d);
+    const pattern = mostCommon(inDir.map((x) => x.st.map((s) => s[0]).join("|")));
+    const matching = inDir.filter((x) => x.st.map((s) => s[0]).join("|") === pattern);
+    routeStops[routeId][d] = { headsign: mostCommon(matching.map((x) => x.h)) || "", stops: pattern.split("|") };
+  }
+  for (const x of sched) for (const [sid] of x.st) {
+    if (!stopRoutes.has(sid)) stopRoutes.set(sid, new Set());
+    stopRoutes.get(sid).add(routeId);
+  }
+
+  const days = [0, 1, 2, 3, 4, 5, 6].map((dow) => upcoming.filter((u) => u.dow === dow).some((u) => {
+    const on = servicesOn(u.ymd, u.dow); return sched.some((x) => on.has(x.s));
+  }));
+  const pick = (dows) => { for (const u of upcoming) if (dows.includes(u.dow)) { const s = daySummary(sched, u.ymd, u.dow); if (s) return s; } return null; };
+  service[routeId] = { days, weekday: pick([0, 1, 2, 3, 4]), saturday: pick([5]), sunday: pick([6]) };
+}
+
+// ---------- legend groups and descriptions ----------
+function groupFor(short) {
+  for (const g of routeInfo.groups || []) {
+    if (g.routes?.includes(short)) return g.id;
+    if (g.range && /^\d+$/.test(short) && +short >= g.range[0] && +short <= g.range[1]) return g.id;
+  }
+  return (routeInfo.groups || [])[0]?.id || "local";
+}
+const routeMeta = (r) => {
+  const short = r.route_short_name || r.route_id;
+  const group = groupFor(short);
+  return {
+    route_id: r.route_id, short_name: short, long_name: r.route_long_name || "",
+    color: "#" + (r.route_color || "00703C"), text_color: "#" + (r.route_text_color || "FFFFFF"),
+    sort: Number(r.route_sort_order) || 0, group,
+    description: routeInfo.routes?.[short] || (group === "school" ? `School-day trips: ${r.route_long_name}.` : ""),
+    service: service[r.route_id] || null,
+  };
+};
+
+// ---------- route lines: every distinct shape the route uses ----------
+const shapesByRoute = new Map(); // route_id -> Set(shape_id)
+for (const t of trips) if (t.shape_id && routeById[t.route_id] && byTrip.has(t.trip_id)) {
+  if (!shapesByRoute.has(t.route_id)) shapesByRoute.set(t.route_id, new Set());
+  shapesByRoute.get(t.route_id).add(t.shape_id);
+}
+const shapePts = new Map();
+for (const s of shapes) {
+  if (!shapePts.has(s.shape_id)) shapePts.set(s.shape_id, []);
+  shapePts.get(s.shape_id).push([+s.shape_pt_sequence, +(+s.shape_pt_lon).toFixed(5), +(+s.shape_pt_lat).toFixed(5)]);
+}
+const stopById = Object.fromEntries(stops.map((s) => [s.stop_id, s]));
+const lineFeatures = [];
+for (const routeId of tripsByRoute.keys()) {
+  const props = (({ route_id, short_name, color, group }) => ({ route_id, short_name, color, group }))(routeMeta(routeById[routeId]));
+  const seen = new Set();
+  for (const shapeId of shapesByRoute.get(routeId) || []) {
+    const pts = shapePts.get(shapeId); if (!pts) continue;
+    const coords = pts.sort((a, b) => a[0] - b[0]).map(([, lo, la]) => [lo, la]);
+    const key = coords.join(";"); if (seen.has(key)) continue; seen.add(key);
+    lineFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: coords } });
+  }
+  if (!seen.size) for (const d of Object.values(routeStops[routeId])) // no shapes.txt: connect stops in order
+    lineFeatures.push({ type: "Feature", properties: props,
+      geometry: { type: "LineString", coordinates: d.stops.map((id) => stopById[id]).filter(Boolean).map((s) => [+s.stop_lon, +s.stop_lat]) } });
+}
+
+// ---------- amenities (amenities.csv, made by scripts/prepare-amenities.mjs) ----------
+const AMENITY_COLUMNS = { shelter: "Shelter", seating: "Seating", schedule_box: "Schedule box",
+  bike_rack: "Bike rack", trash_can: "Trash can", lighting: "Lighting", real_time_sign: "Arrival sign" };
+const amenities = new Map();
+if (amenitiesFile) for (const row of parseCsv(fs.readFileSync(amenitiesFile, "utf8"))) {
+  const yes = (v) => /^(y|yes|true|1|x)$/i.test(v || ""), no = (v) => /^(n|no|false|0)$/i.test(v || "");
+  amenities.set(row.stop_id, {
+    have: Object.keys(AMENITY_COLUMNS).filter((col) => yes(row[col])),
+    ada_pad: yes(row.ada_pad) ? "yes" : no(row.ada_pad) ? "no" : "",
+    notes: row.notes || "",
+  });
+}
+
+// ---------- nearby places from OpenStreetMap (one Overpass query per build) ----------
+const NEARBY_METERS = 200; // about a 2–3 minute walk
+const usedStops = [...stopRoutes.keys()].map((id) => stopById[id]).filter(Boolean);
+async function loadPlaces() {
+  if (process.env.OVERPASS_FILE) return JSON.parse(fs.readFileSync(process.env.OVERPASS_FILE, "utf8")).elements; // for testing
+  const lats = usedStops.map((s) => +s.stop_lat), lons = usedStops.map((s) => +s.stop_lon);
+  const pad = 0.004, bbox = [Math.min(...lats) - pad, Math.min(...lons) - pad, Math.max(...lats) + pad, Math.max(...lons) + pad].join(",");
+  const food = `["amenity"~"^(restaurant|cafe|fast_food|food_court|ice_cream)$"]`;
+  const shop = `["shop"~"^(supermarket|convenience|grocery|greengrocer|mall|department_store|general|variety_store|bakery|deli|chemist)$"]`;
+  const query = `[out:json][timeout:120];(nwr${food}(${bbox});nwr${shop}(${bbox});nwr["amenity"="pharmacy"](${bbox});nwr["amenity"="toilets"](${bbox}););out center tags;`;
+  for (const url of [process.env.OVERPASS_URL, "https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"].filter(Boolean)) {
+    try {
+      const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(query),
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "GMT system map build (github.com/GreenMountainTransit/system-map)" },
+        signal: AbortSignal.timeout(150000) });
+      if (res.ok) return (await res.json()).elements;
+      console.warn(`Overpass ${url} returned ${res.status}`);
+    } catch (e) { console.warn(`Overpass ${url} failed: ${e.message}`); }
+  }
+  console.warn("Nearby places unavailable this build; stops will show without them.");
+  return null;
+}
+const places = await loadPlaces();
+const nearby = new Map(); // stop_id -> {food, shopping, restroom}
+if (places) {
+  const kind = (t = {}) => {
+    if (t.amenity === "toilets") return ["private", "no", "customers"].includes(t.access) ? null : "restroom";
+    if (["restaurant", "cafe", "fast_food", "food_court", "ice_cream"].includes(t.amenity)) return "food";
+    if (t.shop || t.amenity === "pharmacy") return "shopping";
+    return null;
+  };
+  const cell = (lat, lon) => `${Math.floor(lat / 0.005)}:${Math.floor(lon / 0.005)}`;
+  const grid = new Map();
+  for (const p of places) {
+    const k = kind(p.tags), lat = p.lat ?? p.center?.lat, lon = p.lon ?? p.center?.lon;
+    if (!k || lat == null) continue;
+    const c = cell(lat, lon); if (!grid.has(c)) grid.set(c, []); grid.get(c).push({ k, lat, lon });
+  }
+  const dist = (a, b, c, d) => { const R = 6371000, r = Math.PI / 180, x = (d - b) * r * Math.cos(((a + c) / 2) * r), y = (c - a) * r; return Math.hypot(x, y) * R; };
+  for (const s of usedStops) {
+    const lat = +s.stop_lat, lon = +s.stop_lon, counts = { food: 0, shopping: 0, restroom: 0 };
+    const [ci, cj] = cell(lat, lon).split(":").map(Number);
+    for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++)
+      for (const p of grid.get(`${i}:${j}`) || []) if (dist(lat, lon, p.lat, p.lon) <= NEARBY_METERS) counts[p.k]++;
+    nearby.set(s.stop_id, counts);
+  }
+}
+
+// ---------- stops ----------
+const stopFeatures = [];
+for (const [sid, rs] of stopRoutes) {
+  const s = stopById[sid]; if (!s) continue;
+  const ids = [...rs].sort((a, b) => (routeById[a].route_short_name || a).localeCompare(routeById[b].route_short_name || b, undefined, { numeric: true }));
+  const a = amenities.get(sid);
+  stopFeatures.push({
+    type: "Feature",
+    properties: {
+      stop_id: sid, name: s.stop_name, code: s.stop_code || "",
+      routes: ids, routes_key: "|" + ids.join("|") + "|",
+      timepoint: timepointStops.has(sid),
+      wheelchair: s.wheelchair_boarding === "1" ? "yes" : s.wheelchair_boarding === "2" ? "no" : "",
+      ada_pad: a ? a.ada_pad : "",
+      amenities: a ? a.have.map((c) => AMENITY_COLUMNS[c]) : [], amenity_notes: a ? a.notes : "",
+      nearby: nearby.get(sid) || null,
+    },
+    geometry: { type: "Point", coordinates: [+(+s.stop_lon).toFixed(6), +(+s.stop_lat).toFixed(6)] },
+  });
+}
+
+const routeList = [...tripsByRoute.keys()].map((id) => routeMeta(routeById[id])).sort((a, b) =>
   (a.sort - b.sort) || a.short_name.localeCompare(b.short_name, undefined, { numeric: true }));
 
-const write = (f, obj) => fs.writeFileSync(path.join(OUT, f), JSON.stringify(obj));
 write("routes.geojson", { type: "FeatureCollection", features: lineFeatures });
 write("stops.geojson", { type: "FeatureCollection", features: stopFeatures });
-write("routes.json", { routes: routeList, stops: routeStops });
+write("routes.json", { built: todayNY, groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
 write("calendar.json", cal);
 write("headsigns.json", headsigns);
 
-console.log(`Built ${routeList.length} routes, ${stopFeatures.length} stops, ${Object.keys(headsigns).length} trips` +
-  (amenitiesFile ? `, amenities for ${stopFeatures.filter((f) => amenities.has(f.properties.stop_id)).length} of them` +
-    ` (${amenities.size} rows in ${path.basename(amenitiesFile)})` : "") + ` -> public/data/`);
+const withAmenities = stopFeatures.filter((f) => amenities.has(f.properties.stop_id)).length;
+console.log(`Built ${routeList.length} routes (${lineFeatures.length} route patterns), ${stopFeatures.length} stops ` +
+  `(${stopFeatures.filter((f) => f.properties.timepoint).length} timepoints), ${Object.keys(headsigns).length} trips`);
+console.log(amenitiesFile ? `Amenities: ${withAmenities} of ${stopFeatures.length} stops matched a row in ${path.basename(amenitiesFile)}` : "Amenities: none (no amenities.csv)");
+console.log(places ? `Nearby places: ${places.length} from OpenStreetMap` : "Nearby places: skipped");
