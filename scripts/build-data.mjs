@@ -287,31 +287,78 @@ const freqFeatures = [];
         for (let i = 0; i < ids.length - 1; i++) {
           if (ids[i] === ids[i + 1]) continue;
           const key = ids[i] + ">" + ids[i + 1];
-          if (!segs.has(key)) segs.set(key, { coords: pieces[i], n: {}, routes: new Set() });
-          const sg = segs.get(key), t = trip.st[i][1];
-          sg.routes.add(routeId);
-          for (const [w, def] of windowsFor[day]) if (def.hours.some(([h0, h1]) => t >= h0 * 3600 && t < h1 * 3600)) sg.n[w] = (sg.n[w] || 0) + 1;
+          if (!segs.has(key)) segs.set(key, { coords: pieces[i], times: [], routes: new Set() });
+          const sg = segs.get(key);
+          sg.routes.add(routeId); sg.times.push(trip.st[i][1]);
         }
       }
     }
   }
-  // A street segment's frequency is its busier direction (one-way loops count fully).
-  const done = new Set();
-  for (const [key, sg] of segs) {
-    if (done.has(key)) continue;
-    const [a, b] = key.split(">"), back = segs.get(b + ">" + a);
-    done.add(key); if (back) done.add(b + ">" + a);
-    if (!sg.coords || sg.coords.length < 2) continue;
-    const props = {};
-    for (const [w, def] of Object.entries(FREQ_WINDOWS)) {
-      const n = Math.max(sg.n[w] || 0, back?.n[w] || 0);
-      const minutes = def.hours.reduce((m, [h0, h1]) => m + (h1 - h0) * 60, 0);
-      props["h_" + w] = n ? Math.round(minutes / n) : null;
+  // ---- Never overstate frequency ----
+  // 1. Each direction's frequency is its LONGEST wait between buses in the time window, counting the
+  //    gaps from the window's start to the first bus and from the last bus to the window's end.
+  //    Two routes scheduled two minutes apart therefore count as one bus, not two.
+  const maxGap = (times, def) => {
+    let worst = 0;
+    for (const [h0, h1] of def.hours) {
+      const t = times.filter((x) => x >= h0 * 3600 && x < h1 * 3600).sort((a, b) => a - b);
+      if (!t.length) return null; // no bus at all in part of the window
+      const edges = [h0 * 3600, ...t, h1 * 3600];
+      for (let i = 1; i < edges.length; i++) worst = Math.max(worst, edges[i] - edges[i - 1]);
     }
-    if (Object.values(props).every((v) => v == null)) continue;
-    const routesHere = [...new Set([...sg.routes, ...(back?.routes || [])])];
+    return Math.ceil(worst / 60);
+  };
+  const directed = [];
+  for (const [key, sg] of segs) {
+    if (!sg.coords || sg.coords.length < 2) continue;
+    const h = {};
+    for (const [w, def] of Object.entries(FREQ_WINDOWS)) h[w] = maxGap(sg.times, def);
+    directed.push({ key, coords: sg.coords, h, routes: sg.routes });
+  }
+  // 2. Both directions: find the service running the opposite way along the same street (it usually
+  //    uses different stops on the other side), and show the worse of the two directions.
+  const M = 111320, kx = Math.cos((44.5 * Math.PI) / 180);
+  const xy = ([lon, lat]) => [lon * M * kx, lat * M];
+  const grid = new Map(), CELL = 40; // meters
+  const cellKey = (x, y) => `${Math.floor(x / CELL)}:${Math.floor(y / CELL)}`;
+  const samples = directed.map((d, idx) => {
+    const out = [], pts = d.coords.map(xy);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [ax, ay] = pts[i], [bx, by] = pts[i + 1], L = Math.hypot(bx - ax, by - ay);
+      if (!L) continue;
+      const ux = (bx - ax) / L, uy = (by - ay) / L;
+      for (let t = 0; t < L; t += 25) out.push({ x: ax + ux * t, y: ay + uy * t, ux, uy, idx });
+    }
+    for (const sm of out) { const k = cellKey(sm.x, sm.y); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(sm); }
+    return out;
+  });
+  for (const [idx, d] of directed.entries()) {
+    const opp = new Map(); // opposite segment idx -> matched samples
+    for (const sm of samples[idx]) {
+      const cx = Math.floor(sm.x / CELL), cy = Math.floor(sm.y / CELL), seen = new Set();
+      for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) for (const o of grid.get(`${i}:${j}`) || []) {
+        if (o.idx === idx || seen.has(o.idx)) continue;
+        if (Math.hypot(o.x - sm.x, o.y - sm.y) > 30 || o.ux * sm.ux + o.uy * sm.uy > -0.7) continue; // within 30 m, heading the other way
+        seen.add(o.idx); opp.set(o.idx, (opp.get(o.idx) || 0) + 1);
+      }
+    }
+    const n = samples[idx].length || 1;
+    d.opposite = [...opp].filter(([, c]) => c / n >= 0.3).map(([o]) => directed[o]);
+  }
+  for (const d of directed) {
+    const props = { oneway: d.opposite.length === 0 };
+    for (const w of Object.keys(FREQ_WINDOWS)) {
+      let h = d.h[w];
+      if (h != null && d.opposite.length) {
+        const back = d.opposite.map((o) => o.h[w]);
+        h = back.some((x) => x == null) ? null : Math.max(h, ...back); // worse direction; none if one direction has no bus then
+      }
+      props["h_" + w] = h;
+    }
+    if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
+    const routesHere = [...new Set([...d.routes, ...d.opposite.flatMap((o) => [...o.routes])])];
     props.routes = routesHere.map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
-    freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: sg.coords } });
+    freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: d.coords } });
   }
 }
 
