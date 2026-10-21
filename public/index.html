@@ -360,6 +360,7 @@ function addOverlay() {
   const slot = (s) => (basemap.standard ? { slot: s } : {});
   const add = (layer, s) => { if (!map.getLayer(layer.id)) map.addLayer({ ...layer, ...slot(s) }); };
   if (!map.hasImage("heading")) map.addImage("heading", arrowImage(), { sdf: true });
+  if (!map.hasImage("route-arrow")) map.addImage("route-arrow", chevronImage(), { sdf: true, pixelRatio: 2 });
   Object.values(routes).forEach((r) => { if (!map.hasImage(`bus-${r.route_id}`)) map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }); });
   if (!map.getSource("routes")) map.addSource("routes", { type: "geojson", data: linesData });
   if (!map.getSource("stops")) map.addSource("stops", { type: "geojson", data: stopsData });
@@ -380,6 +381,14 @@ function addOverlay() {
   add({ id: "route-lines", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
     paint: { "line-color": ["get", "color"], "line-width": width(1.8, 6) } }, "middle");
 
+  // Subtle direction arrows along each route (route shapes follow the direction buses travel).
+  // They appear once you zoom in a little, grow and spread out with zoom, and fade away when very close.
+  add({ id: "route-arrows", type: "symbol", source: "routes", minzoom: 12, maxzoom: 17,
+    layout: { "symbol-placement": "line", "icon-image": "route-arrow", "icon-rotation-alignment": "map",
+      "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 12, 90, 16, 180],
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.55, 14, 0.8, 16, 1],
+      "icon-allow-overlap": true, "icon-ignore-placement": true },
+    paint: { "icon-color": "#fff", "icon-opacity": ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.8, 16.3, 0.8, 17, 0] } }, "middle");
   const stopStroke = routeParam ? routes[routeParam].color : "#2b3a31";
   const tp = ["==", ["get", "timepoint"], true];
   add({ id: "stops", type: "circle", source: "stops", minzoom: routeParam ? 0 : 12,
@@ -430,7 +439,7 @@ function applyView() {
   if (!map.getLayer("route-lines")) return;
   const freq = view === "frequency" && !routeParam;
   ["freq-casing", "freq-lines", "freq-low"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "visible" : "none"));
-  ["route-glow", "route-casing", "route-lines"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible"));
+  ["route-glow", "route-casing", "route-lines", "route-arrows"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible"));
   ["stops", "stop-selected", "timepoint-labels"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible")); // the frequency map is about streets, not stops
   applyFreq();
   applyFilters();
@@ -446,7 +455,7 @@ function applyFilters() {
   const vis = visibleRoutes();
   const onRoute = ["in", ["get", "route_id"], ["literal", vis]];
   const atStop = vis.length ? ["any", ...vis.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : ["==", ["get", "stop_id"], "__none__"];
-  ["route-casing", "route-lines"].forEach((l) => map.setFilter(l, onRoute));
+  ["route-casing", "route-lines", "route-arrows"].forEach((l) => map.setFilter(l, onRoute));
   map.setFilter("route-glow", ["all", onRoute, ["in", ["get", "route_id"], ["literal", highlighted]]]);
   const stopFilter = atStop;
   map.setFilter("stops", stopFilter);
@@ -459,6 +468,8 @@ function applyFilters() {
   map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
   map.setPaintProperty("buses", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
   map.setPaintProperty("bus-heading", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
+  const arrowFade = ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.8, 16.3, 0.8, 17, 0];
+  map.setPaintProperty("route-arrows", "icon-opacity", any ? ["case", isHl, arrowFade, 0] : arrowFade);
 }
 function highlight(ids) {
   const next = (ids || []).filter((id) => routes[id]);
@@ -1095,6 +1106,14 @@ const ICON = {
   back: svg('<path d="M15 6l-6 6 6 6"/>').replace("<svg", '<svg width="14" height="14"'),
 };
 
+// Small chevron pointing along the line (">"), drawn at 2x; colored white on the map.
+function chevronImage() {
+  const S = 24, c = document.createElement("canvas"); c.width = c.height = S;
+  const g = c.getContext("2d");
+  g.strokeStyle = "#000"; g.lineWidth = 3.4; g.lineCap = "round"; g.lineJoin = "round";
+  g.beginPath(); g.moveTo(8, 6); g.lineTo(15, 12); g.lineTo(8, 18); g.stroke();
+  return { width: S, height: S, data: g.getImageData(0, 0, S, S).data };
+}
 // Heading pointer: a small triangle on a ring around the bus badge, rotated to the bus's direction.
 function arrowImage() {
   const S = 96, c = document.createElement("canvas"); c.width = c.height = S;
