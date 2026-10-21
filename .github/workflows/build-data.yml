@@ -7,7 +7,7 @@ on:
     - cron: "15 8 * * *"   # 4:15 AM Eastern (daylight time), before morning service
   push:
     branches: [main]
-    paths: ["amenities.csv", "scripts/**", "public/**", ".github/workflows/**"]
+    paths: ["amenities.csv", "route-info.json", "scripts/**", "public/**", ".github/workflows/**"]
   workflow_dispatch:
 
 permissions:
@@ -37,6 +37,15 @@ jobs:
       - name: Build data
         run: |
           if [ -f amenities.csv ]; then node scripts/build-data.mjs gtfs amenities.csv; else node scripts/build-data.mjs gtfs; fi
+      - name: Add Swiftly key from the repository secret
+        env:
+          SWIFTLY_KEY: ${{ secrets.SWIFTLY_KEY }}
+        run: |
+          node -e '
+            const fs = require("fs"), f = "public/index.html", key = process.env.SWIFTLY_KEY || "";
+            if (!key) { console.log("No SWIFTLY_KEY secret set: publishing without live buses."); process.exit(0); }
+            fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("__SWIFTLY_KEY__", key));
+            console.log("Swiftly key added.");'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
