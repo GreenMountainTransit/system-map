@@ -100,7 +100,12 @@ function servicesOn(ymd, dow) {
   return on;
 }
 // The next 14 days, starting today in Vermont.
-const todayNY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()); // YYYY-MM-DD
+// The build normally uses today's date in Vermont. To test an older GTFS, set BUILD_DATE=YYYY-MM-DD
+// (the workflow's "Run workflow" form has a box for it) to build as if it were that day.
+const todayNY = /^\d{4}-\d{2}-\d{2}$/.test(process.env.BUILD_DATE || "")
+  ? process.env.BUILD_DATE
+  : new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()); // YYYY-MM-DD
+if (process.env.BUILD_DATE) console.log(`Building as of ${todayNY} (BUILD_DATE override)`);
 const upcoming = Array.from({ length: 14 }, (_, i) => {
   const d = new Date(`${todayNY}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + i);
   return { ymd: d.toISOString().slice(0, 10).replace(/-/g, ""), dow: (d.getUTCDay() + 6) % 7 };
@@ -462,6 +467,27 @@ for (const [sid, rs] of stopRoutes) {
     },
     geometry: { type: "Point", coordinates: [+(+s.stop_lon).toFixed(6), +(+s.stop_lat).toFixed(6)] },
   });
+}
+
+// ---------- safety checks: never publish a map with no service ----------
+// If the feed is empty, broken, expired, or only covers future service, stop here. The workflow fails,
+// GitHub emails the repo admins, and the site keeps showing the last good build.
+{
+  const feedDates = [...cal.cal.flatMap((c) => [c.a, c.b]), ...Object.keys(cal.ex)].sort();
+  const fmt = (d) => d ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : "?";
+  console.log(`Feed covers ${fmt(feedDates[0])} to ${fmt(feedDates[feedDates.length - 1])}`);
+  const servedDays = upcoming.slice(0, 7).filter((u) => { const on = servicesOn(u.ymd, u.dow); return [...schedByRoute.values()].some((sc) => sc.some((x) => on.has(x.s))); });
+  const problems = [];
+  if (tripsByRoute.size === 0) problems.push("no routes with trips");
+  if (stopRoutes.size === 0) problems.push("no stops");
+  if (servedDays.length === 0) problems.push(`no service in the 7 days from ${todayNY}, so the feed is expired or only covers future dates`);
+  if (problems.length && !process.env.ALLOW_NO_SERVICE) {
+    console.error(`::error::GTFS check failed: ${problems.join("; ")}. Not publishing; the current site stays up.`);
+    process.exit(1);
+  }
+  const lastDay = feedDates[feedDates.length - 1];
+  const inTwoWeeks = upcoming[upcoming.length - 1].ymd;
+  if (lastDay && lastDay < inTwoWeeks) console.log(`::warning::The GTFS feed ends ${fmt(lastDay)}. If GMT doesn't publish a new one by then, the nightly build will stop updating the map.`);
 }
 
 const routeList = [...tripsByRoute.keys()].map((id) => routeMeta(routeById[id])).sort((a, b) =>
