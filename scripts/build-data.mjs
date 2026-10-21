@@ -448,6 +448,32 @@ if (places) {
   }
 }
 
+// ---------- Street View viewpoint for each stop ----------
+// Stand on the street next to the stop and look at it: snap the stop to the nearest route shape (the street
+// centerline) and point the camera from there toward the stop. If the stop sits right on the line, look to
+// the right of the direction of travel, the side buses board on.
+function streetViewFor(sid, routeIds) {
+  const s = stopById[sid]; if (!s) return null;
+  const k = Math.cos((+s.stop_lat * Math.PI) / 180), px = +s.stop_lon * k, py = +s.stop_lat;
+  let best = null;
+  for (const rid of routeIds) for (const shapeId of shapesByRoute.get(rid) || []) {
+    const pts = shapePts.get(shapeId); if (!pts) continue;
+    const line = pts.slice().sort((a, b) => a[0] - b[0]);
+    for (let i = 0; i < line.length - 1; i++) {
+      const ax = line[i][1] * k, ay = line[i][2], bx = line[i + 1][1] * k, by = line[i + 1][2];
+      const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy; if (!L) continue;
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L));
+      const qx = ax + t * dx, qy = ay + t * dy, d = (px - qx) ** 2 + (py - qy) ** 2;
+      if (!best || d < best.d) best = { d, qx, qy, dx, dy };
+    }
+  }
+  if (!best) return null;
+  const meters = Math.sqrt(best.d) * 111320;
+  const bearing = (x, y) => (Math.atan2(x, y) * 180 / Math.PI + 360) % 360; // 0 = north, clockwise
+  const heading = meters > 3 ? bearing(px - best.qx, py - best.qy) : (bearing(best.dx, best.dy) + 90) % 360;
+  return [+(best.qx / k).toFixed(6), +best.qy.toFixed(6), Math.round(heading)];
+}
+
 // ---------- stops ----------
 const stopFeatures = [];
 for (const [sid, rs] of stopRoutes) {
@@ -464,6 +490,7 @@ for (const [sid, rs] of stopRoutes) {
       ada_pad: a ? a.ada_pad : "",
       amenities: a ? a.have.map((c) => AMENITY_COLUMNS[c]) : [], amenity_notes: a ? a.notes : "",
       nearby: nearby.get(sid) || null,
+      sv: streetViewFor(sid, ids), // [lon, lat, heading] for the Street View camera
     },
     geometry: { type: "Point", coordinates: [+(+s.stop_lon).toFixed(6), +(+s.stop_lat).toFixed(6)] },
   });
