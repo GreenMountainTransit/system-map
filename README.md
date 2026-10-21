@@ -1,53 +1,48 @@
 # GMT system map
 
-One map page with two views. The page and its data are hosted on GitHub Pages; a small Cloudflare Worker supplies live bus locations and arrival times (GitHub Pages can't keep the Swiftly key private or run code).
+A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 
-- **System map**: `https://greenmountaintransit.github.io/system-map/` shows every route and every live bus. Stops appear when you zoom in.
-- **Route map**: `https://greenmountaintransit.github.io/system-map/?route=ROUTE_ID` shows one route, its live buses, and an ordered stop list for each direction with the next 3 arrivals.
+- **System map**: https://greenmountaintransit.github.io/system-map/ shows every route and live bus, with a Routes / Frequency switch. Stops appear when you zoom in.
+- **Route map**: https://greenmountaintransit.github.io/system-map/?route=2 (route number) shows one route, its live buses, its description and service hours, and its stops in order for each direction with the next scheduled times.
+- **Frequency map**: https://greenmountaintransit.github.io/system-map/?view=frequency
 
-Selecting any stop shows its next 3 arrivals across all routes, marked **Live** (Swiftly prediction) or **Scheduled** (timetable, used when no live prediction exists yet), plus wheelchair access and any amenities you've entered.
+Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
-## What's in here
+Other features: search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
+
+## What's in the repo
 
 | Path | What it does |
 | --- | --- |
-| `public/` | Everything GitHub Pages publishes: the map page (both views) and the built `data/` folder. |
-| `src/worker.js` | The `/api/vehicles` and `/api/arrivals` endpoints. Holds the Swiftly key; reads schedule data from GitHub Pages. |
-| `.github/workflows/build-data.yml` | Rebuilds the data from GMT's GTFS nightly and publishes the site. |
-| `scripts/build-data.mjs` | Turns GMT's GTFS zip (and the amenity sheet) into `public/data/`. |
-| `amenities-template.csv` | Starting point for the stop amenity sheet. |
+| `public/index.html` | The map page (all views). Holds the Mapbox token and the opening view (`HOME_BOUNDS`). |
+| `public/live.js` | Fetches live bus locations (`/vehicles`) and stop predictions (`/predictions`) from Swiftly in the visitor's browser and merges them with the timetable. |
+| `scripts/build-data.mjs` | Turns GMT's GTFS into the route, stop, schedule and frequency files in `public/data/`, adds amenities and nearby places. |
+| `scripts/prepare-amenities.mjs` | Turns the field-survey exports into `amenities.csv`. |
+| `route-info.json` | Route descriptions and legend groups (edit by hand). |
+| `amenities.csv` | Shelter, seating, schedule box and ADA pad for each stop. |
+| `.github/workflows/build-data.yml` | Nightly (and on every change): downloads GMT's GTFS, builds the data, adds the Swiftly key, publishes the site. |
 
-## First-time setup
+The Swiftly API key is stored as a repository secret, not in the code. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
 
-**1. GitHub repository.** Create a new repo named `system-map` under the `greenmountaintransit` account (a separate repo keeps this apart from the opendata site's build) and push this folder to it. In the repo's **Settings → Pages**, set **Source** to **GitHub Actions**.
+**Swiftly rate limit:** the key's limit is shared by everyone using the map. Each open map asks for bus locations every 15 seconds, plus one predictions request every 15 seconds while a stop is open. If Swiftly answers "too many requests", the map pauses live requests (1 minute, doubling up to 10) and shows scheduled times meanwhile. Turning off Live buses also stops the location requests.
 
-**2. Data build.** In `.github/workflows/build-data.yml`, set `GTFS_URL` to the direct link to GMT's GTFS zip. If you have amenity data, commit it as `amenities.csv` in the repo root. Then run the workflow from the **Actions** tab. When it finishes, the map is at https://greenmountaintransit.github.io/system-map/ (live buses won't show until step 3 is done).
+## Setup
 
-**3. Cloudflare Worker** (needs Node.js 18+ and a free Cloudflare account):
-
-```
-npm install
-npx wrangler login
-npx wrangler secret put SWIFTLY_KEY      # paste GMT's Swiftly API key
-npx wrangler deploy
-```
-
-Wrangler prints the Worker's URL, like `https://gmt-system-map.your-account.workers.dev`. `DATA_BASE` in `wrangler.toml` already points at the GitHub Pages data folder; change it if you use a different repo name.
-
-**4. Connect the page.** In `public/index.html`, set `API_BASE` to the Worker URL and `MAPBOX_TOKEN` to your Mapbox public token. In your Mapbox account, restrict the token to `greenmountaintransit.github.io` and `ridegmt.com`. Commit; the workflow republishes the site.
-
-To test locally: run `npm run build -- ./gtfs` with an unzipped GTFS, serve the page with `npx serve -l 8000 public`, and run `npx wrangler dev --var SWIFTLY_KEY:your-key --var DATA_BASE:http://localhost:8000/data/` with `API_BASE` set to `http://localhost:8787`.
+1. **Pages**: in the repo's **Settings → Pages**, set **Source** to **GitHub Actions**.
+2. **Swiftly key**: in **Settings → Secrets and variables → Actions**, click **New repository secret**. Name: `SWIFTLY_KEY`. Value: GMT's Swiftly API key.
+3. **Mapbox token**: in `public/index.html`, `MAPBOX_TOKEN` must be a public token (starts with `pk.`) with URL restriction `https://greenmountaintransit.github.io`.
+4. **Publish**: run the workflow from the **Actions** tab (**Build map data and publish → Run workflow**).
 
 ## Embedding in CivicPlus
 
-On each page, add a **Custom HTML** widget and paste an iframe. GitHub Pages uses HTTPS, which CivicPlus requires. Homepage:
+Add a **Custom HTML** widget to the page and paste an iframe. Homepage:
 
 ```html
-<iframe src="https://greenmountaintransit.github.io/system-map/" title="GMT system map: all routes and buses"
+<iframe src="https://greenmountaintransit.github.io/system-map/" title="GMT system map: all routes and live buses"
   width="100%" height="600" style="border:0" loading="lazy" allow="geolocation"></iframe>
 ```
 
-Route page (use the route's `route_id` from GMT's GTFS `routes.txt`):
+Route page (route number at the end). Route pages opened this way have no "All routes" link, so riders stay on that route; links from the system map add `&back=1` to show it:
 
 ```html
 <iframe src="https://greenmountaintransit.github.io/system-map/?route=2" title="Route 2 live map and arrival times"
@@ -56,18 +51,39 @@ Route page (use the route's `route_id` from GMT's GTFS `routes.txt`):
 
 Test on a copied page first, as CivicPlus recommends for custom HTML.
 
+## Editing route descriptions and legend groups
+
+`route-info.json` holds the one-line description for each route (shown on hover, in stop popups and on route pages) and the legend groups. Edit it on GitHub and commit; the site rebuilds on its own. Frequencies and operating days are calculated from the GTFS automatically.
+
+## Frequency map
+
+The **Frequency** view colors each street by how often a local bus comes there on weekdays: rush hour (7–9 AM and 4–6 PM, the default), midday (9 AM–3 PM) or evening (7–10 PM). Tiers: every 15–20 min, 21–30 min, 31–60 min, and less than hourly.
+
+- It's an average: the minutes in the time window divided by the number of buses, using whichever direction has more buses.
+- It's measured by street, not by stop, so routes sharing a street add up even where they use different stops (for example Routes 1 and 11 on Market Street).
+- Commuter/express, school and shopping routes are left out.
+
+The legend is clickable to show or hide each tier. Link straight to it with `?view=frequency`.
+
+## What updates automatically
+
+Every night the workflow downloads GMT's current GTFS and rebuilds everything that comes from it: routes, names, colors, route shapes, stops, stop order, timepoints, schedules and arrival times, frequencies and the service wording ("every 20 min peak, 30 min other times"), first and last trips, and the frequency map. New routes appear on their own (300-series routes go in School trippers automatically; anything else not listed in `route-info.json` goes in Local routes).
+
+Not automatic: route descriptions and group assignments in `route-info.json`, stop amenities in `amenities.csv` (if GMT renumbers stops, regenerate it), and the opening map view (`HOME_BOUNDS` in `public/index.html`).
+
+## Nearby places
+
+Each build looks up restaurants and cafes, shops and pharmacies, and public restrooms within about 200 m of every stop from OpenStreetMap (one Overpass API query). If the lookup fails, the build continues and stops show without them; the next nightly build tries again. To improve the data, edit OpenStreetMap directly.
+
 ## Keeping it current
 
-- **Schedule changes** are picked up automatically: the workflow rebuilds from GMT's published GTFS every night, so a new GTFS posted before a service change is live the next morning. To publish sooner, run the workflow by hand from the **Actions** tab. The Worker picks up new data within about an hour.
-- **Amenities**: edit `amenities.csv` (one row per stop, `yes`/`no` columns) and commit it; the site rebuilds on its own. Editing in Excel and saving as CSV works. Columns: `shelter, bench, bike_rack, trash_can, lighting, real_time_sign, notes`. To add a new amenity type, add a column to the CSV and one entry to `AMENITY_COLUMNS` in `scripts/build-data.mjs`.
-
-## How arrival times are worked out
-
-The Worker fetches Swiftly's GTFS-realtime trip updates at most once every 15 seconds and shares the result with every visitor. For each stop it takes the scheduled trips for the current service day (including trips running past midnight), applies live predictions where Swiftly has them, drops canceled trips and skipped stops, and returns the next 3. Trips that Swiftly isn't predicting yet, usually ones that haven't started, show their scheduled time. Buses aren't listed at a route's final stop, since riders can't board them there.
+- **Schedule changes** are picked up automatically: the workflow rebuilds from GMT's published GTFS every night. To publish sooner, run it by hand from **Actions**.
+- **Amenities** come from `amenities.csv` in the repo root (one row per stop ID, `yes`/`no` columns: `shelter, seating, schedule_box`, plus optional `bike_rack, trash_can, lighting, real_time_sign, notes`). It's generated from the two field-survey exports (stop inspection and shelter asset inventory) with `node scripts/prepare-amenities.mjs <gmt_stop_inspect.csv> <shelter_fixed_asset_inventory.csv>`, which keeps only the yes/no columns so internal details stay out of the public repo. Commit the new `amenities.csv` and the site rebuilds on its own. To show a new amenity type, add a column and one entry to `AMENITY_COLUMNS` in `scripts/build-data.mjs`.
+- **New Swiftly key**: update the `SWIFTLY_KEY` secret, then run the workflow.
 
 ## If something looks wrong
 
-- **"Live bus locations are unavailable"**: check the Swiftly key (`npx wrangler secret put SWIFTLY_KEY`) and run `npx wrangler tail` to see the error.
-- **Buses appear in gray or are missing**: the `route_id` values in Swiftly's feed must match GMT's GTFS. Re-run the build with the current GTFS.
-- **"Map data is missing"**: check the latest run in the repo's **Actions** tab. Usually `GTFS_URL` is wrong or the download failed.
-- **Buses show but arrival times say "unavailable"**: check that `DATA_BASE` in `wrangler.toml` is right; `DATA_BASE` + `routes.json` should open in a browser.
+- **"Live buses aren't connected yet"**: the `SWIFTLY_KEY` secret is missing. Add it and re-run the workflow. The run's **Add Swiftly key** step says whether it found the key.
+- **"Live bus locations are unavailable right now"** or a stop says **"Live predictions are unavailable"**: Swiftly rejected the request, is down, or the rate limit was reached. Check the key in the secret; open the browser console (F12) for details.
+- **No basemap**: check the Mapbox token's URL restriction is exactly `https://greenmountaintransit.github.io`.
+- **"Map data is missing"**: check the latest run in **Actions**; usually the GTFS download failed.
