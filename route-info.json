@@ -1,0 +1,28 @@
+{
+  "_help": "Edit this file to change route descriptions or legend groups. Descriptions are keyed by route number. Group default: on, off, or sundays (on only on Sundays). The site rebuilds after you commit.",
+  "groups": [
+    { "id": "local", "name": "Local routes", "default": "on", "collapsed": false },
+    { "id": "express", "name": "Commuter & LINK Express", "routes": ["86", "96"], "default": "on", "collapsed": false },
+    { "id": "sunday", "name": "Sunday circulators", "routes": ["756", "778"], "default": "sundays", "collapsed": true },
+    { "id": "shopping", "name": "Shopping specials", "routes": ["16", "19", "20"], "default": "off", "collapsed": true },
+    { "id": "school", "name": "School trippers", "range": [300, 399], "default": "off", "collapsed": true }
+  ],
+  "routes": {
+    "1": "Williston Road (US 2) corridor via UVM, University Mall and South Burlington’s Market Street, ending at Williston Walmart.",
+    "2": "Colchester Avenue to Winooski, then College Parkway in Colchester and Pearl Street to the Essex Junction Amtrak station. Serves the UVM Medical Center.",
+    "4": "Weekday loop from the Essex Junction Amtrak station via the Essex Outlets, Center Road, Sand Hill Road and River Road.",
+    "5": "Saint Paul Street and Pine Street to Burlington’s South End.",
+    "6": "South Union Street and Shelburne Road (US 7) to the Shelburne Museum.",
+    "7": "North Street and North Avenue to Burlington’s New North End and Northgate.",
+    "8": "Loop through Burlington’s Old North End via North Avenue, North Street, North Prospect Street and Battery Street, serving Fern Hill and McAuley Square.",
+    "9": "Elmwood Avenue and Riverside Avenue to Winooski, looping via Barlow Street, Main Street and Malletts Bay Avenue near the Champlain Mill.",
+    "11": "Main Street to South Burlington, looping via Dorset Street, Kennedy Drive, Hinesburg Road and Market Street (City Center).",
+    "16": "Tuesday shopping trip from Pillsbury Manor, The Pines and Country Park to Hannaford at University Mall. Open to everyone.",
+    "19": "Thursday shopping trip from Burlington senior housing, including Decker Towers and Cathedral Square, to Market 32. Open to everyone.",
+    "20": "Wednesday shopping trip from Winooski and Burlington senior housing to Market 32 in South Burlington. Open to everyone.",
+    "86": "Limited-stop express on I-89 to Montpelier via South Burlington, Williston, Richmond and Waterbury.",
+    "96": "Commuter via US 7 and I-89 to the St. Albans park and ride, serving Winooski, Colchester, Milton and Georgia.",
+    "756": "Sunday loop through the South End via South Winooski Avenue, Pine Street, Shelburne Road and South Union Street.",
+    "778": "Sunday loop through the North End via North Avenue, North Union Street and North Prospect Street, serving Fern Hill and McAuley Square."
+  }
+}
