@@ -201,7 +201,7 @@
     #panel.dragging, #stop-panel.dragging { transition: none; }
     #panel .scroll, .sp-body { touch-action: pan-y; }
     #panel header input { touch-action: manipulation; }
-    #stop-panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 55%; z-index: 6; border-radius: 16px 16px 0 0;
+    #stop-panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 75%; z-index: 6; border-radius: 16px 16px 0 0;
       box-shadow: 0 -4px 20px rgba(20,40,30,.22); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .sp-head { grid-template-columns: 1fr auto; padding-top: 4px; cursor: grab; }
     .sp-grip { display: block; grid-column: 1 / -1; justify-self: center; width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; margin: 2px 0 6px; }
@@ -267,7 +267,7 @@ let view = new URLSearchParams(location.search).get("view") === "frequency" ? "f
 let picking = false; // false: the legend shows its defaults; true: the rider has picked specific routes
 let freqData;
 const isPhone = () => innerWidth <= 640;
-let sheetOpen = !isPhone(), sheetState = "collapsed"; // phone sheet: collapsed, mid or full
+let sheetOpen = !isPhone(), sheetState = "collapsed"; // phone sheet: collapsed or open (three-quarters of the screen)
 let freqPeriod = "mid", freqTiers = new Set([1, 2, 3, 4]), showAllTimes = false;
 const FREQ_PERIODS = [
   { id: "peak", label: "Weekday rush hour", short: "Rush hour", note: "weekdays 7–9 AM and 4–6 PM" },
@@ -669,7 +669,8 @@ function buildSystemPanel() {
     t.setAttribute("aria-expanded", open); document.getElementById(t.getAttribute("aria-controls")).hidden = !open;
   });
   const rowOf = (e) => e.target.closest?.(".route-row");
-  scroll.addEventListener("mouseover", (e) => { const r = rowOf(e); if (r && !hidden.has(r.dataset.route)) highlight([r.dataset.route]); });
+  const canHover = matchMedia("(hover: hover)").matches; // touch screens fire fake mouseovers on tap; skip them
+  scroll.addEventListener("mouseover", (e) => { const r = rowOf(e); if (canHover && r && !hidden.has(r.dataset.route)) highlight([r.dataset.route]); });
   scroll.addEventListener("mouseleave", () => highlight([]));
   scroll.addEventListener("focusin", (e) => { const r = rowOf(e); if (r && !hidden.has(r.dataset.route)) highlight([r.dataset.route]); });
   scroll.addEventListener("focusout", () => highlight([]));
@@ -776,12 +777,15 @@ function showStop(id, fly) {
   stopPanel.hidden = false;
   document.getElementById("wrap").classList.add("stop-open");
   stopPanel.querySelector(".sp-close").onclick = closeStop;
-  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "mid"); }
+  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
   if (!wasOpen) stopPanel.querySelector("#sp-title").focus({ preventScroll: true });
   // Keep the stop in view beside the panel (desktop) or above the sheet (phones).
-  const offset = isPhone() ? [0, -Math.round(stopPanel.offsetHeight / 2)] : [Math.round((370 - 360) / 2), 0];
+  // Center the stop in the visible map: the strip above the three-quarter sheet on phones,
+  // between the two panels on desktop. (Padding, not an offset, because earlier fits leave padding set.)
+  const H = document.getElementById("wrap").clientHeight;
+  const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.75), left: 0, right: 0 } : { top: 20, bottom: 20, left: 370, right: 380 };
   const inView = map.getBounds().contains(s.coords);
-  if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, offset, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
+  if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
   refreshPopup(true);
 }
 function closeStop() {
@@ -905,7 +909,16 @@ function wireSearch(routePool, stopPool) {
   function choose(i) {
     const it = items[i]; if (!it) return;
     input.value = ""; close(); input.blur();
-    if (it.type === "stop") showStop(it.id, true);
+    if (it.type === "stop") {
+      const st = stopsById[it.id];
+      if (!routeParam) {
+        if (view === "frequency") setView("routes");
+        hidden = new Set(Object.keys(routes).filter((x) => !st.routes.includes(x))); picking = true;
+        buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
+        document.getElementById("announce").textContent = `Showing the ${st.routes.length} route${st.routes.length === 1 ? "" : "s"} that serve ${st.name}.`;
+      }
+      showStop(it.id, true);
+    }
     else if (routeParam) location.search = "?route=" + encodeURIComponent(routes[it.id].short_name);
     else focusRoute(it.id);
   }
@@ -1002,7 +1015,7 @@ function panel(html, fill) {
 function setSheet(open) {
   sheetOpen = open;
   const el = document.getElementById("panel"), t = document.getElementById("toggle");
-  snapSheet(el, isPhone() ? (open ? (sheetState === "full" ? "full" : "mid") : "collapsed") : "mid");
+  snapSheet(el, isPhone() ? (open ? "open" : "collapsed") : "open");
   if (t) { t.setAttribute("aria-expanded", String(open)); t.querySelector(".sr-only").textContent = open ? "Hide the list" : "Show the list"; }
 }
 function snapSheet(el, state) {
@@ -1010,11 +1023,11 @@ function snapSheet(el, state) {
   const H = document.getElementById("wrap").clientHeight;
   if (el.id === "panel") { sheetState = state; sheetOpen = state !== "collapsed"; }
   el.classList.toggle("collapsed", state === "collapsed");
-  el.style.height = state === "full" ? Math.round(H * 0.88) + "px" : state === "mid" ? Math.round(H * (el.id === "panel" ? 0.5 : 0.55)) + "px" : "";
+  el.style.height = state === "open" ? Math.round(H * 0.75) + "px" : ""; // open = bottom three-quarters; the top quarter stays map
   const t = el.querySelector("#toggle"); if (t) t.setAttribute("aria-expanded", String(state !== "collapsed"));
 }
 // Drag the top of a sheet up or down; it settles at the nearest height. Dragging the stop sheet low closes it.
-let start_focusedSearch = false;
+let start_focusedSearch = false, startH = 0;
 function draggable(el, handleSel) {
   let start = null;
   el.addEventListener("pointerdown", (e) => {
@@ -1034,22 +1047,21 @@ function draggable(el, handleSel) {
   });
   const end = () => {
     if (!start) return;
-    const moved = start.moved; start = null;
+    const moved = start.moved; startH = start.h; start = null;
     el.classList.remove("dragging");
     if (!moved) return;
     el._dragged = true; setTimeout(() => (el._dragged = false), 50);
     if (document.activeElement?.id === "q" && !start_focusedSearch) document.activeElement.blur(); // a drag isn't a tap on search
-    const H = document.getElementById("wrap").clientHeight, h = el.offsetHeight;
-    if (el.id === "stop-panel") return h < H * 0.25 ? closeStop() : snapSheet(el, h > H * 0.72 ? "full" : "mid");
-    const head = el.querySelector("header")?.offsetHeight || 140;
-    const snaps = [["collapsed", head], ["mid", H * 0.5], ["full", H * 0.88]];
-    snapSheet(el, snaps.sort((a, b) => Math.abs(a[1] - h) - Math.abs(b[1] - h))[0][0]);
+    // One swipe: up opens to three-quarters, down collapses (or closes the stop sheet).
+    const up = el.offsetHeight > startH;
+    if (el.id === "stop-panel") return up ? snapSheet(el, "open") : closeStop();
+    snapSheet(el, up ? "open" : "collapsed");
   };
   addEventListener("pointerup", end); addEventListener("pointercancel", end);
 }
 draggable(document.getElementById("panel"), "header");
 draggable(stopPanel, ".sp-head");
-addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, "mid"); });
+addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, "open"); });
 const toggleBtn = (label) => `<button id="toggle" aria-expanded="true"><span class="grip" aria-hidden="true"></span><span class="t-label">${label}</span><span class="sr-only">Show the list</span></button>`;
 const chip = (r) => `<span class="chip" style="background:${esc(r.color || "#555")};color:${esc(r.text_color || "#fff")}">${esc(r.short_name || "")}</span>`;
 function when(epoch) {
