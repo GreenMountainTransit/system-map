@@ -331,6 +331,7 @@ const freqFeatures = [];
     const times = [...m.values()];
     return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => [w, avgHeadway(times, def)]));
   };
+  const candidates = [];
   for (const [idx, d] of directed.entries()) {
     const props = {}, perSample = Object.fromEntries(Object.keys(FREQ_WINDOWS).map((w) => [w, []])), routesHere = new Set(d.routes);
     for (const sm of samples[idx]) {
@@ -359,7 +360,25 @@ const freqFeatures = [];
     }
     if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
     props.routes = [...routesHere].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
-    freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: d.coords } });
+    candidates.push({ idx, props, coords: d.coords });
+  }
+  // No directionality on the map: draw each street once. Both directions (and routes sharing a street)
+  // are usually separate, slightly offset lines broken at different stops; keep the longest pieces and
+  // drop any piece that's mostly already drawn within 20 m, whichever way it runs.
+  const len = (c) => c.slice(1).reduce((m, p, i) => m + Math.hypot((p[0] - c[i][0]) * M * kx, (p[1] - c[i][1]) * M), 0);
+  candidates.sort((a, b) => len(b.coords) - len(a.coords));
+  const drawn = new Map(), DCELL = 30;
+  for (const c of candidates) {
+    const sm = samples[c.idx];
+    const covered = sm.filter((p) => {
+      const cx = Math.floor(p.x / DCELL), cy = Math.floor(p.y / DCELL);
+      for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++)
+        for (const q of drawn.get(`${i}:${j}`) || []) if (Math.hypot(q.x - p.x, q.y - p.y) <= 20) return true;
+      return false;
+    }).length;
+    if (sm.length && covered / sm.length >= 0.75) continue;
+    for (const p of sm) { const k = `${Math.floor(p.x / DCELL)}:${Math.floor(p.y / DCELL)}`; if (!drawn.has(k)) drawn.set(k, []); drawn.get(k).push(p); }
+    freqFeatures.push({ type: "Feature", properties: c.props, geometry: { type: "LineString", coordinates: c.coords } });
   }
 }
 
@@ -459,5 +478,5 @@ const withAmenities = stopFeatures.filter((f) => amenities.has(f.properties.stop
 console.log(`Built ${routeList.length} routes (${lineFeatures.length} route patterns), ${stopFeatures.length} stops ` +
   `(${stopFeatures.filter((f) => f.properties.timepoint).length} timepoints), ${Object.keys(headsigns).length} trips`);
 console.log(amenitiesFile ? `Amenities: ${withAmenities} of ${stopFeatures.length} stops matched a row in ${path.basename(amenitiesFile)}` : "Amenities: none (no amenities.csv)");
-console.log(`Frequency map: ${freqFeatures.length} street segments, local routes on weekday ${freqDays.weekday?.ymd || "(none found)"}`);
+console.log(`Frequency map: ${freqFeatures.length} street pieces (each street drawn once), local routes on weekday ${freqDays.weekday?.ymd || "(none found)"}`);
 console.log(places ? `Nearby places: ${places.length} from OpenStreetMap` : "Nearby places: skipped");
