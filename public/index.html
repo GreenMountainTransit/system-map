@@ -65,6 +65,24 @@
   .fp-actions a, .fp-actions button { white-space: nowrap; }
   .focus-pill a, .focus-pill button { font-size: .8rem; font-weight: 600; color: var(--gmt); text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; }
   .freq-legend { padding: 14px 16px; }
+  .periods { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+  .periods button { border: 1px solid #c9d3cc; background: #fff; border-radius: 999px; padding: 5px 11px; font-size: .8rem; cursor: pointer; color: var(--ink); }
+  .periods button[aria-checked=true] { background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 600; }
+  .tiers li { display: block !important; }
+  .tiers button { width: 100%; display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px; text-align: left;
+    background: none; border: 1px solid transparent; border-radius: 8px; padding: 7px 8px; cursor: pointer; font-size: .88rem; }
+  .tiers button:hover { background: var(--hover); }
+  .tiers button[aria-pressed=false] { color: var(--faint); } .tiers button[aria-pressed=false] .swatch { opacity: .25; }
+  .tiers .tick { width: 18px; height: 18px; color: var(--gmt); } .tiers .tick svg { width: 18px; height: 18px; }
+  .tiers button[aria-pressed=false] .tick { visibility: hidden; }
+  .see-all { display: block; width: 100%; margin: -2px 0 10px; padding: 7px; border: 1px solid #c9d3cc; background: #fff; border-radius: 8px; font-size: .8rem; font-weight: 600; color: var(--gmt); cursor: pointer; }
+  .see-all:hover { background: var(--hover); }
+  .alltimes { max-height: 220px; overflow-y: auto; margin: -4px 0 4px; padding-right: 4px; }
+  .at-group { padding: 6px 0; border-top: 1px solid var(--line); } .at-group:first-child { border-top: 0; }
+  .at-head { margin: 0 0 4px; font-size: .8rem; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .at-times { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 9px; font-size: .78rem; font-variant-numeric: tabular-nums; }
+  .at-times .past { color: #b3bcb6; } .at-times .next { font-weight: 700; } .at-times .live { color: var(--live); }
+  .svc dd .span-line { display: block; font-size: .76rem; color: var(--muted); }
   .freq-intro { font-size: .86rem; line-height: 1.45; margin: 0 0 12px; }
   .freq-legend ul { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 10px; }
   .freq-legend li { display: flex; align-items: center; gap: 12px; font-size: .88rem; }
@@ -204,6 +222,12 @@ let openPopup = null, openStopId = null, routeArrivals = {}, activeDir = null;
 let basemap = BASEMAPS[0];
 let view = new URLSearchParams(location.search).get("view") === "frequency" ? "frequency" : "routes";
 let focused = null, hiddenBeforeFocus = null, freqData;
+let freqPeriod = "mid", freqTiers = new Set([1, 2, 3, 4]), showAllTimes = false;
+const FREQ_PERIODS = [
+  { id: "peak", label: "Weekday rush hour", short: "Rush hour", note: "weekdays 7–9 AM and 4–6 PM" },
+  { id: "mid", label: "Weekday midday", short: "Midday", note: "weekdays 9 AM–3 PM" },
+  { id: "eve", label: "Weekday evening", short: "Evening", note: "weekdays 7–10 PM" },
+];
 try { basemap = BASEMAPS.find((b) => b.id === localStorage.getItem("gmt-basemap")) || basemap; } catch {}
 
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -293,15 +317,10 @@ function addOverlay() {
   const width = (a, b) => ["interpolate", ["linear"], ["zoom"], 9, a, 15, b];
 
   if (!map.getSource("freq")) map.addSource("freq", { type: "geojson", data: freqData });
-  const tierWidth = (z9, z15) => ["interpolate", ["linear"], ["zoom"], 9, ["match", ["get", "tier"], ...z9], 15, ["match", ["get", "tier"], ...z15]];
-  add({ id: "freq-casing", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["-", 5, ["get", "tier"]] },
-    paint: { "line-color": sat ? "#000" : "#fff", "line-opacity": sat ? 0.5 : 1, "line-width": tierWidth([1, 7, 2, 4.5, 3, 3, 2.5], [1, 15, 2, 10, 3, 7, 4.5]) } }, "middle");
-  add({ id: "freq-lines", type: "line", source: "freq", filter: ["<=", ["get", "tier"], 3],
-    layout: { "line-join": "round", "line-cap": "round", "line-sort-key": ["-", 5, ["get", "tier"]] },
-    paint: { "line-color": ["match", ["get", "tier"], 1, FREQ[0].color, 2, FREQ[1].color, FREQ[2].color],
-      "line-width": tierWidth([1, 4.5, 2, 2.6, 3, 1.6, 1], [1, 11, 2, 7, 3, 4.5, 2.5]) } }, "middle");
-  add({ id: "freq-low", type: "line", source: "freq", filter: ["==", ["get", "tier"], 4],
-    layout: { "line-join": "round", "line-cap": "butt" },
+  add({ id: "freq-casing", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": sat ? "#000" : "#fff", "line-opacity": sat ? 0.5 : 1 } }, "middle");
+  add({ id: "freq-lines", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "round" }, paint: {} }, "middle");
+  add({ id: "freq-low", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "butt" },
     paint: { "line-color": FREQ[3].color, "line-width": width(1.2, 3), "line-dasharray": [2, 1.5] } }, "middle");
   add({ id: "route-glow", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" },
     paint: { "line-color": ["get", "color"], "line-width": width(6, 14), "line-blur": width(3, 6), "line-opacity": 0.35 } }, "middle");
@@ -338,13 +357,31 @@ const FREQ = [
   { tier: 1, color: "#d1352b", label: "Every 15 min or better" },
   { tier: 2, color: "#2563b0", label: "Every 16–30 min" },
   { tier: 3, color: "#7aa7dc", label: "Every 31–60 min" },
-  { tier: 4, color: "#8b979f", label: "Less often, or rush hour only", dashed: true },
+  { tier: 4, color: "#8b979f", label: "Less than hourly", dashed: true },
 ];
+// Tier for the chosen time of week: 1 = every 15 min or better ... 4 = less than hourly; 0 = no service then.
+const tierExpr = () => { const h = ["get", "h_" + freqPeriod];
+  return ["case", ["==", h, null], 0, ["<=", h, 15], 1, ["<=", h, 30], 2, ["<=", h, 60], 3, 4]; };
+function applyFreq() {
+  if (!map.getLayer("freq-lines")) return;
+  const t = tierExpr(), on = ["in", t, ["literal", [...freqTiers]]];
+  const w = (z9, z15) => ["interpolate", ["linear"], ["zoom"], 9, ["match", t, ...z9], 15, ["match", t, ...z15]];
+  map.setFilter("freq-lines", ["all", on, [">=", t, 1], ["<=", t, 3]]);
+  map.setFilter("freq-casing", ["all", on, [">=", t, 1], ["<=", t, 3]]);
+  map.setFilter("freq-low", ["all", on, ["==", t, 4]]);
+  map.setLayoutProperty("freq-lines", "line-sort-key", ["-", 5, t]);
+  map.setLayoutProperty("freq-casing", "line-sort-key", ["-", 5, t]);
+  map.setPaintProperty("freq-lines", "line-color", ["match", t, 1, FREQ[0].color, 2, FREQ[1].color, FREQ[2].color]);
+  map.setPaintProperty("freq-lines", "line-width", w([1, 4.5, 2, 2.6, 1.6], [1, 11, 2, 7, 4.5]));
+  map.setPaintProperty("freq-casing", "line-width", w([1, 7, 2, 4.5, 3], [1, 15, 2, 10, 7]));
+}
 function applyView() {
   if (!map.getLayer("route-lines")) return;
   const freq = view === "frequency" && !routeParam;
   ["freq-casing", "freq-lines", "freq-low"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "visible" : "none"));
   ["route-glow", "route-casing", "route-lines"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible"));
+  ["stops", "stop-selected", "timepoint-labels"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible")); // the frequency map is about streets, not stops
+  applyFreq();
   applyFilters();
 }
 
@@ -360,7 +397,7 @@ function applyFilters() {
   const atStop = vis.length ? ["any", ...vis.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : ["==", ["get", "stop_id"], "__none__"];
   ["route-casing", "route-lines"].forEach((l) => map.setFilter(l, onRoute));
   map.setFilter("route-glow", ["all", onRoute, ["in", ["get", "route_id"], ["literal", highlighted]]]);
-  const stopFilter = view === "frequency" && !routeParam ? ["has", "stop_id"] : atStop;
+  const stopFilter = atStop;
   map.setFilter("stops", stopFilter);
   map.setFilter("timepoint-labels", ["all", stopFilter, ["==", ["get", "timepoint"], true]]);
   map.setFilter("buses", onRoute);
@@ -381,7 +418,7 @@ const tip = document.getElementById("tip");
 map.on("mousemove", (e) => {
   if (!map.getLayer("route-lines")) return;
   const b = 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
-  const layers = view === "frequency" && !routeParam ? ["buses", "stops", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"];
+  const layers = view === "frequency" && !routeParam ? ["buses", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"];
   const f = map.queryRenderedFeatures(box, { layers })[0];
   map.getCanvas().style.cursor = f ? "pointer" : "";
   if (!f) { hideTip(); if (!openStopId) highlight([]); return; }
@@ -394,9 +431,10 @@ map.on("mousemove", (e) => {
       ids.slice(0, 5).map((id) => routeTipRow(routes[id], ids.length <= 3)).join("") +
       (ids.length > 5 ? `<p class="more">and ${ids.length - 5} more routes. Click the stop for details.</p>` : `<p class="more">Click for next arrivals.</p>`));
   } else if (f.layer.id === "freq-lines" || f.layer.id === "freq-low") {
-    const t = FREQ[p.tier - 1], many = String(p.routes).includes(",");
-    showTip(e.point, `<h3><span style="display:inline-block;width:18px;height:5px;border-radius:3px;background:${t.color}"></span>${p.headway ? `About every ${p.headway} min` : "Rush hour only"}</h3>
-      <p class="t-freq" style="margin:0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · weekdays 9 AM–3 PM</p>`);
+    const h = p["h_" + freqPeriod], t = FREQ[(h <= 15 ? 1 : h <= 30 ? 2 : h <= 60 ? 3 : 4) - 1], many = String(p.routes).includes(",");
+    const per = FREQ_PERIODS.find((x) => x.id === freqPeriod);
+    showTip(e.point, `<h3><span style="display:inline-block;width:18px;height:5px;border-radius:3px;background:${t.color}"></span>${h >= 120 ? `About every ${Math.round(h / 60)} hours` : `About every ${h} min`}</h3>
+      <p class="t-freq" style="margin:0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${per.note}</p>`);
   } else if (f.layer.id === "buses") {
     const r = routes[p.route_id];
     highlight([p.route_id]);
@@ -469,11 +507,16 @@ function buildSystemPanel() {
   const byGroup = groups.map((g) => ({ ...g, ids: Object.values(routes).filter((r) => r.group === g.id)
     .sort((a, b) => (a.sort - b.sort) || a.short_name.localeCompare(b.short_name, undefined, { numeric: true })).map((r) => r.route_id) }))
     .filter((g) => g.ids.length);
+  const per = FREQ_PERIODS.find((x) => x.id === freqPeriod);
   const legend = view === "frequency" ? `
     <div class="scroll freq-legend">
-      <p class="freq-intro">How often a bus comes on each street on weekdays from 9 AM to 3 PM, counting every route that uses it. Where routes share a street, like Main Street in Burlington or Market Street in South Burlington, their buses add up.</p>
-      <ul>${FREQ.map((t) => `<li><span class="swatch ${t.dashed ? "dashed" : ""}" style="--c:${t.color};--w:${[0, 7, 5, 3.5, 2.5][t.tier]}px"></span>${t.label}</li>`).join("")}</ul>
-      <p class="freq-note">Evenings and weekends are less frequent. School trippers and shopping specials aren’t included. Hover over a street for its frequency and routes.</p>
+      <div class="periods" role="radiogroup" aria-label="Time of day">${FREQ_PERIODS.map((x) =>
+        `<button type="button" role="radio" data-period="${x.id}" aria-checked="${x.id === freqPeriod}">${x.short}</button>`).join("")}</div>
+      <p class="freq-intro">How often a local bus comes on each street, <strong>${per.note}</strong>. Where routes share a street, like Main Street in Burlington, their buses add up.</p>
+      <ul class="tiers" aria-label="Filter by frequency">${FREQ.map((t) => `<li><button type="button" data-tier="${t.tier}" aria-pressed="${freqTiers.has(t.tier)}">
+        <span class="swatch ${t.dashed ? "dashed" : ""}" style="--c:${t.color};--w:${[0, 7, 5, 3.5, 2.5][t.tier]}px"></span><span>${t.label}</span>
+        <span class="tick" aria-hidden="true">${ICON.check}</span></button></li>`).join("")}</ul>
+      <p class="freq-note">Click a frequency to show or hide it. Hover over a street for its exact frequency and routes. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
     </div>` : `
     <div class="scroll">${byGroup.map((g) => `
       <section class="group" data-group="${esc(g.id)}">
@@ -486,7 +529,7 @@ function buildSystemPanel() {
       </section>`).join("")}
     </div>`;
   panel(`
-    <header>${toggleBtn("Routes")}<h1>${view === "frequency" ? "Frequency map" : "All routes and live buses"}</h1>
+    <header>${toggleBtn("Routes")}<h1>${view === "frequency" ? "Local route weekday frequency" : "All routes and live buses"}</h1>
       <p class="status" id="status" aria-live="polite">Loading buses…</p>
       <div class="viewtoggle" role="group" aria-label="Map view">
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
@@ -496,6 +539,14 @@ function buildSystemPanel() {
       <div id="focus-pill"></div></header>
     ${legend}`, view !== "frequency");
   document.querySelectorAll(".viewtoggle button").forEach((b) => b.onclick = () => setView(b.dataset.view));
+  document.querySelectorAll("[data-period]").forEach((b) => b.onclick = () => { freqPeriod = b.dataset.period; buildSystemPanel(); applyFreq(); });
+  document.querySelectorAll("[data-tier]").forEach((b) => b.onclick = () => {
+    const t = +b.dataset.tier;
+    freqTiers.has(t) ? freqTiers.delete(t) : freqTiers.add(t);
+    if (!freqTiers.size) FREQ.forEach((x) => freqTiers.add(x.tier)); // never leave the map empty
+    document.querySelectorAll("[data-tier]").forEach((x) => x.setAttribute("aria-pressed", freqTiers.has(+x.dataset.tier)));
+    applyFreq();
+  });
   renderFocusPill();
   refreshBuses();
   if (view === "frequency") return;
@@ -536,6 +587,7 @@ function setView(v) {
   const u = new URL(location.href); v === "frequency" ? u.searchParams.set("view", "frequency") : u.searchParams.delete("view");
   history.replaceState(null, "", u);
   hideTip(); highlight([]);
+  if (v === "frequency" && openPopup) openPopup.remove();
   buildSystemPanel(); applyView();
 }
 // Show just one route (from search); "Show all routes" restores the previous selection.
@@ -625,7 +677,7 @@ function summary(list) {
 // ---------- stop popup ----------
 function showStop(id, fly) {
   const s = stopsById[id]; if (!s) return;
-  openStopId = id; hideTip();
+  openStopId = id; hideTip(); showAllTimes = false;
   highlight(s.routes.filter((rid) => visibleRoutes().includes(rid)));
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
   if (fly) map.easeTo({ center: s.coords, zoom: Math.max(map.getZoom(), 15), duration: reduceMotion ? 0 : 600 });
@@ -640,10 +692,15 @@ function showStop(id, fly) {
 }
 async function refreshPopup(announce) {
   const id = openStopId; if (!id) return;
-  let arrivals = "error";
+  let arrivals = "error", allTimes = null;
   try { arrivals = (await GMTLive.arrivals({ stop: id })).arrivals[id] || []; } catch {}
+  if (showAllTimes) try { allTimes = (await GMTLive.arrivals({ stop: id, all: true })).arrivals[id] || []; } catch {}
   if (id !== openStopId || !openPopup) return;
-  openPopup.setHTML(stopHtml(stopsById[id], arrivals));
+  const scrollTop = openPopup.getElement()?.querySelector(".alltimes")?.scrollTop || 0;
+  openPopup.setHTML(stopHtml(stopsById[id], arrivals, allTimes));
+  const el = openPopup.getElement();
+  el.querySelector(".alltimes")?.scrollTo(0, scrollTop);
+  el.querySelector("#see-all")?.addEventListener("click", () => { showAllTimes = !showAllTimes; refreshPopup(); });
   if (announce && Array.isArray(arrivals)) {
     const s = stopsById[id];
     document.getElementById("announce").textContent = `${s.name}. ` + (arrivals.length
@@ -651,7 +708,19 @@ async function refreshPopup(announce) {
       : "No more buses today.");
   }
 }
-function stopHtml(s, arrivals) {
+function allTimesHtml(list) {
+  if (!list) return `<p class="none">Loading today’s times…</p>`;
+  if (!list.length) return `<p class="none">No buses at this stop today.</p>`;
+  const groups = new Map();
+  for (const a of list) { const k = a.route_id + "|" + a.headsign; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(a); }
+  const nextIdx = (l) => l.findIndex((a) => !a.past);
+  return `<div class="alltimes" tabindex="0" aria-label="All of today’s times at this stop">${[...groups.values()].map((l) => {
+    const r = routes[l[0].route_id] || {}, n = nextIdx(l);
+    return `<div class="at-group"><p class="at-head">${chip(r)} ${esc(l[0].headsign ? "To " + l[0].headsign : r.long_name)}</p>
+      <p class="at-times">${l.map((a, i) => `<span class="${a.past ? "past" : ""}${i === n ? " next" : ""}${a.live && !a.past ? " live" : ""}">${clock(a.time).replace(" AM", "a").replace(" PM", "p")}</span>`).join("")}</p></div>`;
+  }).join("")}</div><p class="src">Past times are grayed out. Green times are live predictions.</p>`;
+}
+function stopHtml(s, arrivals, allTimes) {
 
   let body;
   if (arrivals === null) body = `<p class="none">Loading arrivals…</p>`;
@@ -680,7 +749,8 @@ function stopHtml(s, arrivals) {
   const rs = s.routes.map((id) => routes[id]).filter(Boolean);
   const about = `<details><summary>About ${rs.length === 1 ? "this route" : `these ${rs.length} routes`}</summary><div class="about">${rs.map((r) =>
     `${chip(r)}<p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
-  return `<div class="pop"><h2 style="margin-bottom:10px">${esc(s.name)}</h2>${body}${featHtml}${about}
+  const seeAll = arrivals === "error" ? "" : `<button type="button" id="see-all" class="see-all" aria-expanded="${showAllTimes}">${showAllTimes ? "Hide all times" : "See all times today"}</button>${showAllTimes ? allTimesHtml(allTimes) : ""}`;
+  return `<div class="pop"><h2 style="margin-bottom:10px">${esc(s.name)}</h2>${body}${seeAll}${featHtml}${about}
     ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
 }
 
@@ -768,19 +838,28 @@ function phrase(d, detailed) {
   if (!d) return "";
   const p = d.periods || {}, peaks = [p.am, p.pm].filter(Boolean);
   const peak = peaks.length ? Math.min(...peaks) : null, base = p.mid || d.headway || peak, eve = p.eve;
-  if (!base) return `${d.trips} trip${d.trips === 1 ? "" : "s"} each way`;
+  if (!base || (d.trips <= 10 && !p.mid)) return tripCounts(d);
   const lateService = d.last >= 19.5 * 3600;
-  if (peak && !p.mid && !eve) return `every ${mins(peak)}, rush hours only`;
+  if (peak && !p.mid && !eve) return `${peak === 60 ? "hourly" : `every ${mins(peak)}`}, rush hours only`;
   let out;
   if (peak && peak < base) {
     if (eve && eve > base) out = `every ${peak} min peak, ${mins(base)} midday, ${mins(eve)} evenings`;
     else out = `every ${peak} min peak, ${mins(base)} other times`;
   } else {
-    out = `every ${mins(base)}`;
+    out = base === 60 ? "hourly" : `every ${mins(base)}`;
     if (eve && eve > base) out += `, ${mins(eve)} evenings`;
   }
   if (detailed && !lateService) out += ", no evening service";
   return out;
+}
+// "3 morning, 1 midday and 3 afternoon trips"
+function tripCounts(d) {
+  const parts = Object.entries(d.parts || {}).filter(([, n]) => n);
+  if (!parts.length) return `${d.trips} trip${d.trips === 1 ? "" : "s"}`;
+  const total = parts.reduce((s, [, n]) => s + n, 0);
+  const list = parts.map(([k, n]) => `${n} ${k}`);
+  const joined = list.length > 1 ? list.slice(0, -1).join(", ") + " and " + list[list.length - 1] : list[0];
+  return `${joined} trip${total === 1 ? "" : "s"}`;
 }
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 function freqText(r) {
@@ -793,11 +872,14 @@ function freqText(r) {
 }
 function serviceTable(r) {
   const s = r.service; if (!s) return "";
-  const row = (label, d) => `<dt>${label}</dt><dd>${d ? `${cap(phrase(d, true))} · ${clock(dayEpoch(d.first))}–${clock(dayEpoch(d.last))}` : "No service"}</dd>`;
+  // e.g. "Every 20 min peak, 30 min other times" then "From Downtown Transit Center 6:00 AM–10:30 PM"
+  const row = (label, d) => `<dt>${label}</dt><dd>${d ? `${cap(phrase(d, true))}${(d.dirs || []).map((x) =>
+    `<span class="span-line">${clock(dayEpoch(x.first))}${x.trips > 1 ? `–${clock(dayEpoch(x.last))}` : ""} from ${esc(shortStop(x.from))}</span>`).join("")}` : "No service"}</dd>`;
   const wk = s.days.slice(0, 5);
   const onlyDays = s.weekday && wk.some(Boolean) && wk.filter(Boolean).length < 5 ? ` (${daysLabel([...wk, false, false])})` : "";
   return `<dl class="svc">${row("Weekdays" + onlyDays, s.weekday)}${row("Saturday", s.saturday)}${row("Sunday", s.sunday)}</dl>`;
 }
+const shortStop = (n) => n.replace(/^Downtown Transit Center.*$/i, "Downtown Transit Center").replace(/\s+(Bay|Berth)\s*\w*$/i, "");
 const dayEpoch = (secs) => {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
     .formatToParts(new Date()).map((x) => [x.type, x.value]));
@@ -839,6 +921,7 @@ const ICON = {
   shelter: svg('<path d="M3 9l9-5 9 5"/><path d="M5 8v12M19 8v12M8 15h8"/>'),
   seat: svg('<path d="M4 11h16M5 15h14M6 15v5M18 15v5M6 11V6M18 11V6"/>'),
   schedule: svg('<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>'),
+  check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
   pin: svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'),
   chevron: svg('<path d="M6 9l6 6 6-6"/>'),

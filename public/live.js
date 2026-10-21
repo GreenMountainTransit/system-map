@@ -2,6 +2,7 @@
 //   GMTLive.vehicles()            -> GeoJSON of live buses
 //   GMTLive.arrivals({ stop })    -> { stopId: [next 3 arrivals, all routes] }
 //   GMTLive.arrivals({ route })   -> { stopId: { directionId: [next 3 arrivals] } }
+//   GMTLive.arrivals({ stop, all: true }) -> { stopId: [every departure today, past ones marked] }
 // Arrivals combine the published schedule (data/ folder) with Swiftly's GTFS-realtime
 // trip updates: live predictions where Swiftly has them, scheduled times otherwise.
 (function () {
@@ -171,7 +172,7 @@
     return best === day ? tu : null;
   }
 
-  async function arrivals({ stop, route }) {
+  async function arrivals({ stop, route, all }) {
     const [meta, cal, stops] = await Promise.all([data("routes.json"), data("calendar.json"), data("stops.geojson")]);
     // Live predictions are optional: if Swiftly can't be reached, scheduled times still show.
     let tus = new Map(), live = true;
@@ -192,22 +193,25 @@
     const scheds = await Promise.all(routeIds.map((rid) => data(`sched/${encodeURIComponent(rid)}.json`).then((s) => [rid, s])));
     for (const [rid, sched] of scheds) {
       for (const day of days) for (const trip of sched) {
+        if (all && day.midnight > clock.midnight) continue; // "all times today" doesn't need tomorrow
         if (!day.services.has(trip.s)) continue;
         const tu = realtimeFor(tus.get(trip.t), trip, day, days, clock.now);
         for (let i = 0; i < trip.st.length - 1; i++) { // buses aren't boardable at their final stop
           const sid = trip.st[i][0];
           if (stop && sid !== stop) continue;
           const scheduled = day.midnight + trip.st[i][1];
-          if (scheduled < clock.now - 3 * 3600 || scheduled > clock.now + 30 * 3600) continue;
+          if (all) { if (scheduled < clock.midnight || scheduled >= clock.midnight + 86400 + 3 * 3600) continue; }
+          else if (scheduled < clock.now - 3 * 3600 || scheduled > clock.now + 30 * 3600) continue;
           const r = applyRealtime(tu, trip, i, scheduled, day.midnight);
-          if (!r || r.epoch < clock.now - 30) continue;
+          if (!r || (!all && r.epoch < clock.now - 30)) continue;
           (result[sid] ??= []).push({ route_id: rid, short_name: routeById[rid]?.short_name || rid, color: routeById[rid]?.color,
-            headsign: trip.h, direction: trip.d, time: r.epoch, live: r.live });
+            headsign: trip.h, direction: trip.d, time: r.epoch, live: r.live, past: r.epoch < clock.now - 30 });
         }
       }
     }
     const next = (list) => list.sort((a, b) => a.time - b.time).slice(0, COUNT);
     for (const sid in result) {
+      if (all) { result[sid].sort((a, b) => a.time - b.time); continue; }
       if (stop) { result[sid] = next(result[sid]); continue; }
       const byDir = {};
       for (const a of result[sid]) (byDir[a.direction] ??= []).push(a);
