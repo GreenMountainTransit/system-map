@@ -4,8 +4,9 @@
 //   GMTLive.arrivals({ route })   -> { stopId: { directionId: [next 3 arrivals] } }
 //   GMTLive.arrivals({ stop, all: true }) -> { stopId: [every departure today, past ones marked] }
 //   Add only: [routeId] to limit a stop's departures to certain routes (used on single-route pages).
-// Arrivals combine the published schedule (data/ folder) with Swiftly's GTFS-realtime
-// trip updates: live predictions where Swiftly has them, scheduled times otherwise.
+// Arrivals combine the published schedule (data/ folder) with Swiftly's live predictions for the stop
+// (its JSON predictions API, which browsers are allowed to call; the GTFS-realtime feed is not).
+// Live predictions replace scheduled times trip by trip; everything else stays scheduled.
 (function () {
   const AGENCY = "green-mountain";
   const API = `https://api.goswift.ly/real-time/${AGENCY}`;
@@ -136,6 +137,21 @@
     return out;
   }
 
+  // Swiftly predictions JSON -> [{ route, short, headsign, dir, trip, time }]. Read defensively, since
+  // fields vary a little between API versions.
+  function parsePredictions(body) {
+    const now = Date.now() / 1000, out = [];
+    const groups = body?.data?.predictionsData || body?.data?.predictions || [];
+    for (const g of groups) for (const dest of g.destinations || [g]) for (const p of dest.predictions || []) {
+      let t = p.time ?? p.predictionTime ?? (p.sec != null ? now + p.sec : p.min != null ? now + p.min * 60 : null);
+      if (t == null) continue;
+      if (t > 1e12) t /= 1000; // milliseconds
+      out.push({ route: String(g.routeId ?? dest.routeId ?? ""), short: g.routeShortName || "", headsign: dest.headsign || g.headsign || "",
+        dir: String(dest.directionId ?? ""), trip: p.tripId ? String(p.tripId) : null, time: Math.round(t) });
+    }
+    return out;
+  }
+
   // ---------- schedule + realtime arrivals ----------
   function localClock() {
     const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
@@ -202,10 +218,12 @@
 
   async function arrivals({ stop, route, all, only }) {
     const [meta, cal, stops] = await Promise.all([data("routes.json"), data("calendar.json"), data("stops.geojson")]);
-    // Live predictions are optional: if Swiftly can't be reached, scheduled times still show.
-    let tus = new Map(), live = true;
-    if (!KEY) live = false;
-    else try { tus = decodeTripUpdates(await swiftly("/gtfs-rt-trip-updates", "bytes")); } catch { live = false; }
+    // Live predictions (one stop at a time) are optional: if Swiftly can't be reached, scheduled times still show.
+    const tus = new Map();
+    let live = false, preds = [];
+    if (KEY && stop) {
+      try { preds = parsePredictions(await swiftly(`/predictions?stop=${encodeURIComponent(stop)}`, "json")); live = true; } catch {}
+    }
 
     let routeIds;
     if (route) routeIds = meta.stops[route] ? [route] : [];
@@ -234,11 +252,26 @@
           const r = applyRealtime(tu, trip, i, scheduled, day.midnight);
           if (!r || (!all && r.epoch < clock.now - 30)) continue;
           (result[sid] ??= []).push({ route_id: rid, short_name: routeById[rid]?.short_name || rid, color: routeById[rid]?.color,
-            headsign: trip.h, direction: trip.d, time: r.epoch, live: r.live, past: r.epoch < clock.now - 30 });
+            headsign: trip.h, direction: trip.d, time: r.epoch, live: r.live, past: r.epoch < clock.now - 30, trip: trip.t });
         }
       }
     }
-    const next = (list) => list.sort((a, b) => a.time - b.time).slice(0, COUNT);
+    // Swap in Swiftly's predicted times, matched by trip. Predictions for trips not in today's schedule
+    // (added or changed service) are kept too, as long as they're for a route we're showing.
+    if (stop && preds.length) {
+      const list = result[stop] || [];
+      for (const pr of preds) {
+        // The same trip ID runs every day: use the scheduled instance closest to the predicted time.
+        const a = pr.trip && list.filter((x) => x.trip === pr.trip && !x.live && Math.abs(x.time - pr.time) < 3 * 3600)
+          .sort((x, y) => Math.abs(x.time - pr.time) - Math.abs(y.time - pr.time))[0];
+        if (a) { a.time = pr.time; a.live = true; a.past = pr.time < clock.now - 30; continue; }
+        if (!routeIds.includes(pr.route)) continue;
+        list.push({ route_id: pr.route, short_name: routeById[pr.route]?.short_name || pr.short, color: routeById[pr.route]?.color,
+          headsign: pr.headsign, direction: pr.dir, time: pr.time, live: true, past: false, trip: pr.trip });
+      }
+      result[stop] = list;
+    }
+    const next = (list) => list.filter((a) => all || a.time >= clock.now - 30).sort((a, b) => a.time - b.time).slice(0, COUNT);
     for (const sid in result) {
       if (all) { result[sid].sort((a, b) => a.time - b.time); continue; }
       if (stop) { result[sid] = next(result[sid]); continue; }
