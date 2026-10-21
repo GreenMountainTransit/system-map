@@ -426,20 +426,18 @@ function addOverlay() {
 
 // Frequency tiers, Jarrett Walker style: how long you'd wait on each street, all routes combined.
 const FREQ = [
-  { tier: 1, color: "#d1352b", label: "Every 15 min or better" },
-  { tier: 2, color: "#2563b0", label: "Every 16–30 min" },
+  { tier: 1, color: "#d1352b", label: "Every 15–20 min" },
+  { tier: 2, color: "#2563b0", label: "Every 21–30 min" },
   { tier: 3, color: "#7aa7dc", label: "Every 31–60 min" },
   { tier: 4, color: "#8b979f", label: "Less than hourly", dashed: true },
 ];
 // Tier for the chosen time of week: 1 = every 15 min or better ... 4 = less than hourly; 0 = no service then.
-// h is the longest wait between buses (both directions). Tiers allow 2 minutes of leeway, because routes
-// sharing a street never line up to the minute: a 13/17-minute alternation still counts as every 15 minutes.
-const LEEWAY = 2;
-const tierOf = (h) => (h == null ? 0 : h <= 15 + LEEWAY ? 1 : h <= 30 + LEEWAY ? 2 : h <= 60 + LEEWAY ? 3 : 4);
+// h is the average time between buses on the street (all local routes combined, busier direction).
+const tierOf = (h) => (h == null ? 0 : h <= 20 ? 1 : h <= 30 ? 2 : h <= 60 ? 3 : 4);
 const freqHeadline = (h) => FREQ[tierOf(h) - 1].label;
-const waitText = (h) => `Longest wait between buses: ${h >= 120 ? `${Math.floor(h / 60)}+ hours` : `${h} min`}`;
+const waitText = (h) => (h >= 120 ? `About every ${Math.round(h / 60)} hours` : `About every ${h} min on average`);
 const tierExpr = () => { const h = ["get", "h_" + freqPeriod];
-  return ["case", ["==", h, null], 0, ["<=", h, 15 + LEEWAY], 1, ["<=", h, 30 + LEEWAY], 2, ["<=", h, 60 + LEEWAY], 3, 4]; };
+  return ["case", ["==", h, null], 0, ["<=", h, 20], 1, ["<=", h, 30], 2, ["<=", h, 60], 3, 4]; };
 function applyFreq() {
   if (!map.getLayer("freq-lines")) return;
   const t = tierExpr(), on = ["in", t, ["literal", [...freqTiers]]];
@@ -519,7 +517,7 @@ map.on("mousemove", (e) => {
     const per = FREQ_PERIODS.find((x) => x.id === freqPeriod);
     showTip(e.point, `<h3><span style="display:inline-block;width:18px;height:5px;border-radius:3px;background:${t.color}"></span>${freqHeadline(h)}</h3>
       <p style="margin:0">${waitText(h)}</p>
-      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${p.oneway ? "one direction" : "both directions"} · ${per.note}</p>`);
+      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${per.note}</p>`);
   } else if (f.layer.id === "buses") {
     const r = routes[p.route_id];
     highlight([p.route_id]);
@@ -571,7 +569,7 @@ map.on("click", (e) => {
     const h = p["h_" + freqPeriod], per = FREQ_PERIODS.find((x) => x.id === freqPeriod), many = String(p.routes).includes(",");
     html = `<div class="pop"><h2>${freqHeadline(h)}</h2>
       <p style="margin:0 0 4px;font-size:.86rem">${waitText(h)}</p>
-      <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${p.oneway ? "one direction" : "both directions"} · ${per.note}</p></div>`;
+      <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${per.note}</p></div>`;
   }
   openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "min(330px, 92vw)" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
   openPopup.on("close", () => { if (!openStopId) highlight([]); });
@@ -629,11 +627,11 @@ function buildSystemPanel() {
     <div class="scroll freq-legend">
       <div class="periods" role="radiogroup" aria-label="Time of day">${FREQ_PERIODS.map((x) =>
         `<button type="button" role="radio" data-period="${x.id}" aria-checked="${x.id === freqPeriod}">${x.short}</button>`).join("")}</div>
-      <p class="freq-intro">The longest you’d wait for a local bus on each street, <strong>${per.note}</strong>. Routes sharing a street, like Main Street in Burlington, are combined.</p>
+      <p class="freq-intro">How often a local bus comes on each street, <strong>${per.note}</strong>. Where routes share a street, like Main Street in Burlington or Market Street in South Burlington, their buses add up.</p>
       <ul class="tiers" aria-label="Filter by frequency">${FREQ.map((t) => `<li><button type="button" data-tier="${t.tier}" aria-pressed="${freqTiers.has(t.tier)}">
         <span class="swatch ${t.dashed ? "dashed" : ""}" style="--c:${t.color};--w:${[0, 7, 5, 3.5, 2.5][t.tier]}px"></span><span>${t.label}</span>
         <span class="tick" aria-hidden="true">${ICON.check}</span></button></li>`).join("")}</ul>
-      <p class="freq-note">Based on the longest wait between buses, with 2 minutes of leeway for routes that don’t line up exactly. Covers both directions: where one direction runs less often, the map shows that one. One-way loops show their single direction. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
+      <p class="freq-note">Approximate: based on the average number of buses each hour. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
     </div>` : `
     <div class="scroll">
       <div class="legend-bar"><span id="vis-count" aria-live="polite"></span>
@@ -810,7 +808,7 @@ function showStop(id, fly) {
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>
       <h2 id="sp-title" tabindex="-1">${esc(s.name)}</h2>
       <button type="button" class="sp-close" aria-label="Close stop details">×</button></div>
-    <div class="sp-body"><div class="pop"><p class="none">Loading arrivals…</p></div></div>`;
+    <div class="sp-body"><div class="pop"><h3 class="sp-sub">Next departures</h3><p class="none">Loading arrivals…</p></div></div>`;
   stopPanel.hidden = false;
   document.getElementById("wrap").classList.add("stop-open");
   stopPanel.querySelector(".sp-close").onclick = closeStop;
