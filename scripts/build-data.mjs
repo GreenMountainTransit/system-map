@@ -294,19 +294,13 @@ const freqFeatures = [];
       }
     }
   }
-  // ---- Never overstate frequency ----
-  // 1. Each direction's frequency is its LONGEST wait between buses in the time window, counting the
-  //    gaps from the window's start to the first bus and from the last bus to the window's end.
-  //    Two routes scheduled two minutes apart therefore count as one bus, not two.
-  const maxGap = (times, def) => {
-    let worst = 0;
-    for (const [h0, h1] of def.hours) {
-      const t = times.filter((x) => x >= h0 * 3600 && x < h1 * 3600).sort((a, b) => a - b);
-      if (!t.length) return null; // no bus at all in part of the window
-      const edges = [h0 * 3600, ...t, h1 * 3600];
-      for (let i = 1; i < edges.length; i++) worst = Math.max(worst, edges[i] - edges[i - 1]);
-    }
-    return Math.ceil(worst / 60);
+  // ---- Frequency = average time between buses ----
+  // Window minutes divided by the number of buses passing in the window (rounded). Generous by design:
+  // buses that run close together still count separately, and the busier direction is used.
+  const avgHeadway = (times, def) => {
+    let n = 0, minutes = 0;
+    for (const [h0, h1] of def.hours) { minutes += (h1 - h0) * 60; n += times.filter((x) => x >= h0 * 3600 && x < h1 * 3600).length; }
+    return n ? Math.round(minutes / n) : null;
   };
   // Frequency is measured by STREET, not by stop pair: every bus passing a point on the street counts,
   // whichever route it is and whichever stops it uses (routes on the same street often use different
@@ -335,10 +329,10 @@ const freqFeatures = [];
     const m = new Map();
     for (const [i, frac] of near) for (const [t, [t0, t1]] of directed[i].trips) if (!m.has(t)) m.set(t, t0 + (t1 - t0) * frac);
     const times = [...m.values()];
-    return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => [w, maxGap(times, def)]));
+    return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => [w, avgHeadway(times, def)]));
   };
   for (const [idx, d] of directed.entries()) {
-    const props = { oneway: true }, worst = {}, routesHere = new Set(d.routes);
+    const props = {}, perSample = Object.fromEntries(Object.keys(FREQ_WINDOWS).map((w) => [w, []])), routesHere = new Set(d.routes);
     for (const sm of samples[idx]) {
       // Nearest sample of every other segment within NEAR meters, split by direction.
       const same = new Map([[idx, sm.frac]]), opp = new Map(), best = new Map();
@@ -351,15 +345,18 @@ const freqFeatures = [];
         (dot > 0 ? same : opp).set(o.idx, o.frac);
       }
       const g = gapsAt(same), go = opp.size ? gapsAt(opp) : null;
-      if (opp.size) props.oneway = false;
       [...same.keys(), ...opp.keys()].forEach((i) => directed[i].routes.forEach((r) => routesHere.add(r)));
       for (const w of Object.keys(FREQ_WINDOWS)) {
-        // Both directions: the less frequent of the two. No bus in one direction at that time: not shown.
-        const v = g[w] == null ? null : go ? (go[w] == null ? null : Math.max(g[w], go[w])) : g[w];
-        worst[w] = worst[w] === undefined ? v : worst[w] == null || v == null ? null : Math.max(worst[w], v);
+        // No directionality: use whichever direction has more buses at this point.
+        const vals = [g[w], go?.[w]].filter((x) => x != null);
+        if (vals.length) perSample[w].push(Math.min(...vals));
       }
     }
-    for (const w of Object.keys(FREQ_WINDOWS)) props["h_" + w] = worst[w] ?? null;
+    // A segment's value is the middle of its sampled points (ignores odd spots where routes join or leave).
+    for (const w of Object.keys(FREQ_WINDOWS)) {
+      const v = perSample[w].sort((a, b) => a - b);
+      props["h_" + w] = v.length ? v[Math.floor((v.length - 1) / 2)] : null;
+    }
     if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
     props.routes = [...routesHere].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
     freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: d.coords } });
