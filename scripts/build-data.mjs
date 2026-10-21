@@ -119,7 +119,14 @@ for (const t of trips) {
   headsigns[t.trip_id] = t.trip_headsign || "";
 }
 
-// How often a route runs on a given day: departures at its busiest stop in its busiest direction.
+// How often a route runs on a given day, by time of day, measured at its busiest stop in its busiest direction.
+const PERIODS = { am: [6, 9], mid: [9, 15], pm: [15, 18], eve: [18, 30] }; // hours
+function headwayIn(times, [h0, h1]) {
+  const t = times.filter((x) => x >= h0 * 3600 && x < h1 * 3600);
+  if (t.length < 3) return null;
+  const gaps = t.slice(1).map((x, i) => x - t[i]).sort((a, b) => a - b);
+  return Math.max(5, Math.round(gaps[Math.floor(gaps.length / 2)] / 60 / 5) * 5);
+}
 function daySummary(sched, ymd, dow) {
   const on = servicesOn(ymd, dow);
   const running = sched.filter((x) => on.has(x.s));
@@ -128,17 +135,16 @@ function daySummary(sched, ymd, dow) {
   const inDir = running.filter((x) => x.d === dir);
   const refStop = mostCommon(inDir.flatMap((x) => x.st.slice(0, -1).map((s) => s[0])));
   const times = inDir.map((x) => x.st.find((s) => s[0] === refStop)?.[1]).filter((t) => t != null).sort((a, b) => a - b);
-  const all = running.map((x) => x.st[0][1]).sort((a, b) => a - b);
-  const daytime = times.filter((t) => t >= 7 * 3600 && t <= 19 * 3600);
-  let headway = null;
-  if (daytime.length >= 4) {
-    const gaps = daytime.slice(1).map((t, i) => t - daytime[i]).sort((a, b) => a - b);
-    headway = Math.max(5, Math.round(gaps[Math.floor(gaps.length / 2)] / 60 / 5) * 5);
-  }
-  return { trips: inDir.length, headway, first: all[0], last: running.map((x) => x.st[x.st.length - 1][1]).sort((a, b) => b - a)[0] };
+  const periods = Object.fromEntries(Object.entries(PERIODS).map(([k, w]) => [k, headwayIn(times, w)]));
+  return {
+    trips: inDir.length, headway: headwayIn(times, [7, 19]), periods,
+    first: running.map((x) => x.st[0][1]).sort((a, b) => a - b)[0],
+    last: running.map((x) => x.st[x.st.length - 1][1]).sort((a, b) => b - a)[0],
+  };
 }
 
 const service = {};
+const schedByRoute = new Map();
 for (const [routeId, list] of tripsByRoute) {
   const sched = list.map((t) => ({ t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0", st: byTrip.get(t.trip_id) }));
   fs.writeFileSync(path.join(OUT, "sched", `${encodeURIComponent(routeId)}.json`), JSON.stringify(sched));
@@ -160,6 +166,7 @@ for (const [routeId, list] of tripsByRoute) {
   }));
   const pick = (dows) => { for (const u of upcoming) if (dows.includes(u.dow)) { const s = daySummary(sched, u.ymd, u.dow); if (s) return s; } return null; };
   service[routeId] = { days, weekday: pick([0, 1, 2, 3, 4]), saturday: pick([5]), sunday: pick([6]) };
+  schedByRoute.set(routeId, sched);
 }
 
 // ---------- legend groups and descriptions ----------
@@ -207,6 +214,86 @@ for (const routeId of tripsByRoute.keys()) {
   if (!seen.size) for (const d of Object.values(routeStops[routeId])) // no shapes.txt: connect stops in order
     lineFeatures.push({ type: "Feature", properties: props,
       geometry: { type: "LineString", coordinates: d.stops.map((id) => stopById[id]).filter(Boolean).map((s) => [+s.stop_lon, +s.stop_lat]) } });
+}
+
+// ---------- frequency map: combined frequency on every street segment between stops ----------
+// Counts all routes together (except school trippers and shopping specials), so shared corridors
+// show their real combined frequency. Measured on a weekday, 9 AM to 3 PM.
+const FREQ_WINDOW = [9 * 3600, 15 * 3600];
+const freqDay = upcoming.find((u) => u.dow < 5 && [...schedByRoute.values()].some((sc) => { const on = servicesOn(u.ymd, u.dow); return sc.some((x) => on.has(x.s)); }));
+const freqFeatures = [];
+if (freqDay) {
+  const on = servicesOn(freqDay.ymd, freqDay.dow);
+  const tripShape = Object.fromEntries(trips.map((t) => [t.trip_id, t.shape_id]));
+  const segs = new Map(); // "a>b" -> { coords, window, day, routes:Set }
+  const sliceCache = new Map(); // shape|stops -> [coords per hop]
+  // Cut a shape into pieces between consecutive stops by projecting each stop onto it in order.
+  function hops(shapeId, stopIds) {
+    const key = shapeId + "|" + stopIds.join(",");
+    if (sliceCache.has(key)) return sliceCache.get(key);
+    const line = shapeId && shapePts.get(shapeId) ? shapePts.get(shapeId).slice().sort((a, b) => a[0] - b[0]).map(([, lo, la]) => [lo, la]) : null;
+    const pts = stopIds.map((id) => stopById[id] && [+stopById[id].stop_lon, +stopById[id].stop_lat]);
+    let out;
+    if (!line || line.length < 2 || pts.some((p) => !p)) out = pts.slice(1).map((p, i) => [pts[i], p].filter(Boolean));
+    else {
+      const k = Math.cos((pts[0][1] * Math.PI) / 180);
+      const proj = (p, from) => { // nearest point on the line at or after segment index `from`
+        let best = { d: Infinity, i: from, t: 0, pt: line[from] };
+        for (let i = from; i < line.length - 1; i++) {
+          const [ax, ay] = line[i], [bx, by] = line[i + 1];
+          const dx = (bx - ax) * k, dy = by - ay, px = (p[0] - ax) * k, py = p[1] - ay;
+          const L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, (px * dx + py * dy) / L)) : 0;
+          const d = (px - t * dx) ** 2 + (py - t * dy) ** 2;
+          if (d < best.d) best = { d, i, t, pt: [ax + (bx - ax) * t, ay + (by - ay) * t] };
+          if (best.d < 1e-9 && i > best.i + 40) break;
+        }
+        return best;
+      };
+      let prev = proj(pts[0], 0);
+      out = [];
+      for (let j = 1; j < pts.length; j++) {
+        const cur = proj(pts[j], prev.i);
+        const coords = [prev.pt, ...line.slice(prev.i + 1, cur.i + 1), cur.pt];
+        out.push(coords.map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]));
+        prev = cur;
+      }
+    }
+    sliceCache.set(key, out);
+    return out;
+  }
+  for (const [routeId, sched] of schedByRoute) {
+    const g = groupFor(routeById[routeId].route_short_name || routeId);
+    if (g === "school" || g === "shopping") continue;
+    for (const trip of sched) {
+      if (!on.has(trip.s)) continue;
+      const ids = trip.st.map((x) => x[0]);
+      const pieces = hops(tripShape[trip.t], ids);
+      for (let i = 0; i < ids.length - 1; i++) {
+        if (ids[i] === ids[i + 1]) continue;
+        const key = ids[i] + ">" + ids[i + 1];
+        if (!segs.has(key)) segs.set(key, { coords: pieces[i], window: 0, day: 0, routes: new Set() });
+        const sg = segs.get(key);
+        sg.day++; sg.routes.add(routeId);
+        if (trip.st[i][1] >= FREQ_WINDOW[0] && trip.st[i][1] < FREQ_WINDOW[1]) sg.window++;
+      }
+    }
+  }
+  // A street segment's frequency is its busier direction (one-way loops count fully).
+  const done = new Set();
+  const windowMin = (FREQ_WINDOW[1] - FREQ_WINDOW[0]) / 60;
+  for (const [key, sg] of segs) {
+    if (done.has(key)) continue;
+    const [a, b] = key.split(">"), back = segs.get(b + ">" + a);
+    done.add(key); if (back) done.add(b + ">" + a);
+    const windowTrips = Math.max(sg.window, back?.window || 0);
+    const routesHere = [...new Set([...sg.routes, ...(back?.routes || [])])];
+    const headway = windowTrips ? Math.round(windowMin / windowTrips) : null;
+    const tier = headway == null ? 4 : headway <= 15 ? 1 : headway <= 30 ? 2 : headway <= 60 ? 3 : 4;
+    if (!sg.coords || sg.coords.length < 2) continue;
+    freqFeatures.push({ type: "Feature",
+      properties: { headway, tier, routes: routesHere.map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ") },
+      geometry: { type: "LineString", coordinates: sg.coords } });
+  }
 }
 
 // ---------- amenities (amenities.csv, made by scripts/prepare-amenities.mjs) ----------
@@ -295,6 +382,7 @@ const routeList = [...tripsByRoute.keys()].map((id) => routeMeta(routeById[id]))
   (a.sort - b.sort) || a.short_name.localeCompare(b.short_name, undefined, { numeric: true }));
 
 write("routes.geojson", { type: "FeatureCollection", features: lineFeatures });
+write("frequency.geojson", { type: "FeatureCollection", features: freqFeatures });
 write("stops.geojson", { type: "FeatureCollection", features: stopFeatures });
 write("routes.json", { built: todayNY, groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
 write("calendar.json", cal);
@@ -304,4 +392,5 @@ const withAmenities = stopFeatures.filter((f) => amenities.has(f.properties.stop
 console.log(`Built ${routeList.length} routes (${lineFeatures.length} route patterns), ${stopFeatures.length} stops ` +
   `(${stopFeatures.filter((f) => f.properties.timepoint).length} timepoints), ${Object.keys(headsigns).length} trips`);
 console.log(amenitiesFile ? `Amenities: ${withAmenities} of ${stopFeatures.length} stops matched a row in ${path.basename(amenitiesFile)}` : "Amenities: none (no amenities.csv)");
+console.log(`Frequency map: ${freqFeatures.length} street segments` + (freqDay ? ` (weekday ${freqDay.ymd}, 9 AM–3 PM)` : " (no weekday service found)"));
 console.log(places ? `Nearby places: ${places.length} from OpenStreetMap` : "Nearby places: skipped");
