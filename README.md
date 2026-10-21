@@ -61,6 +61,7 @@ The **Frequency** view colors each street by how often a local bus comes there o
 
 - It's an average: the minutes in the time window divided by the number of buses, using whichever direction has more buses.
 - It's measured by street, not by stop, so routes sharing a street add up even where they use different stops (for example Routes 1 and 11 on Market Street).
+- Direction is ignored on the map: each street is drawn once, as a single line, whichever way the buses run.
 - Commuter/express, school and shopping routes are left out.
 
 The legend is clickable to show or hide each tier. Link straight to it with `?view=frequency`.
@@ -74,6 +75,23 @@ Not automatic: route descriptions and group assignments in `route-info.json`, st
 ## Nearby places
 
 Each build looks up restaurants and cafes, shops and pharmacies, and public restrooms within about 200 m of every stop from OpenStreetMap (one Overpass API query). If the lookup fails, the build continues and stops show without them; the next nightly build tries again. To improve the data, edit OpenStreetMap directly.
+
+## Hands-off running
+
+Once set up, nothing needs doing when GMT publishes a new GTFS: each night the workflow downloads the current feed and rebuilds everything as of that day (Vermont time). There are no hard-coded dates.
+
+Safeguards:
+- **Bad or expired feeds don't go live.** If the GTFS fails to download, has no routes or stops, or has no service in the coming 7 days (expired, or only future service), the build stops, the current site stays up, and GitHub emails the repo admins about the failed run. The run's log also warns when the feed will expire within two weeks.
+- **The nightly schedule stays on.** GitHub turns off scheduled workflows in public repos after 60 days without activity; the workflow's keepalive job adds an empty commit after 45 quiet days to prevent that.
+- **Live data degrades gracefully.** If Swiftly is down or rate-limited, the map shows scheduled times. If the nearby-places lookup fails, stops show without it.
+
+### Testing an older GTFS
+
+In **Actions → Build map data and publish → Run workflow**, fill in either or both boxes:
+- **GTFS link**: a .zip URL for another feed (for example an archived version from the Mobility Database).
+- **Build date**: build as if it were that day (YYYY-MM-DD), for a feed whose dates are in the past.
+
+This publishes the test build to the live site, so do it when traffic is low. Routes, stops, frequencies and service wording reflect the test feed and date, but arrival times always use the real clock, so stops may show no upcoming buses. When you're done, run the workflow again with both boxes empty to go back to the current feed.
 
 ## Keeping it current
 
