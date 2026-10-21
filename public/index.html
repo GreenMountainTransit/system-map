@@ -268,7 +268,7 @@ let picking = false; // false: the legend shows its defaults; true: the rider ha
 let freqData;
 const isPhone = () => innerWidth <= 640;
 let sheetOpen = !isPhone(), sheetState = "collapsed"; // phone sheet: collapsed or open (three-quarters of the screen)
-let freqPeriod = "mid", freqTiers = new Set([1, 2, 3, 4]), showAllTimes = false;
+let freqPeriod = "peak", freqTiers = new Set([1, 2, 3, 4]), showAllTimes = false;
 const FREQ_PERIODS = [
   { id: "peak", label: "Weekday rush hour", short: "Rush hour", note: "weekdays 7–9 AM and 4–6 PM" },
   { id: "mid", label: "Weekday midday", short: "Midday", note: "weekdays 9 AM–3 PM" },
@@ -530,6 +530,8 @@ map.on("click", (e) => {
   const b = isPhone() ? 12 : 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
   const freq = view === "frequency" && !routeParam;
   const f = map.queryRenderedFeatures(box, { layers: freq ? ["buses", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"] })[0];
+  // Clicking anywhere except another stop closes the stop panel.
+  if (f?.layer.id !== "stops") closeStop();
   if (!f) return;
   const p = f.properties;
   hideTip();
