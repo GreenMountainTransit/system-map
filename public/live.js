@@ -286,5 +286,7 @@
   globalThis.GMTLive = {
     configure({ key, dataDir }) { KEY = key; if (dataDir) DATA = dataDir; },
     vehicles, arrivals, decodeTripUpdates,
+    // shared with the trip planner (planner.js)
+    data, localClock, shiftYmd, servicesOn,
   };
 })();

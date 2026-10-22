@@ -8,6 +8,7 @@
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet">
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
 <script src="live.js"></script>
+<script src="planner.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
@@ -65,7 +66,41 @@
   .q-chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
   .q-chips .chip { min-width: 1.7rem; font-size: .68rem; padding: 0 4px; }
   .q-more { font-size: .7rem; color: var(--muted); align-self: center; }
+  .planner { padding: 12px 16px 16px; }
+  .pl-fields { display: grid; gap: 8px; }
+  .pl-field { position: relative; display: grid; grid-template-columns: 14px 1fr 36px; align-items: center; gap: 8px; }
+  .pl-field input { font: inherit; font-size: .88rem; padding: 8px 10px; border: 1px solid #c9d3cc; border-radius: 8px; min-width: 0; color: var(--ink); }
+  .pl-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 1px #c9d3cc; }
+  .pl-dot.from { background: #0a7d3b; } .pl-dot.to { background: #c2410c; }
+  .pl-me { width: 36px; height: 36px; border: 1px solid #c9d3cc; border-radius: 8px; background: #fff; color: var(--gmt); cursor: pointer; display: grid; place-items: center; }
+  .pl-me svg { width: 18px; height: 18px; }
+  .pl-list { position: absolute; left: 22px; right: 44px; top: calc(100% + 4px); z-index: 10; margin: 0; padding: 4px 0; list-style: none; background: #fff;
+    border-radius: 10px; box-shadow: 0 8px 28px rgba(20,40,30,.22); max-height: 300px; overflow-y: auto; }
+  .pl-list[hidden] { display: none; }
+  .pl-list [role=option] { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; font-size: .86rem; }
+  .pl-list [role=option][aria-selected=true] { background: #e8f1ec; }
+  .pl-sub { display: block; font-size: .72rem; color: var(--muted); }
+  .pl-when { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  .pl-when select, .pl-when input { font: inherit; font-size: .86rem; padding: 7px 8px; border: 1px solid #c9d3cc; border-radius: 8px; background: #fff; color: var(--ink); }
+  .pl-go { margin-left: auto; border: 0; border-radius: 8px; background: var(--gmt); color: #fff; font-weight: 600; font-size: .88rem; padding: 8px 16px; cursor: pointer; }
+  .pl-opts { list-style: none; margin: 10px 0 8px; padding: 0; display: grid; gap: 8px; }
+  .pl-opt { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .pl-opt.open { border-color: #9fb8a8; box-shadow: 0 1px 6px rgba(20,40,30,.1); }
+  .pl-card { width: 100%; display: grid; gap: 6px; text-align: left; background: #fff; border: 0; padding: 10px 12px; cursor: pointer; font: inherit; }
+  .pl-card.static { cursor: default; }
+  .pl-opt.open .pl-card { background: #f3f7f4; }
+  .pl-times { display: flex; justify-content: space-between; gap: 8px; font-size: .9rem; } .pl-times span { color: var(--muted); font-size: .82rem; }
+  .pl-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+  .pl-walk { display: inline-flex; align-items: center; gap: 1px; font-size: .74rem; color: var(--muted); } .pl-walk svg { width: 15px; height: 15px; }
+  .pl-sep { color: var(--faint); font-size: .8rem; }
+  .pl-meta { font-size: .76rem; color: var(--muted); }
+  .pl-live { margin: 0; } .pl-live:empty { display: none; }
+  .pl-steps { list-style: none; margin: 0; padding: 4px 12px 12px; display: grid; gap: 10px; font-size: .82rem; }
+  .pl-steps li { display: grid; grid-template-columns: 38px 1fr; gap: 8px; align-items: start; line-height: 1.4; }
+  .st-ico { display: grid; place-items: center; color: var(--muted); } .st-ico svg { width: 18px; height: 18px; }
+  .st-sub { display: block; color: var(--muted); font-size: .76rem; }
   .viewtoggle { display: flex; margin-top: 10px; background: var(--chip-bg); border-radius: 8px; padding: 3px; }
+  .viewtoggle button { white-space: nowrap; font-size: .8rem !important; padding: 6px 4px !important; }
   .viewtoggle button { flex: 1; border: 0; background: none; border-radius: 6px; padding: 6px 8px; font-size: .84rem; cursor: pointer; color: var(--muted); }
   .viewtoggle button[aria-pressed=true] { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
   .freq-legend { padding: 14px 16px; }
@@ -115,7 +150,9 @@
   .route-go:hover { background: #e3eee7; }
   .route-go svg { width: 18px; height: 18px; }
   input[type=checkbox] { accent-color: var(--gmt); margin: 0; width: 16px; height: 16px; }
-  .route-row { transition: opacity .15s; }
+  .route-row { transition: opacity .15s, background-color .15s; }
+  .route-row.sel { background: #e4ece6; box-shadow: inset 4px 0 0 var(--rc); }
+  .route-row.sel:hover, .route-row.sel.hl { background: #dae5dd; }
   .scroll.has-hl .route-row:not(.hl) { opacity: .38; }
   .route-row.off .chip { opacity: .45; } .route-row.off .rname { color: var(--muted); }
 
@@ -151,6 +188,9 @@
   #tip .more { color: var(--muted); margin: 6px 0 0; font-size: .76rem; }
 
   /* ---------- popup ---------- */
+  .ctrl-tip { position: absolute; z-index: 6; transform: translateY(-50%); background: var(--ink); color: #fff; font-size: .78rem; font-weight: 600;
+    padding: 6px 10px; border-radius: 6px; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+  .ctrl-tip[hidden] { display: none; }
   .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
   .mapboxgl-popup-content { font-family: inherit; padding: 14px 16px 12px; border-radius: 10px; box-shadow: 0 4px 20px rgba(20,40,30,.2); }
   .mapboxgl-popup-close-button { font-size: 20px; width: 28px; height: 28px; right: 4px; top: 4px; color: var(--muted); }
@@ -286,7 +326,8 @@ let openPopup = null, openStopId = null, routeArrivals = {}, activeDir = null;
 let basemap = BASEMAPS[0];
 let liveBusesOn = true; // riders can switch live buses off; remembered on their device
 try { liveBusesOn = localStorage.getItem("gmt-live-buses") !== "off"; } catch {}
-let view = new URLSearchParams(location.search).get("view") === "frequency" ? "frequency" : "routes";
+let view = ["frequency", "plan"].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
+const planState = { from: null, to: null, when: "now", time: "", result: null, selected: 0, live: {} }; // trip planner
 let svOpen = false, svCam = null; // Street View section open?  camera marker on the map
 let picking = false; // false: the legend shows its defaults; true: the rider has picked specific routes
 let freqData;
@@ -334,7 +375,43 @@ map.addControl({
   onRemove() {},
 }, "top-right"); // added first, so it sits in the corner with zoom and locate below it
 map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
-map.addControl(new mapboxgl.GeolocateControl({ showUserHeading: true }), "top-right");
+const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
+map.addControl(geolocate, "top-right");
+// Hover label on the locate button. Mapbox adds the button a moment after the map starts, so listen on
+// the page rather than the button itself.
+{
+  const label = "Click to see service near you";
+  const tipEl = document.createElement("div"); tipEl.className = "ctrl-tip"; tipEl.textContent = label; tipEl.hidden = true;
+  document.getElementById("wrap").appendChild(tipEl);
+  document.addEventListener("mouseover", (e) => {
+    const btn = e.target.closest?.(".mapboxgl-ctrl-geolocate");
+    if (!btn) { tipEl.hidden = true; return; }
+    btn.removeAttribute("title"); btn.setAttribute("aria-label", label);
+    const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect();
+    tipEl.hidden = false; tipEl.style.top = (r.top - w.top + r.height / 2) + "px"; tipEl.style.right = (w.right - r.left + 8) + "px";
+  });
+  document.addEventListener("click", (e) => { if (e.target.closest?.(".mapboxgl-ctrl-geolocate")) tipEl.hidden = true; });
+}
+geolocate.on("geolocate", (e) => {
+  const here = [e.coords.longitude, e.coords.latitude];
+  if (view === "plan") { planState.from = { c: here, label: "My location" }; buildSystemPanel(); planTrip(); return; }
+  const near = nearestStop(here);
+  if (!near) { document.getElementById("announce").textContent = "There are no GMT stops within 3 km of you."; return; }
+  setTimeout(() => {
+    showStop(near.stop_id);
+    const b = new mapboxgl.LngLatBounds(here, here).extend(near.coords);
+    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
+  }, 400); // after the map has moved to the rider
+});
+function nearestStop(c, maxM = 3000) {
+  let best = null, bestM = maxM;
+  const k = Math.cos((c[1] * Math.PI) / 180);
+  for (const s of Object.values(stopsById)) {
+    const m = Math.hypot((s.coords[0] - c[0]) * k, s.coords[1] - c[1]) * 111320;
+    if (m < bestM) { bestM = m; best = s; }
+  }
+  return best;
+}
 
 
 // Only poll while someone can see the map.
@@ -430,6 +507,18 @@ function addOverlay() {
   add({ id: "buses", type: "symbol", source: "buses",
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
       "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop] } }, "top"); // local buses drawn last (on top)
+  // Trip planner: the chosen trip's rides (route colors), walks (dashed) and start/end points.
+  if (!map.getSource("plan")) map.addSource("plan", { type: "geojson", data: planGeo() });
+  add({ id: "plan-casing", type: "line", source: "plan", filter: ["==", ["get", "kind"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#fff", "line-width": width(7, 13) } }, "top");
+  add({ id: "plan-ride", type: "line", source: "plan", filter: ["==", ["get", "kind"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": ["get", "color"], "line-width": width(4, 8) } }, "top");
+  add({ id: "plan-walk", type: "line", source: "plan", filter: ["==", ["get", "kind"], "walk"], layout: { "line-cap": "round" },
+    paint: { "line-color": "#46524b", "line-width": width(2.5, 4), "line-dasharray": [0.1, 2] } }, "top");
+  add({ id: "plan-stops", type: "circle", source: "plan", filter: ["==", ["get", "kind"], "stop"],
+    paint: { "circle-radius": width(4, 7), "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": ["get", "color"] } }, "top");
+  add({ id: "plan-ends", type: "circle", source: "plan", filter: ["==", ["get", "kind"], "end"],
+    paint: { "circle-radius": width(7, 10), "circle-color": ["get", "color"], "circle-stroke-width": 3, "circle-stroke-color": "#fff" } }, "top");
   // Street View camera marker: where the street photo is taken from, pointing at the stop.
   if (!map.hasImage("sv-cone")) map.addImage("sv-cone", coneImage(), { pixelRatio: 2 });
   if (!map.getSource("sv")) map.addSource("sv", { type: "geojson", data: svData() });
@@ -467,10 +556,12 @@ function applyFreq() {
 }
 function applyView() {
   if (!map.getLayer("route-lines")) return;
-  const freq = view === "frequency" && !routeParam;
-  ["freq-casing", "freq-lines", "freq-low"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "visible" : "none"));
-  ["route-glow", "route-casing", "route-lines", "route-arrows"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible"));
-  ["stops", "stop-selected", "timepoint-labels"].forEach((l) => map.setLayoutProperty(l, "visibility", freq ? "none" : "visible")); // the frequency map is about streets, not stops
+  const freq = view === "frequency" && !routeParam, plan = view === "plan" && !routeParam, routesOn = !freq && !plan;
+  const vis = (on) => (on ? "visible" : "none");
+  ["freq-casing", "freq-lines", "freq-low"].forEach((l) => map.setLayoutProperty(l, "visibility", vis(freq)));
+  ["route-glow", "route-casing", "route-lines", "route-arrows"].forEach((l) => map.setLayoutProperty(l, "visibility", vis(routesOn)));
+  ["stops", "stop-selected", "timepoint-labels"].forEach((l) => map.setLayoutProperty(l, "visibility", vis(routesOn))); // the frequency map is about streets, not stops
+  PLAN_LAYERS.forEach((l) => map.getLayer(l) && map.setLayoutProperty(l, "visibility", vis(plan)));
   applyFreq();
   applyFilters();
 }
@@ -492,6 +583,10 @@ function applyFilters() {
   map.setFilter("stops", stopFilter);
   map.setFilter("timepoint-labels", ["all", stopFilter, ["==", ["get", "timepoint"], true]]);
   map.setFilter("buses", onRoute);
+  if (view === "plan" && !routeParam) { // trip planner: only buses on the chosen trip's routes
+    const tripRoutes = selectedOption()?.legs?.filter((l) => l.kind === "ride").map((l) => l.route) || [];
+    map.setFilter("buses", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
+  }
   // While a route is hovered, everything else steps back: other lines, their casings and their buses.
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
   map.setPaintProperty("route-lines", "line-opacity", any ? ["case", isHl, 1, 0.2] : 1);
@@ -557,6 +652,14 @@ function hideTip() { tip.hidden = true; }
 
 map.on("click", (e) => {
   if (!map.getLayer("route-lines")) return;
+  if (view === "plan" && !routeParam) { // clicking the map sets From, then To
+    const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
+    const place = { c, label: near ? `Near ${near.name}` : "Point on map" };
+    if (!planState.from || (planState.from && planState.to)) { planState.from = place; if (planState.to && planState.from === place) planState.to = null; }
+    else planState.to = place;
+    buildSystemPanel(); planTrip();
+    return;
+  }
   const b = isPhone() ? 12 : 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
   const freq = view === "frequency" && !routeParam;
   const f = map.queryRenderedFeatures(box, { layers: freq ? ["buses", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"] })[0];
@@ -599,6 +702,7 @@ function tick(force) {
   refreshBuses();
   if (routeParam) refreshRouteArrivals();
   if (openStopId) refreshPopup();
+  if (view === "plan" && planState.result?.options?.length) checkLive();
 }
 setInterval(() => tick(), REFRESH_MS);
 
@@ -662,14 +766,15 @@ function buildSystemPanel() {
       </section>`).join("")}
     </div>`;
   panel(`
-    <header>${toggleBtn("Routes")}<h1>${view === "frequency" ? "Local route weekday frequency" : "All routes and live buses"}</h1>
+    <header>${toggleBtn("Routes")}<h1>${view === "frequency" ? "Local route weekday frequency" : view === "plan" ? "Plan a trip" : "All routes and live buses"}</h1>
       ${statusRow()}
       <div class="viewtoggle" role="group" aria-label="Map view">
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
         <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
+        <button type="button" data-view="plan" aria-pressed="${view === "plan"}">Trip planner</button>
       </div>
-      ${view === "frequency" ? "" : searchBox(true)}</header>
-    ${legend}`, view !== "frequency");
+      ${view === "routes" ? searchBox(true) : ""}</header>
+    ${view === "plan" ? plannerHtml() : legend}`, view === "routes");
   document.querySelectorAll(".viewtoggle button").forEach((b) => b.onclick = () => setView(b.dataset.view));
   document.querySelectorAll("[data-period]").forEach((b) => b.onclick = () => { freqPeriod = b.dataset.period; buildSystemPanel(); applyFreq(); });
   document.querySelectorAll("[data-tier]").forEach((b) => b.onclick = () => {
@@ -680,6 +785,7 @@ function buildSystemPanel() {
     applyFreq();
   });
   refreshBuses();
+  if (view === "plan") { wirePlanner(); return; }
   if (view === "frequency") return;
 
   const syncGroups = () => byGroup.forEach((g) => {
@@ -688,6 +794,7 @@ function buildSystemPanel() {
   });
   const syncRows = () => document.querySelectorAll(".route-row").forEach((row) => {
     const off = hidden.has(row.dataset.route); row.classList.toggle("off", off); row.querySelector("input").checked = !off;
+    row.classList.toggle("sel", picking && !off); // routes the rider picked get a soft darker highlight
   });
   const syncCount = () => {
     const n = Object.keys(routes).length - hidden.size, el = document.getElementById("vis-count");
@@ -727,10 +834,10 @@ function buildSystemPanel() {
 function setView(v) {
   if (v === view) return;
   view = v;
-  const u = new URL(location.href); v === "frequency" ? u.searchParams.set("view", "frequency") : u.searchParams.delete("view");
+  const u = new URL(location.href); v !== "routes" ? u.searchParams.set("view", v) : u.searchParams.delete("view");
   history.replaceState(null, "", u);
   hideTip(); highlight([]);
-  if (v === "frequency") { openPopup?.remove(); closeStop(); }
+  if (v !== "routes") { openPopup?.remove(); closeStop(); }
   buildSystemPanel(); applyView();
 }
 // Show just one route (from search), the same as a first tap in the legend.
@@ -751,7 +858,7 @@ function fitVisible() {
 function goHome() { map.fitBounds(HOME_BOUNDS, { padding: panelPad(), duration: reduceMotion ? 0 : 600 }); }
 function routeRow(id) {
   const r = routes[id];
-  return `<li class="route-row" data-route="${esc(id)}">
+  return `<li class="route-row" data-route="${esc(id)}" style="--rc:${esc(r.color)}">
     <input type="checkbox" id="cb-${esc(id)}" data-route="${esc(id)}" aria-describedby="d-${esc(id)}">
     <label for="cb-${esc(id)}">${chip(r)}<span class="rname">${esc(r.long_name)}</span>
       <span class="rfreq">${esc(freqText(r))}<span data-live="${esc(id)}"></span></span></label>
@@ -917,6 +1024,186 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
     : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
   return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${sv}${about}
     ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
+}
+
+// ---------- trip planner ----------
+const PLAN_LAYERS = ["plan-casing", "plan-ride", "plan-walk", "plan-stops", "plan-ends"];
+const selectedOption = () => planState.result?.options?.[planState.selected] || null;
+function plannerHtml() {
+  const v = (p) => esc(p?.label || "");
+  return `<div class="scroll planner">
+    <div class="pl-fields">
+      <div class="pl-field"><span class="pl-dot from" aria-hidden="true"></span><label for="pl-from" class="sr-only">From</label>
+        <input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: address, place or stop" value="${v(planState.from)}" autocomplete="off">
+        <button type="button" class="pl-me" id="pl-me" title="Use my location" aria-label="Use my location">${ICON.locate}</button>
+        <ul id="pl-from-list" class="pl-list" role="listbox" hidden></ul></div>
+      <div class="pl-field"><span class="pl-dot to" aria-hidden="true"></span><label for="pl-to" class="sr-only">To</label>
+        <input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: address, place or stop" value="${v(planState.to)}" autocomplete="off">
+        <button type="button" class="pl-me" id="pl-swap" title="Swap From and To" aria-label="Swap From and To">${ICON.swap}</button>
+        <ul id="pl-to-list" class="pl-list" role="listbox" hidden></ul></div>
+    </div>
+    <div class="pl-when">
+      <label for="pl-when" class="sr-only">When</label>
+      <select id="pl-when"><option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option><option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at…</option></select>
+      <input type="time" id="pl-time" value="${esc(planState.time)}" aria-label="Departure time" ${planState.when === "at" ? "" : "hidden"}>
+      <button type="button" id="pl-go" class="pl-go">Plan trip</button>
+    </div>
+    <p class="legend-hint">Or click the map to set where you’re starting, then where you’re going.</p>
+    <div id="pl-results" aria-live="polite">${planResultsHtml()}</div>
+  </div>`;
+}
+function wirePlanner() {
+  planCombobox("from"); planCombobox("to");
+  document.getElementById("pl-me").onclick = () => {
+    if (!navigator.geolocation) return;
+    document.getElementById("pl-from").value = "Finding your location…";
+    navigator.geolocation.getCurrentPosition(
+      (p) => { planState.from = { c: [p.coords.longitude, p.coords.latitude], label: "My location" }; buildSystemPanel(); planTrip(); },
+      () => { document.getElementById("pl-from").value = ""; document.getElementById("announce").textContent = "Couldn’t get your location."; });
+  };
+  document.getElementById("pl-swap").onclick = () => { [planState.from, planState.to] = [planState.to, planState.from]; buildSystemPanel(); planTrip(); };
+  document.getElementById("pl-when").onchange = (e) => {
+    planState.when = e.target.value;
+    document.getElementById("pl-time").hidden = planState.when !== "at";
+    if (planState.when === "at" && !planState.time) { const d = new Date(Date.now() + 15 * 60000); document.getElementById("pl-time").value = planState.time = d.toTimeString().slice(0, 5); }
+  };
+  document.getElementById("pl-time").onchange = (e) => (planState.time = e.target.value);
+  document.getElementById("pl-go").onclick = () => planTrip(true);
+  wirePlanResults();
+}
+// Address search: GMT stops (instant) plus places and addresses from Mapbox's geocoder.
+function planCombobox(which) {
+  const input = document.getElementById("pl-" + which), list = document.getElementById(`pl-${which}-list`);
+  let items = [], active = -1, timer = null, seq = 0;
+  const close = () => { list.hidden = true; list.innerHTML = ""; input.setAttribute("aria-expanded", "false"); items = []; active = -1; };
+  const render = () => {
+    list.innerHTML = items.length ? items.map((it, i) => `<li role="option" id="pl-${which}-${i}" data-i="${i}" aria-selected="${i === active}">
+      <span class="q-pin">${it.stop ? ICON.pin : ICON.place}</span><span class="q-name">${esc(it.label)}${it.sub ? `<span class="pl-sub">${esc(it.sub)}</span>` : ""}</span></li>`).join("")
+      : `<li class="q-empty" role="presentation">No matches</li>`;
+    list.hidden = false; input.setAttribute("aria-expanded", "true");
+  };
+  const choose = (i) => { const it = items[i]; if (!it) return; planState[which] = { c: it.c, label: it.label }; input.value = it.label; close(); input.blur(); planTrip(); };
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase(), mine = ++seq;
+    planState[which] = null;
+    if (q.length < 2) return close();
+    const stopHits = Object.values(stopsById).filter((s) => s.name.toLowerCase().includes(q)).slice(0, 4)
+      .map((s) => ({ c: s.coords, label: s.name, sub: "Bus stop", stop: true }));
+    items = stopHits; active = items.length ? 0 : -1; render();
+    clearTimeout(timer);
+    if (q.length < 3) return;
+    timer = setTimeout(async () => {
+      try {
+        const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(input.value)}&proximity=-73.2,44.48&bbox=-73.45,44.25,-72.55,44.95&country=us&limit=5&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
+        const res = await (await fetch(url)).json();
+        if (mine !== seq) return;
+        const places = (res.features || []).map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
+        items = [...stopHits, ...places]; if (active < 0 && items.length) active = 0; render();
+      } catch {}
+    }, 250);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && items.length) { active = (active + 1) % items.length; render(); e.preventDefault(); }
+    else if (e.key === "ArrowUp" && items.length) { active = (active - 1 + items.length) % items.length; render(); e.preventDefault(); }
+    else if (e.key === "Enter") { if (active >= 0) choose(active); e.preventDefault(); }
+    else if (e.key === "Escape") close();
+  });
+  input.addEventListener("blur", () => setTimeout(close, 150));
+  list.addEventListener("mousedown", (e) => { const li = e.target.closest("[role=option]"); if (li) { e.preventDefault(); choose(+li.dataset.i); } });
+}
+function planDepart() {
+  if (planState.when !== "at" || !planState.time) return Math.floor(Date.now() / 1000);
+  const [h, m] = planState.time.split(":").map(Number);
+  return dayEpoch(h * 3600 + m * 60);
+}
+async function planTrip(force) {
+  const out = () => document.getElementById("pl-results");
+  drawPlan();
+  if (!planState.from || !planState.to) { if (force && out()) out().innerHTML = `<p class="none">Choose where you’re starting and where you’re going.</p>`; return; }
+  if (out()) out().innerHTML = `<p class="none">Finding trips…</p>`;
+  try {
+    planState.result = await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart() });
+  } catch (err) { planState.result = { options: [], error: true }; }
+  planState.selected = 0; planState.live = {};
+  if (out()) { out().innerHTML = planResultsHtml(); wirePlanResults(); }
+  drawPlan(true); applyFilters(); checkLive();
+}
+// Check the first bus of the shown trips against Swiftly's live predictions (one stop each).
+async function checkLive() {
+  const opts = planState.result?.options || [];
+  for (const [i, o] of opts.slice(0, 3).entries()) {
+    if (!liveReady) break;
+    const r = await GMTPlanner.liveFirstBus(o);
+    if (planState.result?.options?.[i] !== o) return; // a new search replaced these
+    planState.live[i] = r;
+    const el = document.querySelector(`[data-live-for="${i}"]`); if (el) el.innerHTML = liveLine(o, r);
+  }
+}
+function liveLine(o, r) {
+  const ride = o.legs.find((l) => l.kind === "ride");
+  if (r?.live) {
+    const late = Math.round(r.delay / 60);
+    return `<span class="dot"></span>Route ${esc(ride.short)} leaves ${esc(ride.fromName)} ${when(r.dep) === "Due" ? "now" : "in " + when(r.dep)}${late >= 2 ? ` · ${late} min late` : late <= -2 ? ` · ${-late} min early` : " · on time"} (live)`;
+  }
+  return r ? `Scheduled times${r.feed === false ? " (live predictions unavailable)" : ""}` : "";
+}
+const dur = (secs) => { const m = Math.round(secs / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr ${m % 60 ? (m % 60) + " min" : ""}`.trim(); };
+function planResultsHtml() {
+  const r = planState.result;
+  if (!r) return "";
+  if (!r.options.length && !r.walkOnly) return `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again." : "No bus trips found for that time. Try a later time, or a starting point closer to a GMT route."}</p>`;
+  const cards = r.options.map((o, i) => {
+    const chips = o.legs.map((l) => l.kind === "walk" ? `<span class="pl-walk">${ICON.walk}${Math.max(1, Math.round(l.secs / 60))}</span>`
+      : `<span class="chip" style="background:${esc(l.color)};color:${esc(l.text)}">${esc(l.short)}</span>`).join(`<span class="pl-sep">›</span>`);
+    const open = i === planState.selected;
+    return `<li class="pl-opt ${open ? "open" : ""}"><button type="button" class="pl-card" data-opt="${i}" aria-expanded="${open}">
+        <span class="pl-times"><strong>${clock(o.depart)} – ${clock(o.arrive)}</strong><span>${dur(o.arrive - o.depart)}</span></span>
+        <span class="pl-chips">${chips}</span>
+        <span class="pl-meta">${o.rides === 1 ? "No transfers" : `${o.rides - 1} transfer${o.rides > 2 ? "s" : ""}`}</span>
+        <span class="pl-live src-line ${planState.live[i]?.live ? "live" : ""}" data-live-for="${i}">${liveLine(o, planState.live[i])}</span>
+      </button>${open ? `<ol class="pl-steps">${stepsHtml(o)}</ol>` : ""}</li>`;
+  }).join("");
+  const walk = r.walkOnly ? `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span>
+      <span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles. It may be quicker than waiting for a bus.</span></div></li>` : "";
+  return `<ul class="pl-opts">${cards}${walk}</ul>
+    <p class="src">Trips use GMT’s timetable with walking up to about 10 minutes and at least 2 minutes to transfer. The first bus is checked against live predictions.</p>`;
+}
+function stepsHtml(o) {
+  const last = o.legs.length - 1;
+  return o.legs.map((l, i) => l.kind === "walk"
+    ? `<li class="st-walk"><span class="st-ico">${ICON.walk}</span><span>Walk ${dur(l.secs)} to ${esc(i === last ? planState.to.label : l.toName)}</span></li>`
+    : `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
+        <span><strong>${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
+        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${clock(l.arr)}</span></span></li>`).join("");
+}
+function wirePlanResults() {
+  document.querySelectorAll("[data-opt]").forEach((b) => b.onclick = () => {
+    planState.selected = +b.dataset.opt;
+    document.getElementById("pl-results").innerHTML = planResultsHtml(); wirePlanResults();
+    drawPlan(true); applyFilters();
+  });
+}
+function planGeo() {
+  const f = [], o = selectedOption();
+  if (o) for (const l of o.legs) {
+    if (l.kind === "walk") f.push({ type: "Feature", properties: { kind: "walk" }, geometry: { type: "LineString", coordinates: [l.from, l.to] } });
+    else {
+      f.push({ type: "Feature", properties: { kind: "ride", color: l.color }, geometry: { type: "LineString", coordinates: l.path } });
+      for (const c of [l.path[0], l.path[l.path.length - 1]]) f.push({ type: "Feature", properties: { kind: "stop", color: l.color }, geometry: { type: "Point", coordinates: c } });
+    }
+  }
+  if (planState.from) f.push({ type: "Feature", properties: { kind: "end", color: "#0a7d3b" }, geometry: { type: "Point", coordinates: planState.from.c } });
+  if (planState.to) f.push({ type: "Feature", properties: { kind: "end", color: "#c2410c" }, geometry: { type: "Point", coordinates: planState.to.c } });
+  return { type: "FeatureCollection", features: f };
+}
+function drawPlan(fit) {
+  const geo = planGeo();
+  map.getSource("plan")?.setData(geo);
+  if (fit && geo.features.length) {
+    const b = new mapboxgl.LngLatBounds();
+    geo.features.forEach((ft) => (ft.geometry.type === "Point" ? [ft.geometry.coordinates] : ft.geometry.coordinates).forEach((c) => b.extend(c)));
+    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
+  }
 }
 
 // ---------- Street View (collapsed until opened; nothing loads before that) ----------
@@ -1196,6 +1483,10 @@ const ICON = {
   shelter: svg('<path d="M3 9l9-5 9 5"/><path d="M5 8v12M19 8v12M8 15h8"/>'),
   seat: svg('<path d="M4 11h16M5 15h14M6 15v5M18 15v5M6 11V6M18 11V6"/>'),
   schedule: svg('<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>'),
+  locate: svg('<circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/>'),
+  swap: svg('<path d="M8 4v14M8 4L4.5 7.5M8 4l3.5 3.5M16 20V6M16 20l-3.5-3.5M16 20l3.5-3.5"/>'),
+  walk: svg('<circle cx="13" cy="4" r="1.8" fill="currentColor" stroke="none"/><path d="M10 21l2-6 2.5 2.5V21M8 12l2.5-4h3l2 3.5 2.5 1M12.5 8l-1 5"/>'),
+  place: svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>'),
   check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
   pin: svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'),
