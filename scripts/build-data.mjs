@@ -507,7 +507,9 @@ async function loadRidership() {
   if (process.env.RIDERSHIP_FILE) return JSON.parse(fs.readFileSync(process.env.RIDERSHIP_FILE, "utf8")); // for testing
   const rows = [];
   for (let offset = 0; offset < 500000; offset += 1000) {
-    const q = new URLSearchParams({ where: "1=1", outFields: "date,year,month,stop_id,total_boardings", returnGeometry: "false",
+    // Rows with routes_token "|0|" are the layer's all-routes totals (used by the AGOL dashboard); skip them so
+    // boardings aren't counted twice. They're also filtered again below in case this filter is ignored.
+    const q = new URLSearchParams({ where: "routes_token IS NULL OR routes_token <> '|0|'", outFields: "date,year,month,route,routes_token,stop_id,total_boardings", returnGeometry: "false",
       orderByFields: "ObjectId", resultOffset: String(offset), resultRecordCount: "1000", f: "json" });
     const res = await fetch(`${RIDERSHIP.layer}/query?${q}`, { signal: AbortSignal.timeout(60000) });
     const body = await res.json();
@@ -528,12 +530,14 @@ try {
     if (/^\d{4}-\d{2}/.test(String(r.month || ""))) return String(r.month).slice(0, 7);
     return null;
   };
-  const months = [...new Set(rows.map(monthKey).filter(Boolean))].sort(); // every month, for the "All" view
+  const isSummary = (r) => String(r.routes_token ?? "").trim() === "|0|" || Number(r.route) === 0;
+  const months = [...new Set(rows.filter((r) => !isSummary(r)).map(monthKey).filter(Boolean))].sort(); // every month, for the "All" view
   const mi = new Map(months.map((m, i) => [m, i]));
   const byStop = {};
   for (const r of rows) {
     const m = mi.get(monthKey(r)), sid = r.stop_id == null ? null : String(r.stop_id), n = Number(r.total_boardings) || 0;
     if (m == null || !sid) continue;
+    if (String(r.routes_token ?? "").trim() === "|0|" || Number(r.route) === 0) continue; // all-routes summary row, not real boardings
     const st = (byStop[sid] ??= { t: Array(months.length).fill(0) });
     st.t[m] += n; // stop-level totals only: route-level numbers are not published
   }
