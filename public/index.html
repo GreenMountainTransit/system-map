@@ -15,7 +15,7 @@
   :root {
     --ink: #1c2a22; --muted: #56655c; --faint: #8a978f; --panel: #fff; --line: #e1e7e3; --hover: #f1f5f2;
     --gmt: #00703c; --focus: #0b5cad; --live: #0a7d3b; --warn: #a3361b; --chip-bg: #eef3ef;
-    --panel-w: 330px;
+    --panel-w: 300px; --stop-w: 320px;
     font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   html, body { margin: 0; height: 100%; color: var(--ink); }
@@ -230,7 +230,7 @@
   .pop-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 8px; }
   .pop-actions button, .pop-actions a { background: none; border: 0; padding: 0; font: inherit; font-size: .82rem; font-weight: 600; color: var(--gmt); text-decoration: none; cursor: pointer; }
   /* stop details: right-hand panel on desktop */
-  #stop-panel { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 4; width: 360px; display: flex; flex-direction: column;
+  #stop-panel { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 4; width: var(--stop-w); display: flex; flex-direction: column;
     background: #fff; border-radius: 12px; box-shadow: 0 2px 16px rgba(20,40,30,.18); overflow: hidden; }
   #stop-panel[hidden] { display: none; }
   .sp-head { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 8px; padding: 14px 12px 10px 16px; border-bottom: 1px solid var(--line); }
@@ -286,7 +286,9 @@
   .sv-note { margin: 6px 0 0; font-size: .74rem; color: var(--muted); line-height: 1.4; }
   .sv-note a { color: var(--gmt); font-weight: 600; white-space: nowrap; }
   .sp-sub { margin: 0 0 6px; font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-  #wrap.stop-open .mapboxgl-ctrl-top-right, #wrap.stop-open .mapboxgl-ctrl-bottom-right { right: 372px; } /* keep controls and the Mapbox logo visible */
+  #wrap.stop-open .mapboxgl-ctrl-top-right, #wrap.stop-open .mapboxgl-ctrl-bottom-right { right: calc(var(--stop-w) + 12px); } /* keep controls and the Mapbox logo visible */
+  /* Narrower still in small embeds, so the map keeps room between the panels. */
+  @media (min-width: 641px) and (max-width: 1100px) { :root { --panel-w: 272px; --stop-w: 290px; } }
   .mapboxgl-ctrl-top-right, .mapboxgl-ctrl-bottom-right { transition: right .2s; }
   #toggle { display: none; }
   @media (max-width: 640px) {
@@ -359,7 +361,7 @@ GMTLive.configure({ key: liveReady ? SWIFTLY_KEY : "", dataDir: DIR });
 
 let routes = {}, groups = [], routeStops = {}, stopsById = {}, linesData, stopsData;
 let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "FeatureCollection", features: [] };
-let openPopup = null, openStopId = null, routeArrivals = {}, activeDir = null;
+let openPopup = null, openStopId = null, routeArrivals = {}, routeArrivalsLoaded = false, activeDir = null;
 let basemap = BASEMAPS[0];
 let liveBusesOn = true; // riders can switch live buses off; remembered on their device
 try { liveBusesOn = localStorage.getItem("gmt-live-buses") !== "off"; } catch {}
@@ -385,7 +387,8 @@ const isSunday = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York"
 const panelPad = () => isPhone()
   ? { top: 60, left: 24, right: 56, bottom: ((sheetState === "collapsed"
       ? document.querySelector("#panel header")?.offsetHeight : document.getElementById("panel")?.offsetHeight) || 140) + 24 }
-  : { top: 40, bottom: 40, left: 370, right: openStopId ? 400 : 60 };
+  : { top: 40, bottom: 40, left: (document.getElementById("panel")?.offsetWidth || 300) + 36,
+      right: openStopId ? (document.getElementById("stop-panel")?.offsetWidth || 320) + 36 : 60 };
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 const map = new mapboxgl.Map({
@@ -741,7 +744,7 @@ function tick(force) {
   refreshBuses();
   if (routeParam) refreshRouteArrivals();
   if (openStopId) refreshPopup();
-  if (view === "plan" && planState.result?.options?.length) checkLive();
+  if (view === "plan" && planState.result?.options?.length) checkLive(true);
 }
 setInterval(() => tick(), REFRESH_MS);
 
@@ -935,19 +938,22 @@ function renderStopList() {
   const ol = document.getElementById("stop-list");
   ol.innerHTML = ids.map((id, i) => {
     const s = stopsById[id]; if (!s) return "";
-    const next = i === ids.length - 1 ? "Last stop" : summary(routeArrivals[id]?.[activeDir]);
+    const next = i === ids.length - 1 ? "Last stop" : routeArrivalsLoaded ? summary(routeArrivals[id]?.[activeDir]) : "Loading times…";
     return `<li><button class="stop-row ${s.timepoint ? "tp" : ""}" data-stop="${esc(id)}"><span class="stop-dot"></span>
       <span><span class="stop-name">${esc(s.name)}${s.timepoint ? `<span class="tp-tag">Timepoint</span>` : ""}</span>
-      <span class="stop-next" data-next="${esc(id)}">${next}</span></span></button></li>`;
+      <span class="stop-next" data-next="${esc(id)}" data-i="${i}">${next}</span></span></button></li>`;
   }).join("");
   ol.onclick = (e) => { const b = e.target.closest("[data-stop]"); if (b) showStop(b.dataset.stop, true); };
 }
 async function refreshRouteArrivals() {
   try {
     routeArrivals = (await GMTLive.arrivals({ route: routeParam })).arrivals;
+    routeArrivalsLoaded = true;
     const ids = routeStops[routeParam][activeDir].stops;
+    // Skip only the final stop in the list (by position). Loop routes such as Route 4 start and end at the
+    // same stop, so checking the stop ID would also skip the first stop.
     document.querySelectorAll("[data-next]").forEach((el) => {
-      if (el.dataset.next !== ids[ids.length - 1]) el.innerHTML = summary(routeArrivals[el.dataset.next]?.[activeDir]);
+      if (+el.dataset.i !== ids.length - 1) el.innerHTML = summary(routeArrivals[el.dataset.next]?.[activeDir]);
     });
   } catch {}
 }
@@ -978,7 +984,8 @@ function showStop(id, fly) {
   // Center the stop in the visible map: the strip above the three-quarter sheet on phones,
   // between the two panels on desktop. (Padding, not an offset, because earlier fits leave padding set.)
   const H = document.getElementById("wrap").clientHeight;
-  const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.75), left: 0, right: 0 } : { top: 20, bottom: 20, left: 370, right: 380 };
+  const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.75), left: 0, right: 0 }
+    : { top: 20, bottom: 20, left: (document.getElementById("panel")?.offsetWidth || 300) + 24, right: (stopPanel.offsetWidth || 320) + 24 };
   const inView = map.getBounds().contains(s.coords);
   if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
   refreshPopup(true);
@@ -1171,9 +1178,12 @@ async function planTrip(force) {
   drawPlan(true); applyFilters(); checkLive();
 }
 // Check the first bus of the shown trips against Swiftly's live predictions (one stop each).
-async function checkLive() {
+async function checkLive(selectedOnly) {
+  // First search: check the top 3 trips once. After that, only the trip the rider picked is refreshed,
+  // so the planner adds just one Swiftly request every 15 seconds.
   const opts = planState.result?.options || [];
-  for (const [i, o] of opts.slice(0, 3).entries()) {
+  const which = selectedOnly ? [[planState.selected, opts[planState.selected]]].filter(([, o]) => o) : [...opts.slice(0, 3).entries()];
+  for (const [i, o] of which) {
     if (!liveReady) break;
     const r = await GMTPlanner.liveFirstBus(o);
     if (planState.result?.options?.[i] !== o) return; // a new search replaced these
