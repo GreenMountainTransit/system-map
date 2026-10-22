@@ -78,6 +78,13 @@ Without this, the Street View section in stop details shows a link that opens Go
    - **API restrictions:** Maps Embed API only.
 3. Add it to the repo as a secret named `GOOGLE_MAPS_KEY` (same steps as the Swiftly key), then run the workflow.
 
+### Ridership in stop details
+The **Ridership** section in each stop's details comes from GMT's ArcGIS Online layer `Detail_Ridership_V2` (one record per month, route and stop). The build adds the routes together, so only stop-level totals are published; route-level numbers never reach the site. Ranks compare stop totals, among all stops and among the stops each route serves. The nightly build reads every month in it. Riders can view the last 6 months, year to date, the last 12 months, or all months.
+- New months appear automatically the night after the layer is updated.
+- If the layer moves, put its new address (ending in `/FeatureServer/0`) in `route-info.json` under `"ridership"` → `"layer"`. The `"dashboard"` line sets where "Explore the stops dashboard" links to.
+- The build expects these fields: `date` (first day of the month), `stop_id`, `total_boardings`. If they're renamed, the build log shows "Ridership data unavailable" and stops show without the section; the rest of the map is unaffected.
+- The layer must stay shared publicly.
+
 ### Trillium changes the GTFS link
 Open `.github/workflows/build-data.yml` → pencil icon → find the line with `ccta-vt-us.zip`, replace the link (keep the quotes), and commit.
 
@@ -108,6 +115,7 @@ GitHub emails the repo admins (usually whoever last edited the workflow file). T
 | `GTFS check failed: no routes` / `no stops` | The download wasn't a real GTFS | Same as above. |
 | `No MAPBOX_TOKEN secret set` | The Mapbox token secret is missing | Add it (section 3, Replace the Mapbox token). |
 | `SyntaxError … route-info.json` or `Unexpected token` | A typo in `route-info.json` | Open the file and fix the quote or comma near the line mentioned, or undo the last change (section 5). |
+| `Ridership data unavailable` (yellow warning) | The ArcGIS layer couldn't be read (moved, unshared, or fields renamed) | See "Ridership in stop details" in section 3. The map still publishes. |
 | `Overpass … failed` (a yellow warning, not red) | The nearby-places lookup was unavailable | Nothing; stops show without nearby places until the next night. |
 | A failure in **deploy** | GitHub Pages hiccup | Re-run the workflow (**Re-run jobs** button). |
 

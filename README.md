@@ -9,7 +9,7 @@ A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 - **Frequency map**: https://greenmountaintransit.github.io/system-map/?view=frequency
 - **Trip planner**: https://greenmountaintransit.github.io/system-map/?view=plan
 
-Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
+Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, ridership (the stop's total monthly boardings as a stock-style chart with 6M / YTD / 12M / All, growth or decline, and its rank among all stops and among the stops on each of its routes; stop level only, from GMT's ArcGIS Online stops data), accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
 Other features: local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
 
