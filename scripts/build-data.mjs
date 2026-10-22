@@ -496,6 +496,60 @@ for (const [sid, rs] of stopRoutes) {
   });
 }
 
+// ---------- ridership from GMT's ArcGIS Online stops layer ----------
+// One record per month, route and stop with estimated boardings. Added up to STOP totals (route-level
+// numbers are not published) and summarized per stop for every
+// months into public/data/ridership.json. If the layer can't be read, the build carries on without it.
+const RIDERSHIP = { layer: "https://services6.arcgis.com/1pxfKKnRqKBsikRV/arcgis/rest/services/Detail_Ridership_V2/FeatureServer/0",
+  dashboard: "https://ridegmt.com/dashboards/", ...(routeInfo.ridership || {}) };
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+async function loadRidership() {
+  if (process.env.RIDERSHIP_FILE) return JSON.parse(fs.readFileSync(process.env.RIDERSHIP_FILE, "utf8")); // for testing
+  const rows = [];
+  for (let offset = 0; offset < 500000; offset += 1000) {
+    const q = new URLSearchParams({ where: "1=1", outFields: "date,year,month,stop_id,total_boardings", returnGeometry: "false",
+      orderByFields: "ObjectId", resultOffset: String(offset), resultRecordCount: "1000", f: "json" });
+    const res = await fetch(`${RIDERSHIP.layer}/query?${q}`, { signal: AbortSignal.timeout(60000) });
+    const body = await res.json();
+    if (body.error) throw new Error(body.error.message || "ArcGIS error");
+    rows.push(...(body.features || []).map((f) => f.attributes));
+    if (!body.exceededTransferLimit && (body.features || []).length < 1000) break;
+  }
+  return rows;
+}
+let ridership = null;
+try {
+  const rows = await loadRidership();
+  const monthKey = (r) => {
+    if (typeof r.date === "string" && /^\d{4}-\d{2}/.test(r.date)) return r.date.slice(0, 7);
+    if (typeof r.date === "number") return new Date(r.date).toISOString().slice(0, 7);
+    const m = MONTHS.indexOf(String(r.month || "").trim().slice(0, 3).toLowerCase());
+    if (r.year && m >= 0) return `${r.year}-${String(m + 1).padStart(2, "0")}`;
+    if (/^\d{4}-\d{2}/.test(String(r.month || ""))) return String(r.month).slice(0, 7);
+    return null;
+  };
+  const months = [...new Set(rows.map(monthKey).filter(Boolean))].sort(); // every month, for the "All" view
+  const mi = new Map(months.map((m, i) => [m, i]));
+  const byStop = {};
+  for (const r of rows) {
+    const m = mi.get(monthKey(r)), sid = r.stop_id == null ? null : String(r.stop_id), n = Number(r.total_boardings) || 0;
+    if (m == null || !sid) continue;
+    const st = (byStop[sid] ??= { t: Array(months.length).fill(0) });
+    st.t[m] += n; // stop-level totals only: route-level numbers are not published
+  }
+  // Average monthly boardings over the last 12 months, and each stop's rank by it.
+  const last12 = Math.max(0, months.length - 12);
+  const avg = (arr) => { const a = arr.slice(last12); return a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : 0; };
+  const ranked = Object.entries(byStop).map(([sid, st]) => [sid, avg(st.t)]).sort((a, b) => b[1] - a[1]);
+  ranked.forEach(([sid, a], i) => { byStop[sid].avg = a; byStop[sid].rank = i + 1; });
+  ridership = { months, of: ranked.length, dashboard: RIDERSHIP.dashboard, stops: byStop };
+  write("ridership.json", ridership);
+  const matched = stopFeatures.filter((f) => byStop[f.properties.stop_id]).length;
+  console.log(`Ridership: ${rows.length} records, ${months[0] || "?"} to ${months[months.length - 1] || "?"}, ${matched} of ${stopFeatures.length} map stops matched`);
+} catch (e) {
+  console.log(`::warning::Ridership data unavailable this build (${e.message}); stops will show without it.`);
+}
+
 // ---------- safety checks: never publish a map with no service ----------
 // If the feed is empty, broken, expired, or only covers future service, stop here. The workflow fails,
 // GitHub emails the repo admins, and the site keeps showing the last good build.
