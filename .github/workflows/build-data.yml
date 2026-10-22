@@ -55,6 +55,7 @@ jobs:
           if [ -f amenities.csv ]; then node scripts/build-data.mjs "$GTFS_DIR" amenities.csv; else node scripts/build-data.mjs "$GTFS_DIR"; fi
       - name: Add keys from the repository secrets
         env:
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
           SWIFTLY_KEY: ${{ secrets.SWIFTLY_KEY }}
           GOOGLE_MAPS_KEY: ${{ secrets.GOOGLE_MAPS_KEY }}
         run: |
@@ -66,6 +67,8 @@ jobs:
               if (!key) return console.log(`No ${secret} secret set: ${without}.`);
               html = html.replace(placeholder, key); console.log(`${secret} added.`);
             };
+            if (!process.env.MAPBOX_TOKEN) { console.log("::error::No MAPBOX_TOKEN secret set. The map cannot show without it, so nothing was published; the current site stays up."); process.exit(1); }
+            add("MAPBOX_TOKEN", "__MAPBOX_TOKEN__", "");
             add("SWIFTLY_KEY", "__SWIFTLY_KEY__", "publishing without live buses");
             add("GOOGLE_MAPS_KEY", "__GOOGLE_KEY__", "Street View opens as a link to Google Maps instead of inside the panel");
             fs.writeFileSync(f, html);'
