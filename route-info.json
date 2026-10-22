@@ -2,7 +2,7 @@
   "_help": "Edit this file to change route descriptions or legend groups. Descriptions are keyed by route number. Group default: on, off, or sundays (on only on Sundays). The site rebuilds after you commit. The ridership block sets the ArcGIS Online layer the stop ridership charts come from, and where 'Explore the stops dashboard' links to.",
   "ridership": {
     "layer": "https://services6.arcgis.com/1pxfKKnRqKBsikRV/arcgis/rest/services/Detail_Ridership_V2/FeatureServer/0",
-    "dashboard": "https://ridegmt.com/dashboards/"
+    "dashboard": "https://gmtransit.maps.arcgis.com/apps/dashboards/1e816fda88fe4a589ef6ec582dcccdf2"
   },
   "groups": [
     {
