@@ -191,6 +191,8 @@
   .ctrl-tip { position: absolute; z-index: 6; transform: translateY(-50%); background: var(--ink); color: #fff; font-size: .78rem; font-weight: 600;
     padding: 6px 10px; border-radius: 6px; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
   .ctrl-tip[hidden] { display: none; }
+  .expand-ctrl[hidden] { display: none; }
+  .expand-ctrl .expand-btn { width: 36px; height: 36px; display: grid; place-items: center; color: var(--ink); }
   .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
   .mapboxgl-popup-content { font-family: inherit; padding: 14px 16px 12px; border-radius: 10px; box-shadow: 0 4px 20px rgba(20,40,30,.2); }
   .mapboxgl-popup-close-button { font-size: 20px; width: 28px; height: 28px; right: 4px; top: 4px; color: var(--muted); }
@@ -310,6 +312,7 @@
     #panel.collapsed .viewtoggle, #panel.collapsed .route-about, #panel.collapsed .svc, #panel.collapsed .back { display: none; }
     #panel header { padding-top: 6px; }
     #panel h1 { font-size: 1rem; padding-right: 70px; }
+    .mapboxgl-ctrl-bottom-right { bottom: var(--sheet-collapsed, 140px); }
     #toggle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 26px; margin: 0 0 4px; padding: 0;
       background: none; border: 0; cursor: pointer; color: var(--gmt); font-size: .76rem; font-weight: 600; position: relative; }
     #toggle .grip { width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; }
@@ -350,7 +353,7 @@ const BASEMAPS = [
 ];
 // --------------------------------
 
-let routeParam = new URLSearchParams(location.search).get("route");
+let routeParam = new URLSearchParams(location.search).get("route"), missingRoute = null;
 // Route pages embedded on their own (…/?route=2) have no "All routes" link. Links from the system map
 // add &back=1, so riders who came from the full map can return to it.
 const showBack = new URLSearchParams(location.search).has("back");
@@ -416,6 +419,50 @@ map.addControl({
   onRemove() {},
 }, "top-right"); // added first, so it sits in the corner with zoom and locate below it
 map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+// ---------- Expand / Minimize (bottom right) ----------
+// Desktop, Android and iPad: the browser's full-screen mode (the iframe needs allow="fullscreen").
+// iPhone, or an embed without that permission: Expand opens the map as its own full page, and Minimize
+// goes back to the page the rider came from.
+const ICON_MAX = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
+const ICON_MIN = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>';
+const embedded = (() => { try { return window.self !== window.top; } catch { return true; } })();
+const params0 = new URLSearchParams(location.search);
+const fullPageMode = params0.get("full") === "1"; // opened full page from an embed
+const canFullscreen = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+map.addControl({
+  onAdd() {
+    const el = document.createElement("div");
+    el.className = "mapboxgl-ctrl mapboxgl-ctrl-group expand-ctrl";
+    el.innerHTML = `<button type="button" class="expand-btn"></button>`;
+    const btn = el.querySelector("button");
+    const update = () => {
+      const expanded = isFullscreen() || fullPageMode;
+      btn.innerHTML = expanded ? ICON_MIN : ICON_MAX;
+      btn.setAttribute("aria-label", expanded ? "Minimize map" : "Expand map to full screen");
+      btn.title = expanded ? "Minimize" : "Expand to full screen";
+      // Already a full page and no full-screen mode available (e.g. iPhone, not embedded): nothing to expand to.
+      el.hidden = !expanded && !canFullscreen && !embedded;
+    };
+    btn.onclick = async () => {
+      if (isFullscreen()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+      if (fullPageMode) { // go back to the page with the embedded map
+        if (history.length > 1) history.back(); else location.href = document.referrer || "https://ridegmt.com/";
+        return;
+      }
+      if (canFullscreen) {
+        try { await (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen).call(document.documentElement); return; } catch {}
+      }
+      const u = new URL(location.href); u.searchParams.set("full", "1");
+      try { window.top.location.href = u.toString(); } catch { window.open(u.toString(), "_blank", "noopener"); }
+    };
+    ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => { update(); setTimeout(() => map.resize(), 50); }));
+    update();
+    return el;
+  },
+  onRemove() {},
+}, "bottom-right");
+
 const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
 map.addControl(geolocate, "top-right");
 // Hover label on the locate button. Mapbox adds the button a moment after the map starts, so listen on
@@ -471,6 +518,8 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
     routeStops = meta.stops;
     stops.features.forEach((f) => (stopsById[f.properties.stop_id] = { ...f.properties, coords: f.geometry.coordinates }));
     if (routeParam && !routes[routeParam]) routeParam = meta.routes.find((r) => r.short_name === routeParam)?.route_id || routeParam;
+    // A route number that isn't in the current schedule: say so, and show the full system map behind it.
+    if (routeParam && !routes[routeParam]) { missingRoute = routeParam; routeParam = null; }
     for (const r of meta.routes) {
       const g = groups.find((x) => x.id === r.group);
       if (g && (g.default === "off" || (g.default === "sundays" && !isSunday))) hidden.add(r.route_id);
@@ -478,8 +527,9 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
   });
 
 dataReady.then(() => {
-  if (routeParam && !routes[routeParam]) {
-    panel(`<header>${showBack ? `<a class="back" href="?">${ICON.back} All routes</a>` : ""}<h1>Route ${esc(routeParam)} isn’t in the current schedule</h1></header>`);
+  if (missingRoute) {
+    panel(`<header><a class="back" href="?">${ICON.back} All routes</a><h1>Route ${esc(missingRoute)} isn’t in the current schedule</h1>
+      <p class="status">It may have been renamed or discontinued. The map shows all current routes.</p></header>`);
     return;
   }
   routeParam ? buildRoutePanel() : buildSystemPanel();
@@ -1589,6 +1639,8 @@ function panel(html, fill) {
 }
 // On phones the panel is a bottom sheet: collapsed shows the title and search; drag or tap to open it halfway or full.
 function setSheet(open) {
+  const head = document.querySelector("#panel header"); // keep the Expand button just above the collapsed sheet
+  if (head) document.documentElement.style.setProperty("--sheet-collapsed", head.offsetHeight + 8 + "px");
   sheetOpen = open;
   const el = document.getElementById("panel"), t = document.getElementById("toggle");
   snapSheet(el, isPhone() ? (open ? "open" : "collapsed") : "open");
