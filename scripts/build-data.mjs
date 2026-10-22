@@ -584,6 +584,7 @@ write("stops.geojson", { type: "FeatureCollection", features: stopFeatures });
 write("routes.json", { built: todayNY, groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
 write("calendar.json", cal);
 write("headsigns.json", headsigns);
+write("trip-routes.json", Object.fromEntries(trips.filter((t) => byTrip.has(t.trip_id) && routeById[t.route_id]).map((t) => [t.trip_id, t.route_id])));
 
 const withAmenities = stopFeatures.filter((f) => amenities.has(f.properties.stop_id)).length;
 console.log(`Built ${routeList.length} routes (${lineFeatures.length} route patterns), ${stopFeatures.length} stops ` +
