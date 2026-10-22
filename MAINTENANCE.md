@@ -79,10 +79,10 @@ Without this, the Street View section in stop details shows a link that opens Go
 3. Add it to the repo as a secret named `GOOGLE_MAPS_KEY` (same steps as the Swiftly key), then run the workflow.
 
 ### Ridership in stop details
-The **Ridership** section in each stop's details comes from GMT's ArcGIS Online layer `Detail_Ridership_V2` (one record per month, route and stop). The build adds the routes together, so only stop-level totals are published; route-level numbers never reach the site. Ranks compare stop totals, among all stops and among the stops each route serves. The nightly build reads every month in it. Riders can view the last 6 months, year to date, the last 12 months, or all months.
+The **Ridership** section in each stop's details comes from GMT's ArcGIS Online layer `Detail_Ridership_V2` (one record per month, route and stop). Rows where `routes_token` is `|0|` are the layer's all-routes summary rows (for the AGOL dashboard) and are skipped, so boardings aren't double-counted. The build adds the remaining route rows together, so only stop-level totals are published; route-level numbers never reach the site. Ranks compare stop totals, among all stops and among the stops each route serves. The nightly build reads every month in it. Riders can view the last 6 months, year to date, the last 12 months, or all months.
 - New months appear automatically the night after the layer is updated.
 - If the layer moves, put its new address (ending in `/FeatureServer/0`) in `route-info.json` under `"ridership"` → `"layer"`. The `"dashboard"` line sets where "Explore the stops dashboard" links to.
-- The build expects these fields: `date` (first day of the month), `stop_id`, `total_boardings`. If they're renamed, the build log shows "Ridership data unavailable" and stops show without the section; the rest of the map is unaffected.
+- The build expects these fields: `date` (first day of the month), `stop_id`, `total_boardings`, and `routes_token` (to skip the `|0|` summary rows). If they're renamed, the build log shows "Ridership data unavailable" and stops show without the section; the rest of the map is unaffected.
 - The layer must stay shared publicly.
 
 ### Trillium changes the GTFS link
