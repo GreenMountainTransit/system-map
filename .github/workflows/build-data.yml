@@ -56,6 +56,7 @@ jobs:
       - name: Add keys from the repository secrets
         env:
           MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           SWIFTLY_KEY: ${{ secrets.SWIFTLY_KEY }}
           GOOGLE_MAPS_KEY: ${{ secrets.GOOGLE_MAPS_KEY }}
         run: |
@@ -69,7 +70,9 @@ jobs:
             };
             if (!process.env.MAPBOX_TOKEN) { console.log("::error::No MAPBOX_TOKEN secret set. The map cannot show without it, so nothing was published; the current site stays up."); process.exit(1); }
             add("MAPBOX_TOKEN", "__MAPBOX_TOKEN__", "");
-            add("SWIFTLY_KEY", "__SWIFTLY_KEY__", "publishing without live buses");
+            // With the relay, live data comes through it and the Swiftly key is NOT put in the page.
+            if (process.env.RELAY_URL) { add("RELAY_URL", "__RELAY_URL__", ""); console.log("Using the relay; the Swiftly key stays private."); }
+            else add("SWIFTLY_KEY", "__SWIFTLY_KEY__", "publishing without live buses");
             add("GOOGLE_MAPS_KEY", "__GOOGLE_KEY__", "Street View opens as a link to Google Maps instead of inside the panel");
             fs.writeFileSync(f, html);'
       - uses: actions/upload-pages-artifact@v3
