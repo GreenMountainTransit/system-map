@@ -95,9 +95,9 @@ In `public/index.html`, find `HOME_BOUNDS`. The two pairs are the southwest and 
 In CivicPlus, add a **Custom HTML** widget with:
 ```html
 <iframe src="https://greenmountaintransit.github.io/system-map/?route=2" title="Route 2 live map and arrival times"
-  width="100%" height="650" style="border:0" loading="lazy" allow="geolocation"></iframe>
+  width="100%" height="650" style="border:0" loading="lazy" allow="geolocation; fullscreen" allowfullscreen></iframe>
 ```
-Change both `2`s to the route number. The system map is the same without `?route=2`.
+Change both `2`s to the route number. The system map is the same without `?route=2`. Keep `allow="geolocation; fullscreen" allowfullscreen`: it lets **Find my location** and the **Expand** button work inside the page. (Without `fullscreen`, Expand opens the map as its own page instead, which is also how it works on iPhones.)
 
 ---
 

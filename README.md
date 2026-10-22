@@ -45,15 +45,17 @@ Add a **Custom HTML** widget to the page and paste an iframe. Homepage:
 
 ```html
 <iframe src="https://greenmountaintransit.github.io/system-map/" title="GMT system map: all routes and live buses"
-  width="100%" height="600" style="border:0" loading="lazy" allow="geolocation"></iframe>
+  width="100%" height="600" style="border:0" loading="lazy" allow="geolocation; fullscreen" allowfullscreen></iframe>
 ```
 
 Route page (route number at the end). Route pages opened this way have no "All routes" link, so riders stay on that route; links from the system map add `&back=1` to show it:
 
 ```html
 <iframe src="https://greenmountaintransit.github.io/system-map/?route=2" title="Route 2 live map and arrival times"
-  width="100%" height="650" style="border:0" loading="lazy" allow="geolocation"></iframe>
+  width="100%" height="650" style="border:0" loading="lazy" allow="geolocation; fullscreen" allowfullscreen></iframe>
 ```
+
+Keep `allow="geolocation; fullscreen" allowfullscreen` so the locate button and the **Expand** button (bottom right) work inside the page. Expand uses the browser's full-screen mode; on iPhones, or embeds without that permission, it opens the map as its own page and **Minimize** returns to the page it came from.
 
 Test on a copied page first, as CivicPlus recommends for custom HTML.
 
