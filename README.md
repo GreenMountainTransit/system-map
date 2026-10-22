@@ -56,6 +56,8 @@ Route page (route number at the end). Route pages opened this way have no "All r
   width="100%" height="650" style="border:0" loading="lazy" allow="geolocation; fullscreen" allowfullscreen></iframe>
 ```
 
+In an embed, the map starts behind a light shade with **Click to activate system map** (or route map), so mouse-wheel scrolling moves the page instead of the map; the shade returns a few seconds after the pointer leaves. Opened directly or full screen, it's skipped.
+
 Keep `allow="geolocation; fullscreen" allowfullscreen` so the locate button and the **Expand** button (bottom right) work inside the page. Expand uses the browser's full-screen mode; on iPhones, or embeds without that permission, it opens the map as its own page and **Minimize** returns to the page it came from.
 
 Test on a copied page first, as CivicPlus recommends for custom HTML.

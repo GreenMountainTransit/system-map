@@ -193,6 +193,8 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Opening view | `public/index.html` | `HOME_BOUNDS` |
 | Basemaps offered | `public/index.html` | `BASEMAPS` |
 | How often live data refreshes | `public/index.html` | `REFRESH_MS` |
+| Click-to-activate shade (embeds) | `public/index.html` | `Click to activate` |
+| Route draw-in animation on first load | `public/index.html` | `animateBuild` |
 | Frequency tiers and colors | `public/index.html` | `const FREQ` and `tierOf` |
 | Frequency time windows | `scripts/build-data.mjs` | `FREQ_WINDOWS` |
 | How "nearby" is defined (meters) | `scripts/build-data.mjs` | `NEARBY_METERS` |
