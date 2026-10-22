@@ -11,7 +11,7 @@ A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 
 Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, ridership (the stop's total monthly boardings as a stock-style chart with 6M / YTD / 12M / All, growth or decline, and its rank among all stops and among the stops on each of its routes; stop level only, from GMT's ArcGIS Online stops data), accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
-Other features: local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
+Other features: service alerts and detours (via the relay), local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
 
 ## What's in the repo
 
@@ -25,11 +25,12 @@ Other features: local routes drawn on top of other route types, a collapsible St
 | `route-info.json` | Route descriptions and legend groups (edit by hand). |
 | `amenities.csv` | Shelter, seating, schedule box and ADA pad for each stop. |
 | `MAINTENANCE.md` | How to run and fix the map without a developer. |
+| `relay/worker.js` | The relay: a Cloudflare Worker that fetches live data, service alerts and detours from Swiftly once for all visitors, keeping the key private. Setup steps are in MAINTENANCE.md. |
 | `.github/workflows/build-data.yml` | Nightly (and on every change): downloads GMT's GTFS, builds the data, adds the Swiftly key, publishes the site. |
 
-The Mapbox token, Swiftly key and optional Google key are stored as repository secrets, not in the code. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
+The Mapbox token, relay address and optional Google key are stored as repository secrets, not in the code. With the relay (`RELAY_URL` secret), the Swiftly key lives only in Cloudflare and never appears on the page; without it, the page calls Swiftly directly with `SWIFTLY_KEY`. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
 
-**Swiftly rate limit:** the key's limit is shared by everyone using the map. Each open map asks for bus locations every 15 seconds, plus one predictions request every 15 seconds while a stop is open. If Swiftly answers "too many requests", the map pauses live requests (1 minute, doubling up to 10) and shows scheduled times meanwhile. Turning off Live buses also stops the location requests.
+**Swiftly rate limit:** with the relay, Swiftly gets a fixed ~135 requests per 15 minutes however many people visit. Without it, the key's limit is shared by everyone using the map. Each open map asks for bus locations every 15 seconds, plus one predictions request every 15 seconds while a stop is open. If Swiftly answers "too many requests", the map pauses live requests (1 minute, doubling up to 10) and shows scheduled times meanwhile. Turning off Live buses also stops the location requests.
 
 ## Setup
 

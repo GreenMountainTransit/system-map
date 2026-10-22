@@ -15,6 +15,7 @@ Keep every account under a GMT-owned login, with at least two staff who can get 
 | GitHub (organization `GreenMountainTransit`, repo `system-map`) | Hosts the site and runs the nightly update | github.com → the repo → Settings | |
 | Swiftly | Live bus locations and arrival predictions (`SWIFTLY_KEY`) | Swiftly dashboard / GMT's Swiftly rep | |
 | Mapbox (GMT Planning account) | The basemap and trip planner address search (`MAPBOX_TOKEN` secret) | account.mapbox.com → Tokens | |
+| Cloudflare (GMT Planning account) | The relay (Worker `gmt-live-relay`) that fetches live data from Swiftly; holds the Swiftly key | dash.cloudflare.com → Workers & Pages | |
 | Google Cloud (optional) | Street View inside stop details (`GOOGLE_MAPS_KEY`) | console.cloud.google.com → APIs & Services | |
 | Trillium | Publishes GMT's GTFS (the link in the workflow file) | GMT's Trillium contact | |
 | CivicPlus | The ridegmt.com pages that embed the map | CivicPlus admin | |
@@ -58,7 +59,28 @@ Amenities come from `amenities.csv`: one row per stop ID, with `yes`/`no` column
   and uploads the resulting `amenities.csv`. This keeps only the yes/no columns, so internal notes and condition ratings stay private.
 - After a build, the **Build data** step reports how many stops matched a row. If GMT renumbers stops, regenerate the file.
 
-### Replace the Swiftly key
+### Set up the relay (one time)
+The relay is a small Cloudflare Worker. It fetches live data from Swiftly every 15 seconds (alerts every 60) and shares it with every visitor, so the Swiftly key never appears on the public page and Swiftly sees about 135 requests per 15 minutes no matter how busy the site is. It also carries **service alerts** and **detours** (from Swiftly Service Adjustments), which browsers can't read from Swiftly directly.
+
+1. Sign in at dash.cloudflare.com with the GMT Planning account. Open **Workers & Pages** (under **Compute** in newer layouts) → **Create** → **Hello World** → name it `gmt-live-relay` → **Deploy**.
+2. Click **Edit code**. Open `relay/worker.js` from this repo (click it, then the **copy raw file** button), select everything in Cloudflare's editor, paste over it, and click **Deploy**.
+3. Go back to the Worker → **Settings → Variables and Secrets** → **Add**: Type **Secret**, name `SWIFTLY_KEY`, value: the **Website Key** from Swiftly. **Deploy**.
+4. Copy the Worker's address from its overview page (like `https://gmt-live-relay.<name>.workers.dev`). Open it in a browser: it should say "GMT live map relay is running." Adding `/v1/vehicles` should show bus data.
+5. In GitHub: **Settings → Secrets and variables → Actions → New repository secret**: name `RELAY_URL`, value: the Worker address (no slash at the end).
+6. **Actions → Build map data and publish → Run workflow**. The "Add keys" step should say "Using the relay; the Swiftly key stays private."
+7. Check the map: buses show, a stop says "● Live predictions", and the browser console (F12) shows requests to the Worker, none to `api.goswift.ly`.
+
+To stop using the relay (for example while troubleshooting), delete the `RELAY_URL` secret and re-run the workflow: the map goes back to calling Swiftly directly with `SWIFTLY_KEY` (which puts the key in the page).
+
+### Detours and service alerts
+- **Detours** appear when GMT staff set one up in Swiftly **Service Adjustments**: a dashed line in the route's color labeled DETOUR, closed stops marked ×, and temporary stops marked in orange. Closed stops say so in their details and route pages show "Closed: detour". Nothing to do in this repo.
+- **Service alerts** entered in Swiftly appear in a banner at the top of the map, on affected route pages, in affected stops' details, and as a warning mark next to the route in the list.
+- Both need the relay. Without it, the map works the same but shows neither.
+
+### Replace the Swiftly key (with the relay)
+Update the Worker's `SWIFTLY_KEY` secret in Cloudflare (step 3 above). Nothing needs to change in GitHub.
+
+### Replace the Swiftly key (without the relay)
 1. Get the new key from Swiftly.
 2. Repo → **Settings → Secrets and variables → Actions** → `SWIFTLY_KEY` → **Update**, paste the new key, and save.
 3. **Actions → Build map data and publish → Run workflow**. In the run, the "Add keys" step should say "SWIFTLY_KEY added."
@@ -116,6 +138,7 @@ GitHub emails the repo admins (usually whoever last edited the workflow file). T
 | `No MAPBOX_TOKEN secret set` | The Mapbox token secret is missing | Add it (section 3, Replace the Mapbox token). |
 | `SyntaxError … route-info.json` or `Unexpected token` | A typo in `route-info.json` | Open the file and fix the quote or comma near the line mentioned, or undo the last change (section 5). |
 | `Ridership data unavailable` (yellow warning) | The ArcGIS layer couldn't be read (moved, unshared, or fields renamed) | See "Ridership in stop details" in section 3. The map still publishes. |
+| Map says "Live bus locations are unavailable" and the console shows errors from the Worker address | The relay can't reach Swiftly (wrong or missing `SWIFTLY_KEY` secret in Cloudflare) or the Worker is down | Open the Worker address in a browser; check its `SWIFTLY_KEY` secret; check Cloudflare's **Logs** tab for the Worker. |
 | `Overpass … failed` (a yellow warning, not red) | The nearby-places lookup was unavailable | Nothing; stops show without nearby places until the next night. |
 | A failure in **deploy** | GitHub Pages hiccup | Re-run the workflow (**Re-run jobs** button). |
 
@@ -174,7 +197,8 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Frequency time windows | `scripts/build-data.mjs` | `FREQ_WINDOWS` |
 | How "nearby" is defined (meters) | `scripts/build-data.mjs` | `NEARBY_METERS` |
 | Amenity labels | `scripts/build-data.mjs` | `AMENITY_COLUMNS` |
-| Talking to Swiftly | `public/live.js` | `swiftly(` |
+| Talking to Swiftly (direct) or the relay | `public/live.js` | `swiftly(`, `relay(` |
+| The relay itself (refresh intervals, allowed sites) | `relay/worker.js` | `FEEDS`, `ALLOWED_ORIGINS` |
 | Trip planner walking limits, transfer time, number of buses | `public/planner.js` | `ACCESS_M`, `TRANSFER_M`, `TRANSFER_BUFFER`, `MAX_RIDES` |
 | Nightly schedule time | `.github/workflows/build-data.yml` | `cron` |
 
@@ -186,5 +210,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 - **Swiftly:** GMT's real-time vendor. Provides live bus positions and predicted arrival times.
 - **Timepoint:** a stop with a scheduled time in the timetable; buses don't leave early from timepoints.
 - **Workflow / Actions:** GitHub's automation. Ours is "Build map data and publish."
-- **Secret:** a value stored privately in GitHub settings and added to the site at build time (`MAPBOX_TOKEN`, `SWIFTLY_KEY`, `GOOGLE_MAPS_KEY`).
+- **Secret:** a value stored privately in GitHub settings and added to the site at build time (`MAPBOX_TOKEN`, `RELAY_URL`, `GOOGLE_MAPS_KEY`, and `SWIFTLY_KEY` if not using the relay).
+- **Relay:** the Cloudflare Worker that fetches live data from Swiftly for all visitors, keeping the key private.
+- **Detour / trip modification:** a temporary route change set up in Swiftly Service Adjustments.
 - **Commit:** saving a change to a file in the repo. Commits to map files trigger a rebuild.
