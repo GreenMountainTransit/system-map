@@ -7,6 +7,7 @@ A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 - **System map**: https://greenmountaintransit.github.io/system-map/ shows every route and live bus, with a Routes / Frequency switch. Stops appear when you zoom in.
 - **Route map**: https://greenmountaintransit.github.io/system-map/?route=2 (route number) shows one route, its live buses, its description and service hours, and its stops in order for each direction with the next scheduled times.
 - **Frequency map**: https://greenmountaintransit.github.io/system-map/?view=frequency
+- **Trip planner**: https://greenmountaintransit.github.io/system-map/?view=plan
 
 Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
@@ -17,6 +18,7 @@ Other features: local routes drawn on top of other route types, a collapsible St
 | Path | What it does |
 | --- | --- |
 | `public/index.html` | The map page (all views). Holds the Mapbox token and the opening view (`HOME_BOUNDS`). |
+| `public/planner.js` | The trip planner: finds trips with transfers from the timetable (RAPTOR), and checks each trip's first bus against live predictions. |
 | `public/live.js` | Fetches live bus locations (`/vehicles`) and stop predictions (`/predictions`) from Swiftly in the visitor's browser and merges them with the timetable. |
 | `scripts/build-data.mjs` | Turns GMT's GTFS into the route, stop, schedule and frequency files in `public/data/`, adds amenities and nearby places. |
 | `scripts/prepare-amenities.mjs` | Turns the field-survey exports into `amenities.csv`. |
@@ -58,6 +60,14 @@ Test on a copied page first, as CivicPlus recommends for custom HTML.
 ## Editing route descriptions and legend groups
 
 `route-info.json` holds the one-line description for each route (shown on hover, in stop popups and on route pages) and the legend groups. Edit it on GitHub and commit; the site rebuilds on its own. Frequencies and operating days are calculated from the GTFS automatically.
+
+## Trip planner
+
+The **Trip planner** tab finds bus trips between two places, including transfers. Riders type an address, place or stop (addresses come from Mapbox's geocoder, using the same Mapbox account), use their location, or click the map. It works entirely in the browser from the published GTFS:
+
+- It searches with RAPTOR, the method most journey planners use, for trips with up to 3 buses (2 transfers), walking up to about 10 minutes to and from stops and up to about 5 minutes between stops when transferring, with at least 2 minutes to change buses. These settings are at the top of `public/planner.js`.
+- Live data: Swiftly only lets browsers get predictions one stop at a time, so each suggested trip's **first bus** is checked live (on time, late or early); later legs use the timetable. Fully live transfer timing would need the GTFS-realtime feed through a relay.
+- Address lookups count toward Mapbox's free geocoding allowance (100,000 a month at the time of writing).
 
 ## Frequency map
 

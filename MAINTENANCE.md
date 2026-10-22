@@ -28,7 +28,7 @@ Keep every account under a GMT-owned login, with at least two staff who can get 
 2. Open the map and click a stop. Under "Next departures" you should see **● Live predictions**. Buses should appear on the map.
 
 **Quarterly (15 minutes)**
-1. **Mapbox usage:** account.mapbox.com → Statistics. The free plan covers 50,000 map loads a month.
+1. **Mapbox usage:** account.mapbox.com → Statistics. The free plan covers 50,000 map loads a month, plus address searches from the trip planner (geocoding has its own free allowance).
 2. **Feed expiry:** open the latest run in **Actions** → **build** → **Build data**. Look for a yellow warning that the feed ends soon. If you see one, check with Trillium that a new GTFS is coming.
 3. **Outdated-step warnings:** in the same run, look for yellow warnings mentioning "deprecated" or "Node.js". See section 6.
 
@@ -164,6 +164,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | How "nearby" is defined (meters) | `scripts/build-data.mjs` | `NEARBY_METERS` |
 | Amenity labels | `scripts/build-data.mjs` | `AMENITY_COLUMNS` |
 | Talking to Swiftly | `public/live.js` | `swiftly(` |
+| Trip planner walking limits, transfer time, number of buses | `public/planner.js` | `ACCESS_M`, `TRANSFER_M`, `TRANSFER_BUFFER`, `MAX_RIDES` |
 | Nightly schedule time | `.github/workflows/build-data.yml` | `cron` |
 
 ---
