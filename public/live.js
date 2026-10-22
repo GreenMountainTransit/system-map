@@ -15,7 +15,7 @@
   const FEED_MAX_AGE = 10000;          // reuse a fetched feed for 10 s (shared by the bus layer, stop list and popups)
   const STALE_VEHICLE_SECONDS = 180;   // hide buses whose GPS hasn't reported in 3 min
 
-  let KEY = "", DATA = "data/";
+  let KEY = "", DATA = "data/", RELAY = ""; // RELAY: the GMT relay (Cloudflare Worker); when set, the Swiftly key isn't used in the page
   const memo = new Map();
 
   async function data(file) {
@@ -50,9 +50,29 @@
     return promise;
   }
 
+  // Relay requests: the relay already shares one Swiftly request among all visitors; this just avoids
+  // asking the relay twice for the same thing within a few seconds.
+  const relayCache = new Map();
+  function relay(path, maxAge = FEED_MAX_AGE) {
+    const hit = relayCache.get(path);
+    if (hit && Date.now() - hit.at < maxAge) return hit.promise;
+    const promise = fetch(RELAY + path).then((r) => { if (!r.ok) throw new Error(`Relay ${r.status}`); return r.json(); });
+    promise.catch(() => relayCache.delete(path));
+    relayCache.set(path, { at: Date.now(), promise });
+    return promise;
+  }
+  // Relay trip updates -> the same shape decodeTripUpdates() produces.
+  async function relayTripUpdates() {
+    const body = await relay("/v1/trip-updates");
+    const out = new Map();
+    for (const [id, [startDate, canceled, ups]] of Object.entries(body.trips || {}))
+      out.set(id, { startDate, canceled: !!canceled, updates: ups.map(([seq, stop, time, delay, skipped]) => ({ seq, stop, time, delay, skipped: !!skipped })).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)) });
+    return out;
+  }
+
   // ---------- live buses ----------
   async function vehicles() {
-    const body = await swiftly("/vehicles", "json");
+    const body = RELAY ? await relay("/v1/vehicles") : await swiftly("/vehicles", "json");
     const now = Date.now() / 1000;
     return {
       type: "FeatureCollection",
@@ -219,9 +239,11 @@
   async function arrivals({ stop, route, all, only }) {
     const [meta, cal, stops] = await Promise.all([data("routes.json"), data("calendar.json"), data("stops.geojson")]);
     // Live predictions (one stop at a time) are optional: if Swiftly can't be reached, scheduled times still show.
-    const tus = new Map();
-    let live = false, preds = [];
-    if (KEY && stop) {
+    let live = false, preds = [], tus = new Map();
+    if (RELAY) {
+      // With the relay: live predictions for every stop and trip, from Swiftly's full trip-updates feed.
+      try { tus = await relayTripUpdates(); live = true; } catch {}
+    } else if (KEY && stop) {
       try { preds = parsePredictions(await swiftly(`/predictions?stop=${encodeURIComponent(stop)}`, "json")); live = true; } catch {}
     }
 
@@ -283,8 +305,17 @@
     return { live, arrivals: result };
   }
 
+  // Detours (Swiftly Service Adjustments, via the relay's trip-modifications) and service alerts.
+  async function detours() { if (!RELAY) return null; const b = await relay("/v1/trip-updates"); return { detours: b.detours || [], stops: b.stops || {} }; }
+  async function alerts() {
+    if (!RELAY) return null;
+    const b = await relay("/v1/alerts", 60000), now = Date.now() / 1000;
+    return (b.alerts || []).filter((a) => !a.periods.length || a.periods.some(([s, e]) => (!s || s <= now) && (!e || e >= now)));
+  }
+
   globalThis.GMTLive = {
-    configure({ key, dataDir }) { KEY = key; if (dataDir) DATA = dataDir; },
+    configure({ key, dataDir, relay: r }) { KEY = key; if (dataDir) DATA = dataDir; RELAY = (r || "").replace(/\/$/, ""); },
+    detours, alerts,
     vehicles, arrivals, decodeTripUpdates,
     // shared with the trip planner (planner.js)
     data, localClock, shiftYmd, servicesOn,

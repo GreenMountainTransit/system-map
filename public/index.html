@@ -20,18 +20,25 @@
   }
   html, body { margin: 0; height: 100%; color: var(--ink); }
   #wrap { position: relative; height: 100%; min-height: 460px; overflow: hidden; }
-  #map { position: absolute; inset: 0; }
+  #map { position: absolute; top: 0; bottom: 0; left: var(--panel-w); right: 0; }
+  #wrap.stop-open #map { right: var(--stop-w); }
+  #wrap.legend-hidden #map { left: 0; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   button { font: inherit; color: inherit; }
 
   /* ---------- panel ---------- */
   #panel {
-    position: absolute; top: 12px; left: 12px; bottom: 12px; z-index: 2; width: var(--panel-w);
-    display: flex; flex-direction: column; background: var(--panel); border-radius: 12px;
-    box-shadow: 0 2px 16px rgba(20,40,30,.16); overflow: hidden;
+    position: absolute; top: 0; left: 0; bottom: 0; z-index: 2; width: var(--panel-w); box-sizing: border-box;
+    display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); overflow: hidden;
   }
-  #panel.fit { bottom: auto; max-height: calc(100% - 24px); }
+  #wrap.legend-hidden #panel { display: none; }
+  /* Tab on the panel's edge to hide or show it, for more map. */
+  #legend-tab { position: absolute; z-index: 3; top: 50%; left: var(--panel-w); transform: translateY(-50%); width: 18px; height: 52px; padding: 0;
+    border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; background: #fff; color: var(--muted); cursor: pointer;
+    display: grid; place-items: center; box-shadow: 2px 0 6px rgba(20,40,30,.08); }
+  #legend-tab svg { width: 14px; height: 14px; transition: transform .15s; }
+  #wrap.legend-hidden #legend-tab { left: 0; } #wrap.legend-hidden #legend-tab svg { transform: rotate(180deg); }
   #panel header { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
   #panel h1 { font-size: 1.08rem; line-height: 1.3; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; }
   .status { font-size: .8rem; color: var(--muted); margin: 0; }
@@ -193,6 +200,26 @@
   .ctrl-tip[hidden] { display: none; }
   .expand-ctrl[hidden] { display: none; }
   .expand-ctrl .expand-btn { width: 36px; height: 36px; display: grid; place-items: center; color: var(--ink); }
+  #alert-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: min(420px, calc(100% - 120px)); }
+  #alert-banner[hidden] { display: none; }
+  .ab-btn { display: flex; align-items: center; gap: 8px; margin: 0 auto; border: 1px solid #f3c5a0; background: #fff4ea; color: #7c2d12; border-radius: 999px;
+    padding: 6px 12px; font-size: .82rem; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+  .ab-btn svg { width: 16px; height: 16px; } .ab-btn svg:last-child { width: 14px; height: 14px; }
+  .ab-btn[aria-expanded=true] svg:last-child { transform: rotate(180deg); }
+  .ab-list { margin-top: 6px; background: #fff; border-radius: 10px; box-shadow: 0 8px 28px rgba(20,40,30,.22); max-height: 50vh; overflow-y: auto; padding: 4px 12px; }
+  .alerts { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+  .ab-list .alerts { margin: 8px 0; }
+  .alert { border-left: 4px solid #ea580c; background: #fff7ef; border-radius: 6px; padding: 8px 10px; font-size: .8rem; }
+  .al-head { display: flex; gap: 6px; align-items: flex-start; margin: 0; color: #7c2d12; line-height: 1.35; }
+  .al-head svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: #ea580c; }
+  .al-routes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0 0; } .al-routes span { font-size: .72rem; font-weight: 700; color: #9a3412; margin-left: 4px; }
+  .al-desc { margin: 6px 0 0; color: var(--ink); line-height: 1.45; }
+  .al-meta { margin: 6px 0 0; font-size: .72rem; color: var(--muted); } .al-meta a { color: var(--gmt); font-weight: 600; }
+  .closed-note { display: flex; gap: 8px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; font-size: .8rem; color: #7f1d1d; }
+  .closed-note svg { width: 18px; height: 18px; flex: none; color: #c2410c; } .closed-note p { margin: 3px 0 0; line-height: 1.45; }
+  .closed-tag { color: #c2410c; font-weight: 700; }
+  .rwarn { display: inline-flex; vertical-align: -2px; margin-left: 5px; color: #ea580c; } .rwarn svg { width: 14px; height: 14px; }
+  #route-alerts .alerts { margin: 10px 0 0; }
   .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
   .mapboxgl-popup-content { font-family: inherit; padding: 14px 16px 12px; border-radius: 10px; box-shadow: 0 4px 20px rgba(20,40,30,.2); }
   .mapboxgl-popup-close-button { font-size: 20px; width: 28px; height: 28px; right: 4px; top: 4px; color: var(--muted); }
@@ -232,8 +259,8 @@
   .pop-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 8px; }
   .pop-actions button, .pop-actions a { background: none; border: 0; padding: 0; font: inherit; font-size: .82rem; font-weight: 600; color: var(--gmt); text-decoration: none; cursor: pointer; }
   /* stop details: right-hand panel on desktop */
-  #stop-panel { position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 4; width: var(--stop-w); display: flex; flex-direction: column;
-    background: #fff; border-radius: 12px; box-shadow: 0 2px 16px rgba(20,40,30,.18); overflow: hidden; }
+  #stop-panel { position: absolute; top: 0; right: 0; bottom: 0; z-index: 4; width: var(--stop-w); box-sizing: border-box; border-left: 1px solid var(--line); display: flex; flex-direction: column;
+    background: #fff;   overflow: hidden; }
   #stop-panel[hidden] { display: none; }
   .sp-head { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 8px; padding: 14px 12px 10px 16px; border-bottom: 1px solid var(--line); }
   .sp-head h2 { margin: 0; font-size: 1.05rem; line-height: 1.3; outline: none; }
@@ -288,7 +315,7 @@
   .sv-note { margin: 6px 0 0; font-size: .74rem; color: var(--muted); line-height: 1.4; }
   .sv-note a { color: var(--gmt); font-weight: 600; white-space: nowrap; }
   .sp-sub { margin: 0 0 6px; font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
-  #wrap.stop-open .mapboxgl-ctrl-top-right, #wrap.stop-open .mapboxgl-ctrl-bottom-right { right: calc(var(--stop-w) + 12px); } /* keep controls and the Mapbox logo visible */
+  /* The map stops at the stop panel, so its controls and logo stay visible without shifting. */
   /* Narrower still in small embeds, so the map keeps room between the panels. */
   @media (min-width: 641px) and (max-width: 1100px) { :root { --panel-w: 272px; --stop-w: 290px; } }
   .mapboxgl-ctrl-top-right, .mapboxgl-ctrl-bottom-right { transition: right .2s; }
@@ -302,7 +329,10 @@
       box-shadow: 0 -4px 20px rgba(20,40,30,.22); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .sp-head { grid-template-columns: 1fr auto; padding-top: 4px; cursor: grab; }
     .sp-grip { display: block; grid-column: 1 / -1; justify-self: center; width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; margin: 2px 0 6px; }
-    #wrap.stop-open .mapboxgl-ctrl-top-right, #wrap.stop-open .mapboxgl-ctrl-bottom-right { right: 0; }
+    #map, #wrap.stop-open #map, #wrap.legend-hidden #map { left: 0; right: 0; }
+    #legend-tab { display: none; }
+    #panel { border-right: 0; }
+    #wrap.legend-hidden #panel { display: flex; }
     #panel header { cursor: grab; }
     :root { --panel-w: auto; }
     /* bottom sheet */
@@ -343,6 +373,7 @@
 // ---------- Configure ----------
 const MAPBOX_TOKEN = "__MAPBOX_TOKEN__";        // filled in when the site is published (GitHub secret MAPBOX_TOKEN). Used for the basemap and the trip planner's address search.
 const GOOGLE_KEY = "__GOOGLE_KEY__";            // optional, for the embedded Street View (GitHub secret GOOGLE_MAPS_KEY); without it, a link opens Google Street View
+const RELAY_URL = "__RELAY_URL__";               // the GMT relay (Cloudflare Worker), filled in at publish time (GitHub secret RELAY_URL)
 const SWIFTLY_KEY = "__SWIFTLY_KEY__";          // filled in automatically when the site is published (GitHub secret SWIFTLY_KEY)
 const REFRESH_MS = 15000;                       // how often live buses and arrival times update
 const HOME_BOUNDS = [[-73.30, 44.35], [-72.95, 44.60]]; // opening view: Burlington area out to Shelburne, Essex and Williston
@@ -359,8 +390,10 @@ let routeParam = new URLSearchParams(location.search).get("route"), missingRoute
 const showBack = new URLSearchParams(location.search).has("back");
 const routeLink = (r) => `?route=${encodeURIComponent(r.short_name)}&back=1`;
 const DIR = "data/";
-const liveReady = !SWIFTLY_KEY.startsWith("__");
-GMTLive.configure({ key: liveReady ? SWIFTLY_KEY : "", dataDir: DIR });
+const relayReady = !RELAY_URL.startsWith("__");
+const liveReady = relayReady || !SWIFTLY_KEY.startsWith("__");
+// With the relay, the page never sees the Swiftly key; without it, the page calls Swiftly directly.
+GMTLive.configure({ key: relayReady || SWIFTLY_KEY.startsWith("__") ? "" : SWIFTLY_KEY, dataDir: DIR, relay: relayReady ? RELAY_URL : "" });
 
 let routes = {}, groups = [], routeStops = {}, stopsById = {}, linesData, stopsData;
 let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "FeatureCollection", features: [] };
@@ -390,8 +423,7 @@ const isSunday = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York"
 const panelPad = () => isPhone()
   ? { top: 60, left: 24, right: 56, bottom: ((sheetState === "collapsed"
       ? document.querySelector("#panel header")?.offsetHeight : document.getElementById("panel")?.offsetHeight) || 140) + 24 }
-  : { top: 40, bottom: 40, left: (document.getElementById("panel")?.offsetWidth || 300) + 36,
-      right: openStopId ? (document.getElementById("stop-panel")?.offsetWidth || 320) + 36 : 60 };
+  : { top: 40, bottom: 40, left: 40, right: 60 }; // desktop: the panels are docked beside the map, not over it
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 const map = new mapboxgl.Map({
@@ -463,6 +495,19 @@ map.addControl({
   onRemove() {},
 }, "bottom-right");
 
+// Hide/show tab on the docked panel's edge (desktop and embeds), for a bigger map when needed.
+{
+  const tab = document.createElement("button");
+  tab.id = "legend-tab"; tab.type = "button"; tab.setAttribute("aria-expanded", "true"); tab.setAttribute("aria-label", "Hide the list"); tab.title = "Hide the list";
+  tab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>';
+  tab.onclick = () => {
+    const hiddenNow = document.getElementById("wrap").classList.toggle("legend-hidden");
+    tab.setAttribute("aria-expanded", String(!hiddenNow));
+    tab.setAttribute("aria-label", hiddenNow ? "Show the list" : "Hide the list"); tab.title = hiddenNow ? "Show the list" : "Hide the list";
+    map.resize();
+  };
+  document.getElementById("wrap").appendChild(tab);
+}
 const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
 map.addControl(geolocate, "top-right");
 // Hover label on the locate button. Mapbox adds the button a moment after the map starts, so listen on
@@ -599,6 +644,22 @@ function addOverlay() {
   add({ id: "buses", type: "symbol", source: "buses",
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
       "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop] } }, "top"); // local buses drawn last (on top)
+  // Detours (from Swiftly Service Adjustments): the detour path, closed stops (×) and temporary stops.
+  if (!map.getSource("detours")) map.addSource("detours", { type: "geojson", data: detourGeo });
+  add({ id: "detour-casing", type: "line", source: "detours", filter: ["==", ["get", "kind"], "path"], layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": "#fff", "line-width": width(5, 12) } }, "middle");
+  add({ id: "detour-line", type: "line", source: "detours", filter: ["==", ["get", "kind"], "path"], layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": ["get", "color"], "line-width": width(2.5, 7), "line-dasharray": [1.2, 1.2] } }, "middle");
+  add({ id: "detour-label", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "path"], minzoom: 13,
+    layout: { "symbol-placement": "line", "text-field": "DETOUR", "text-size": 11, "symbol-spacing": 250, "text-letter-spacing": 0.1 },
+    paint: { "text-color": "#9a3412", "text-halo-color": "#fff", "text-halo-width": 2 } }, "top");
+  add({ id: "detour-closed", type: "circle", source: "detours", filter: ["==", ["get", "kind"], "closed"], minzoom: 11,
+    paint: { "circle-radius": width(5, 9), "circle-color": "#fff", "circle-stroke-color": "#c2410c", "circle-stroke-width": 2.5 } }, "top");
+  add({ id: "detour-closed-x", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "closed"], minzoom: 11,
+    layout: { "text-field": "×", "text-size": ["interpolate", ["linear"], ["zoom"], 11, 12, 16, 18], "text-allow-overlap": true, "text-ignore-placement": true },
+    paint: { "text-color": "#c2410c" } }, "top");
+  add({ id: "detour-temp", type: "circle", source: "detours", filter: ["==", ["get", "kind"], "temp"], minzoom: 11,
+    paint: { "circle-radius": width(5, 9), "circle-color": "#fde7d4", "circle-stroke-color": "#c2410c", "circle-stroke-width": 2.5 } }, "top");
   // Trip planner: the chosen trip's rides (route colors), walks (dashed) and start/end points.
   if (!map.getSource("plan")) map.addSource("plan", { type: "geojson", data: planGeo() });
   add({ id: "plan-casing", type: "line", source: "plan", filter: ["==", ["get", "kind"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
@@ -663,6 +724,7 @@ function visibleRoutes() {
   if (routeParam) return [routeParam];
   return Object.keys(routes).filter((id) => !hidden.has(id));
 }
+const DETOUR_LAYERS = ["detour-casing", "detour-line", "detour-label", "detour-closed", "detour-closed-x", "detour-temp"];
 function applyFilters() {
   if (!map.getLayer("route-lines")) return;
   const vis = visibleRoutes();
@@ -674,6 +736,12 @@ function applyFilters() {
   const stopFilter = atStop;
   map.setFilter("stops", stopFilter);
   map.setFilter("timepoint-labels", ["all", stopFilter, ["==", ["get", "timepoint"], true]]);
+  if (map.getLayer("detour-line")) {
+    const onDetourRoute = ["in", ["get", "route_id"], ["literal", vis]];
+    const kinds = { "detour-casing": "path", "detour-line": "path", "detour-label": "path", "detour-closed": "closed", "detour-closed-x": "closed", "detour-temp": "temp" };
+    for (const [l, k] of Object.entries(kinds)) map.setFilter(l, ["all", ["==", ["get", "kind"], k], onDetourRoute]);
+    DETOUR_LAYERS.forEach((l) => map.setLayoutProperty(l, "visibility", view === "routes" || routeParam ? "visible" : "none"));
+  }
   map.setFilter("buses", onRoute);
   if (view === "plan" && !routeParam) { // trip planner: only buses on the chosen trip's routes
     const tripRoutes = selectedOption()?.legs?.filter((l) => l.kind === "ride").map((l) => l.route) || [];
@@ -737,7 +805,8 @@ function showTip(pt, html) {
   tip.innerHTML = html; tip.hidden = false;
   const W = document.getElementById("wrap").clientWidth, H = document.getElementById("wrap").clientHeight;
   const w = tip.offsetWidth, h = tip.offsetHeight;
-  tip.style.left = Math.min(pt.x + 16, W - w - 8) + "px";
+  const ox = document.getElementById("map").offsetLeft; // the map sits to the right of the docked panel
+  tip.style.left = Math.min(pt.x + ox + 16, W - w - 8) + "px";
   tip.style.top = (pt.y + 16 + h > H ? pt.y - h - 12 : pt.y + 16) + "px";
 }
 function hideTip() { tip.hidden = true; }
@@ -795,10 +864,12 @@ function tick(force) {
   if (routeParam) refreshRouteArrivals();
   if (openStopId) refreshPopup();
   if (view === "plan" && planState.result?.options?.length) checkLive(true);
+  refreshDetours(); refreshAlerts();
 }
 setInterval(() => tick(), REFRESH_MS);
 
 async function refreshBuses() {
+  markRoutes(); // keep legend warning marks after the list is redrawn
   const status = document.getElementById("status");
   if (!liveReady) { if (status) status.textContent = "Live buses aren’t connected yet. Showing scheduled times."; return; }
   if (!liveBusesOn) {
@@ -971,6 +1042,7 @@ function buildRoutePanel() {
       <h1>${chip(r)} ${esc(r.long_name)}</h1>
       ${r.description ? `<p class="route-about">${esc(r.description)}</p>` : ""}
       ${serviceTable(r)}
+      <div id="route-alerts">${alertsHtml(alertsFor({ route: routeParam }))}</div>
       <div style="margin-top:8px">${statusRow()}</div>
       ${searchBox(false, ids)}</header>
     ${dirs.length > 1 ? `<div class="tabs" role="tablist">${dirs.map((d) =>
@@ -1003,7 +1075,8 @@ async function refreshRouteArrivals() {
     // Skip only the final stop in the list (by position). Loop routes such as Route 4 start and end at the
     // same stop, so checking the stop ID would also skip the first stop.
     document.querySelectorAll("[data-next]").forEach((el) => {
-      if (+el.dataset.i !== ids.length - 1) el.innerHTML = summary(routeArrivals[el.dataset.next]?.[activeDir]);
+      if ((detourInfo.closedStops[el.dataset.next] || []).includes(routeParam)) el.innerHTML = `<span class="closed-tag">Closed: detour</span>`;
+      else if (+el.dataset.i !== ids.length - 1) el.innerHTML = summary(routeArrivals[el.dataset.next]?.[activeDir]);
     });
   } catch {}
 }
@@ -1027,6 +1100,7 @@ function showStop(id, fly) {
     <div class="sp-body"><div class="pop"><h3 class="sp-sub">Next departures</h3><p class="none">Loading arrivals…</p></div></div>`;
   stopPanel.hidden = false;
   document.getElementById("wrap").classList.add("stop-open");
+  map.resize(); // the map narrows to make room for the docked stop panel
   stopPanel.querySelector(".sp-close").onclick = closeStop;
   if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
   if (!wasOpen) stopPanel.querySelector("#sp-title").focus({ preventScroll: true });
@@ -1035,7 +1109,7 @@ function showStop(id, fly) {
   // between the two panels on desktop. (Padding, not an offset, because earlier fits leave padding set.)
   const H = document.getElementById("wrap").clientHeight;
   const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.75), left: 0, right: 0 }
-    : { top: 20, bottom: 20, left: (document.getElementById("panel")?.offsetWidth || 300) + 24, right: (stopPanel.offsetWidth || 320) + 24 };
+    : { top: 20, bottom: 20, left: 20, right: 20 };
   const inView = map.getBounds().contains(s.coords);
   if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
   refreshPopup(true);
@@ -1045,6 +1119,7 @@ function closeStop() {
   openStopId = null; showAllTimes = false; svOpen = false; setCamera(null);
   stopPanel.hidden = true; stopPanel.innerHTML = ""; stopPanel.style.height = "";
   document.getElementById("wrap").classList.remove("stop-open");
+  map.resize();
   highlight([]);
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], ""]);
 }
@@ -1053,8 +1128,10 @@ async function refreshPopup(announce) {
   const id = openStopId; if (!id) return;
   let arrivals = "error", allTimes = null, feedLive = false;
   const only = routeParam ? [routeParam] : null; // on a route page, only that route's buses
-  try { const r = await GMTLive.arrivals({ stop: id, only }); arrivals = r.arrivals[id] || []; feedLive = r.live; } catch {}
-  if (showAllTimes) try { allTimes = (await GMTLive.arrivals({ stop: id, all: true, only })).arrivals[id] || []; } catch {}
+  const closed = detourInfo.closedStops[id] || []; // routes detoured away from this stop don't stop here now
+  const open = (list) => list.filter((a) => !closed.includes(a.route_id));
+  try { const r = await GMTLive.arrivals({ stop: id, only }); arrivals = open(r.arrivals[id] || []); feedLive = r.live; } catch {}
+  if (showAllTimes) try { allTimes = open((await GMTLive.arrivals({ stop: id, all: true, only })).arrivals[id] || []); } catch {}
   if (id !== openStopId) return;
   const body = stopPanel.querySelector(".sp-body"); if (!body) return;
   const scrollTop = body.scrollTop, keepSv = body.querySelector("#sv-box[data-wired]"), keepRd = body.querySelector("#rider-box[data-wired]");
@@ -1121,8 +1198,117 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
     : !liveReady ? `<p class="src-line">Scheduled times. Live predictions aren’t connected yet.</p>`
     : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions · updated ${clock(Date.now() / 1000)}</p>`
     : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
-  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${rider}${sv}${about}
+  const closedBy = (detourInfo.closedStops[s.stop_id] || []).filter((r) => !routeParam || r === routeParam);
+  const temps = detourInfo.tempStops.filter((t) => closedBy.includes(t.route));
+  const closedNote = closedBy.length ? `<div class="closed-note">${ICON.warn}<div><strong>Stop closed for a detour</strong>
+      <p>${closedBy.map((r) => chip(routes[r])).join(" ")} ${closedBy.length === 1 ? "isn’t" : "aren’t"} serving this stop right now.${temps.length ? ` Use ${temps.map((t) => `<b>${esc(t.name)}</b>`).join(" or ")} instead.` : ""}</p></div></div>` : "";
+  const stopAlerts = relayReady ? alertsHtml(alertsFor({ stop: s })) : "";
+  return `<div class="pop">${closedNote}${stopAlerts}<h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${rider}${sv}${about}
     ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
+}
+
+// ---------- service alerts and detours (need the relay) ----------
+let alertsList = [], detourInfo = { byRoute: {}, closedStops: {}, tempStops: [] }, detourGeo = { type: "FeatureCollection", features: [] };
+let tripRoutes = null, lastAlertsAt = 0, detourKey = "";
+const ymdToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()).replace(/-/g, "");
+async function tripRouteMap() { return (tripRoutes ??= await fetch(DIR + "trip-routes.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({})).then((x) => (tripRoutes = x))); }
+async function refreshDetours() {
+  if (!relayReady) return;
+  let d; try { d = await GMTLive.detours(); } catch { return; }
+  if (!d) return;
+  const key = JSON.stringify(d.detours) + JSON.stringify(d.stops);
+  if (key === detourKey) return; // unchanged
+  detourKey = key;
+  const t2r = await tripRouteMap(), today = ymdToday(), feats = [], byRoute = {}, closedStops = {}, tempStops = [];
+  for (const det of d.detours) {
+    if (det.dates?.length && !det.dates.includes(today)) continue; // not running today
+    for (const sel of det.selected) {
+      const rid = sel.trips.map((t) => t2r[t]).find(Boolean); if (!rid || !routes[rid]) continue;
+      const color = routes[rid].color;
+      byRoute[rid] = (byRoute[rid] || 0) + 1;
+      if (sel.path?.length > 1) feats.push({ type: "Feature", properties: { kind: "path", route_id: rid, color }, geometry: { type: "LineString", coordinates: sel.path } });
+      // Closed stops: the stops between each change's start and end on one of the affected trips.
+      const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch(() => []);
+      const trip = sched.find((t) => sel.trips.includes(t.t));
+      for (const c of det.changes) {
+        if (trip) {
+          const at = (sel_) => sel_ ? trip.st.findIndex((x) => (sel_.seq != null ? x[2] === sel_.seq : x[0] === sel_.stop)) : -1;
+          const a = at(c.start), b = at(c.end);
+          if (a >= 0 && b >= a) for (const [sid] of trip.st.slice(a, b + 1)) {
+            const st = stopsById[sid]; if (!st) continue;
+            (closedStops[sid] ??= new Set()).add(rid);
+            feats.push({ type: "Feature", properties: { kind: "closed", route_id: rid, stop_id: sid }, geometry: { type: "Point", coordinates: st.coords } });
+          }
+        }
+        for (const rs of c.replacement || []) {
+          const ts = d.stops[rs.stop]; if (!ts?.c) continue;
+          tempStops.push({ id: rs.stop, name: ts.name, route: rid, c: ts.c });
+          feats.push({ type: "Feature", properties: { kind: "temp", route_id: rid, name: ts.name }, geometry: { type: "Point", coordinates: ts.c } });
+        }
+      }
+    }
+  }
+  detourInfo = { byRoute, closedStops: Object.fromEntries(Object.entries(closedStops).map(([k, v]) => [k, [...v]])), tempStops };
+  detourGeo = { type: "FeatureCollection", features: feats };
+  map.getSource("detours")?.setData(detourGeo);
+  applyFilters(); markRoutes(); if (openStopId) refreshPopup();
+}
+async function refreshAlerts(force) {
+  if (!relayReady || (!force && Date.now() - lastAlertsAt < 55000)) return;
+  lastAlertsAt = Date.now();
+  try { alertsList = (await GMTLive.alerts()) || []; } catch { return; }
+  const t2r = alertsList.some((a) => a.informed.some((i) => i.trip && !i.route)) ? await tripRouteMap() : {};
+  for (const a of alertsList) {
+    a.routes = [...new Set(a.informed.map((i) => i.route || t2r[i.trip]).filter((r) => r && routes[r]))];
+    a.stops = [...new Set(a.informed.map((i) => i.stop).filter(Boolean))];
+    a.systemWide = !a.routes.length && !a.stops.length;
+  }
+  renderAlertBanner(); markRoutes(); if (openStopId) refreshPopup();
+  if (routeParam) { const el = document.getElementById("route-alerts"); if (el) el.innerHTML = alertsHtml(alertsFor({ route: routeParam })); }
+}
+// Alerts that apply to a route, a stop (and its routes), or everything shown.
+function alertsFor({ route, stop }) {
+  return alertsList.filter((a) => a.systemWide || (route && a.routes.includes(route)) ||
+    (stop && (a.stops.includes(stop.stop_id) || (!routeParam && a.routes.some((r) => stop.routes.includes(r))) || (routeParam && a.routes.includes(routeParam)))));
+}
+const EFFECT_TEXT = { NO_SERVICE: "No service", REDUCED_SERVICE: "Reduced service", SIGNIFICANT_DELAYS: "Delays", DETOUR: "Detour", ADDITIONAL_SERVICE: "Extra service",
+  MODIFIED_SERVICE: "Service change", STOP_MOVED: "Stop moved", ACCESSIBILITY_ISSUE: "Accessibility" };
+function alertsHtml(list) {
+  if (!list.length) return "";
+  return `<ul class="alerts" aria-label="Service alerts">${list.map((a) => {
+    const end = a.periods.map((p) => p[1]).filter(Boolean).sort((x, y) => x - y)[0];
+    return `<li class="alert"><p class="al-head">${ICON.warn}<strong>${esc(a.header || EFFECT_TEXT[a.effect] || "Service alert")}</strong></p>
+      ${a.routes.length ? `<p class="al-routes">${a.routes.map((r) => chip(routes[r])).join("")}${EFFECT_TEXT[a.effect] ? `<span>${EFFECT_TEXT[a.effect]}</span>` : ""}</p>` : ""}
+      ${a.description ? `<p class="al-desc">${esc(a.description)}</p>` : ""}
+      <p class="al-meta">${end ? `Until ${new Date(end * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}` : "Until further notice"}${a.url ? ` · <a href="${esc(a.url)}" target="_blank" rel="noopener">More info ↗</a>` : ""}</p></li>`;
+  }).join("")}</ul>`;
+}
+// Banner over the map: how many alerts apply to what's shown; opens the full list.
+function renderAlertBanner() {
+  let el = document.getElementById("alert-banner");
+  if (!el) {
+    el = document.createElement("div"); el.id = "alert-banner";
+    el.innerHTML = `<button type="button" class="ab-btn" aria-expanded="false" aria-controls="ab-list"></button><div id="ab-list" class="ab-list" hidden></div>`;
+    document.getElementById("map").appendChild(el);
+    const btn = el.querySelector(".ab-btn"), listEl = el.querySelector(".ab-list");
+    btn.onclick = () => { const open = listEl.hidden; listEl.hidden = !open; btn.setAttribute("aria-expanded", String(open)); };
+  }
+  const list = routeParam ? alertsFor({ route: routeParam }) : alertsList;
+  el.hidden = !list.length;
+  if (!list.length) return;
+  el.querySelector(".ab-btn").innerHTML = `${ICON.warn}<span>${list.length} service alert${list.length === 1 ? "" : "s"}</span>${ICON.chevron}`;
+  el.querySelector(".ab-list").innerHTML = alertsHtml(list);
+}
+// Warning mark next to routes in the legend that have an alert or a detour today.
+function markRoutes() {
+  document.querySelectorAll(".route-row").forEach((row) => {
+    const id = row.dataset.route, n = (detourInfo.byRoute[id] ? 1 : 0) + alertsList.filter((a) => a.routes.includes(id)).length;
+    let mark = row.querySelector(".rwarn");
+    if (!n) { mark?.remove(); return; }
+    if (!mark) { mark = document.createElement("span"); mark.className = "rwarn"; row.querySelector(".rname").after(mark); }
+    mark.innerHTML = ICON.warn; mark.title = detourInfo.byRoute[id] ? "Detour or service alert today" : "Service alert";
+    mark.setAttribute("aria-label", mark.title); mark.setAttribute("role", "img");
+  });
 }
 
 // ---------- trip planner ----------
@@ -1731,6 +1917,7 @@ const ICON = {
   swap: svg('<path d="M8 4v14M8 4L4.5 7.5M8 4l3.5 3.5M16 20V6M16 20l-3.5-3.5M16 20l3.5-3.5"/>'),
   walk: svg('<circle cx="13" cy="4" r="1.8" fill="currentColor" stroke="none"/><path d="M10 21l2-6 2.5 2.5V21M8 12l2.5-4h3l2 3.5 2.5 1M12.5 8l-1 5"/>'),
   place: svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>'),
+  warn: svg('<path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.2v.3"/>'),
   check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
   pin: svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>'),
