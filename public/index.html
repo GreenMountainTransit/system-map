@@ -272,6 +272,7 @@
   .rd-tiles em { display: block; font-style: normal; font-size: .68rem; color: var(--muted); margin-top: 1px; }
   .rd-trends .up { color: #0a8a3e; } .rd-trends .down { color: #c2410c; }
   .rd-yoy { margin: 8px 0 0; font-size: .76rem; color: var(--muted); }
+  .rd-note { margin: 6px 0 0; font-size: .7rem; color: var(--faint); line-height: 1.4; }
   .rd-ranges { display: flex; gap: 4px; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
   .rd-ranges button { flex: 1; border: 0; background: none; padding: 6px 0; font-size: .78rem; font-weight: 700; color: var(--muted); cursor: pointer; border-radius: 6px; }
   .rd-ranges button[aria-pressed=true] { color: var(--tc); background: color-mix(in srgb, var(--tc) 12%, transparent); }
@@ -1293,24 +1294,41 @@ function fitSlope(vals) {
   vals.forEach((v, i) => { num += (i - mx) * (v - my); den += (i - mx) ** 2; });
   return den ? num / den : 0; // boardings per month
 }
-function trendsHtml(total, months, rangeText, sr) {
+// Trend = the months in the range compared with the SAME months a year earlier (so seasons such as summer
+// or back-to-school cancel out). "All" compares the latest 12 months with the 12 before them. If there
+// isn't a year of earlier data, it falls back to a straight-line fit and says so.
+function trendsHtml(total, months, rangeText, sr, from) {
   const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${fmtN(Math.abs(n))}`;
   const pctOf = (a, b) => (a ? ((b - a) / a) * 100 : null);
   const pctText = (p) => (p == null ? "–" : `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(p).toFixed(1)}%`);
   const tone = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
   const first = total[0], last = total[total.length - 1], net = last - first, pct = pctOf(first, last);
-  const slope = fitSlope(total), mean = total.reduce((a, b) => a + b, 0) / total.length;
-  const steady = Math.abs(slope) < mean * 0.01; // less than 1% of a typical month per month
-  const direction = total.length < 3 ? "Not enough months" : steady ? "Steady" : slope > 0 ? "Growing" : "Declining";
-  const all = sr.total, n = all.length, yoy = n > 12 ? pctOf(all[n - 13], all[n - 1]) : null;
+  const all = sr.total, n = all.length;
+  let cur, prev, basis;
+  if (riderRange === "All") { cur = all.slice(-12); prev = n >= 24 ? all.slice(-24, -12) : null; basis = "latest 12 months vs. the 12 before"; }
+  else { cur = total; prev = from >= 12 ? all.slice(from - 12, from - 12 + total.length) : null; basis = "vs. the same months a year earlier"; }
+  let direction, detail, cls;
+  if (prev && sum(prev) > 0) {
+    const yoy = pctOf(sum(prev), sum(cur));
+    direction = Math.abs(yoy) < 2 ? "Steady" : yoy > 0 ? "Growing" : "Declining";
+    detail = `${pctText(yoy)} ${basis}`; cls = Math.abs(yoy) < 2 ? "" : tone(yoy);
+  } else {
+    const slope = fitSlope(total), mean = sum(total) / total.length, steady = Math.abs(slope) < mean * 0.01;
+    direction = total.length < 3 ? "Not enough data" : steady ? "Steady" : slope > 0 ? "Growing" : "Declining";
+    detail = total.length < 3 ? "" : `${steady ? "about flat" : `${signed(Math.round(slope))} a month`} (no earlier year to compare; seasons may affect this)`;
+    cls = steady ? "" : tone(slope);
+  }
+  const yoyMonth = n > 12 ? pctOf(all[n - 13], all[n - 1]) : null;
   return `<div class="rd-trends">
       <p class="rd-h">Trends, ${rangeText}</p>
       <div class="rd-tiles">
-        <div><span>Net ${net >= 0 ? "growth" : "decline"}</span><strong class="${tone(net)}">${signed(net)}</strong><em>boardings a month</em></div>
-        <div><span>Change</span><strong class="${tone(net)}">${pctText(pct)}</strong><em>${monthLabel(months[0], true)} to ${monthLabel(months[months.length - 1], true)}</em></div>
-        <div><span>Trend</span><strong class="${steady ? "" : tone(slope)}">${direction}</strong><em>${total.length < 3 || steady ? "about flat" : `${signed(Math.round(slope))} a month`}</em></div>
+        <div><span>Net ${net >= 0 ? "growth" : "decline"}</span><strong class="${tone(net)}">${signed(net)}</strong><em>${monthLabel(months[0], true)} to ${monthLabel(months[months.length - 1], true)}</em></div>
+        <div><span>Change</span><strong class="${tone(net)}">${pctText(pct)}</strong><em>first to last month shown</em></div>
+        <div><span>Trend</span><strong class="${cls}">${direction}</strong><em>${detail}</em></div>
       </div>
-      ${yoy != null ? `<p class="rd-yoy">Compared with a year earlier (${monthLabel(sr.months[n - 13], true)}): <b class="${tone(yoy)}">${pctText(yoy)}</b></p>` : ""}
+      ${yoyMonth != null ? `<p class="rd-yoy">${monthLabel(all.length ? sr.months[n - 1] : "", true)} compared with a year earlier (${monthLabel(sr.months[n - 13], true)}): <b class="${tone(yoyMonth)}">${pctText(yoyMonth)}</b></p>` : ""}
+      <p class="rd-note">Net growth and change compare the first and last months shown, so a seasonal month (like September near campus) can swing them. The trend compares like months with like, so seasons cancel out.</p>
     </div>`;
 }
 // Stock-style chart of the stop's total boardings: big number for the latest (or scrubbed) month, change
@@ -1345,7 +1363,7 @@ function wireRidership(root, s) {
       <div class="rd-axis"><span>${monthLabel(months[0], true)}</span><span>${monthLabel(months[m - 1], true)}</span></div>
       <div class="rd-ranges" role="group" aria-label="Time range">${RANGES.map(([k]) =>
         `<button type="button" data-range="${k}" aria-pressed="${k === riderRange}" style="--tc:${trend}">${k}</button>`).join("")}</div>
-      ${trendsHtml(total, months, rangeText, sr)}`;
+      ${trendsHtml(total, months, rangeText, sr, from)}`;
     // Keep the average tile in step with the range too.
     const avgEl = box.querySelector(".rd-avg"), avgLabel = box.querySelector(".rd-avg-label");
     if (avgEl) avgEl.textContent = fmtN(total.reduce((a, b) => a + b, 0) / m);
