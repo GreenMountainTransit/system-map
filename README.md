@@ -17,7 +17,7 @@ Other features: local routes drawn on top of other route types, a collapsible St
 
 | Path | What it does |
 | --- | --- |
-| `public/index.html` | The map page (all views). Holds the Mapbox token and the opening view (`HOME_BOUNDS`). |
+| `public/index.html` | The map page (all views). Holds the opening view (`HOME_BOUNDS`); keys and tokens are added at publish time from GitHub secrets. |
 | `public/planner.js` | The trip planner: finds trips with transfers from the timetable (RAPTOR), and checks each trip's first bus against live predictions. |
 | `public/live.js` | Fetches live bus locations (`/vehicles`) and stop predictions (`/predictions`) from Swiftly in the visitor's browser and merges them with the timetable. |
 | `scripts/build-data.mjs` | Turns GMT's GTFS into the route, stop, schedule and frequency files in `public/data/`, adds amenities and nearby places. |
@@ -27,7 +27,7 @@ Other features: local routes drawn on top of other route types, a collapsible St
 | `MAINTENANCE.md` | How to run and fix the map without a developer. |
 | `.github/workflows/build-data.yml` | Nightly (and on every change): downloads GMT's GTFS, builds the data, adds the Swiftly key, publishes the site. |
 
-The Swiftly API key is stored as a repository secret, not in the code. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
+The Mapbox token, Swiftly key and optional Google key are stored as repository secrets, not in the code. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
 
 **Swiftly rate limit:** the key's limit is shared by everyone using the map. Each open map asks for bus locations every 15 seconds, plus one predictions request every 15 seconds while a stop is open. If Swiftly answers "too many requests", the map pauses live requests (1 minute, doubling up to 10) and shows scheduled times meanwhile. Turning off Live buses also stops the location requests.
 
@@ -36,7 +36,7 @@ The Swiftly API key is stored as a repository secret, not in the code. The workf
 1. **Pages**: in the repo's **Settings → Pages**, set **Source** to **GitHub Actions**.
 2. **Swiftly key**: in **Settings → Secrets and variables → Actions**, click **New repository secret**. Name: `SWIFTLY_KEY`. Value: GMT's Swiftly API key.
 3. **Street View (optional)**: add a Google Maps Embed API key as the secret `GOOGLE_MAPS_KEY` to show Street View inside stop details (free; see MAINTENANCE.md). Without it, stop details link out to Google Maps.
-4. **Mapbox token**: in `public/index.html`, `MAPBOX_TOKEN` must be a public token (starts with `pk.`) with URL restriction `https://greenmountaintransit.github.io`.
+4. **Mapbox token**: add a public Mapbox token (starts with `pk.`, URL restriction `https://greenmountaintransit.github.io`) as the secret `MAPBOX_TOKEN`. The build stops if it's missing.
 5. **Publish**: run the workflow from the **Actions** tab (**Build map data and publish → Run workflow**).
 
 ## Embedding in CivicPlus

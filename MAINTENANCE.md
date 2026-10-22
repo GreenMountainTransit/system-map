@@ -14,7 +14,7 @@ Keep every account under a GMT-owned login, with at least two staff who can get 
 | --- | --- | --- | --- |
 | GitHub (organization `GreenMountainTransit`, repo `system-map`) | Hosts the site and runs the nightly update | github.com → the repo → Settings | |
 | Swiftly | Live bus locations and arrival predictions (`SWIFTLY_KEY`) | Swiftly dashboard / GMT's Swiftly rep | |
-| Mapbox | The basemap (token in `public/index.html`) | account.mapbox.com → Tokens | |
+| Mapbox (GMT Planning account) | The basemap and trip planner address search (`MAPBOX_TOKEN` secret) | account.mapbox.com → Tokens | |
 | Google Cloud (optional) | Street View inside stop details (`GOOGLE_MAPS_KEY`) | console.cloud.google.com → APIs & Services | |
 | Trillium | Publishes GMT's GTFS (the link in the workflow file) | GMT's Trillium contact | |
 | CivicPlus | The ridegmt.com pages that embed the map | CivicPlus admin | |
@@ -64,9 +64,11 @@ Amenities come from `amenities.csv`: one row per stop ID, with `yes`/`no` column
 3. **Actions → Build map data and publish → Run workflow**. In the run, the "Add keys" step should say "SWIFTLY_KEY added."
 
 ### Replace the Mapbox token
-1. At account.mapbox.com → **Tokens**, create a public token (starts with `pk.`). Leave every **Secret scope** unchecked. Set **URL restrictions** to `https://greenmountaintransit.github.io`.
-2. In the repo, open `public/index.html` → pencil icon → find `MAPBOX_TOKEN` (Ctrl+F) and replace the token between the quotes.
-3. Commit. If GitHub shows a "secret detected" warning, choose **It's a false positive** → **Allow secret**. Public Mapbox tokens are meant to be on web pages.
+The token is stored as a GitHub secret, not in the code.
+1. At account.mapbox.com (GMT Planning's account) → **Tokens** → **Create a token**. Leave every **Secret scope** unchecked (the token must start with `pk.`). Under **URL restrictions** add `https://greenmountaintransit.github.io`.
+2. Repo → **Settings → Secrets and variables → Actions** → `MAPBOX_TOKEN` → **Update**, paste the token, and save.
+3. **Actions → Build map data and publish → Run workflow**. In the run, the "Add keys" step should say "MAPBOX_TOKEN added."
+4. Check the map loads, then delete the old token in Mapbox.
 
 ### Turn on embedded Street View (optional, free)
 Without this, the Street View section in stop details shows a link that opens Google Maps.
@@ -104,6 +106,7 @@ GitHub emails the repo admins (usually whoever last edited the workflow file). T
 | `curl: (22) … 404` or `Could not resolve host` in **Download GTFS** | Trillium's link changed or was briefly down | Check the link opens in a browser. If it's down, wait a day. If it moved, update it (section 3). |
 | `GTFS check failed: no service in the 7 days…` | The published feed is expired or only covers future dates | Contact Trillium. The map keeps the previous schedule until a good feed appears. |
 | `GTFS check failed: no routes` / `no stops` | The download wasn't a real GTFS | Same as above. |
+| `No MAPBOX_TOKEN secret set` | The Mapbox token secret is missing | Add it (section 3, Replace the Mapbox token). |
 | `SyntaxError … route-info.json` or `Unexpected token` | A typo in `route-info.json` | Open the file and fix the quote or comma near the line mentioned, or undo the last change (section 5). |
 | `Overpass … failed` (a yellow warning, not red) | The nearby-places lookup was unavailable | Nothing; stops show without nearby places until the next night. |
 | A failure in **deploy** | GitHub Pages hiccup | Re-run the workflow (**Re-run jobs** button). |
@@ -175,5 +178,5 @@ Each section of the code starts with a comment line like `// ---------- stop det
 - **Swiftly:** GMT's real-time vendor. Provides live bus positions and predicted arrival times.
 - **Timepoint:** a stop with a scheduled time in the timetable; buses don't leave early from timepoints.
 - **Workflow / Actions:** GitHub's automation. Ours is "Build map data and publish."
-- **Secret:** a value stored privately in GitHub settings and added to the site at build time (`SWIFTLY_KEY`, `GOOGLE_MAPS_KEY`).
+- **Secret:** a value stored privately in GitHub settings and added to the site at build time (`MAPBOX_TOKEN`, `SWIFTLY_KEY`, `GOOGLE_MAPS_KEY`).
 - **Commit:** saving a change to a file in the repo. Commits to map files trigger a rebuild.
