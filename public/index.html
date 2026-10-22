@@ -243,6 +243,42 @@
   .src-line { margin: -2px 0 8px; font-size: .74rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .src-line.live { color: var(--live); }
   .src-line .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 3px rgba(10,125,59,.18); }
+  .rd-box { margin-top: 10px; font-size: .8rem; border-top: 1px solid var(--line); padding-top: 8px; }
+  .rd-box summary { cursor: pointer; color: var(--gmt); font-weight: 600; }
+  .rd-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 6px; }
+  .rd-stats div { background: var(--chip-bg); border-radius: 8px; padding: 8px 10px; }
+  .rd-stats strong { display: block; font-size: 1.25rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .rd-stats span { display: block; font-size: .72rem; color: var(--muted); margin-top: 2px; line-height: 1.3; }
+  .rd-latest { margin: 4px 0 6px; font-size: .78rem; color: var(--muted); }
+  .rd-latest strong { color: var(--ink); } .rd-latest .up { color: var(--live); } .rd-latest .down { color: var(--warn); }
+  .rd-graph { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .rd-head { display: grid; gap: 1px; }
+  .rd-big { font-size: 1.7rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .rd-when { font-size: .74rem; color: var(--muted); }
+  .rd-chg { font-size: .8rem; font-weight: 700; font-variant-numeric: tabular-nums; } .rd-chg span { font-weight: 400; color: var(--muted); }
+  .rd-line { display: block; width: 100%; height: auto; margin-top: 6px; touch-action: none; cursor: crosshair; overflow: visible; }
+  .rd-path { fill: none; stroke-width: 2.4; stroke-linejoin: round; stroke-linecap: round; }
+  .rd-base { stroke: #c9d3cc; stroke-width: 1; stroke-dasharray: 2 3; }
+  .rd-cursor { stroke: #8a978f; stroke-width: 1; }
+  .rd-dot { stroke: #fff; stroke-width: 2; }
+  .rd-ranks { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 5px; }
+  .rd-ranks li { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; font-size: .78rem; }
+  .rd-ranks b { font-variant-numeric: tabular-nums; }
+  .rd-trends { margin-top: 10px; }
+  .rd-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .rd-tiles div { background: var(--chip-bg); border-radius: 8px; padding: 7px 8px; min-width: 0; }
+  .rd-tiles span { display: block; font-size: .68rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+  .rd-tiles strong { display: block; font-size: 1rem; line-height: 1.2; margin-top: 2px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .rd-tiles em { display: block; font-style: normal; font-size: .68rem; color: var(--muted); margin-top: 1px; }
+  .rd-trends .up { color: #0a8a3e; } .rd-trends .down { color: #c2410c; }
+  .rd-yoy { margin: 8px 0 0; font-size: .76rem; color: var(--muted); }
+  .rd-ranges { display: flex; gap: 4px; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+  .rd-ranges button { flex: 1; border: 0; background: none; padding: 6px 0; font-size: .78rem; font-weight: 700; color: var(--muted); cursor: pointer; border-radius: 6px; }
+  .rd-ranges button[aria-pressed=true] { color: var(--tc); background: color-mix(in srgb, var(--tc) 12%, transparent); }
+  .rd-axis { display: flex; justify-content: space-between; font-size: .68rem; color: var(--faint); margin: 2px 0 8px; }
+  .rd-h { margin: 6px 0 4px; font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .rd-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: .74rem; }
+  .src a { color: var(--gmt); font-weight: 600; }
   .sv-box { margin-top: 10px; font-size: .8rem; border-top: 1px solid var(--line); padding-top: 8px; }
   .sv-box summary { cursor: pointer; color: var(--gmt); font-weight: 600; }
   .sv-body iframe { display: block; width: 100%; aspect-ratio: 4 / 3; border: 0; border-radius: 8px; margin-top: 8px; background: var(--chip-bg); }
@@ -328,6 +364,7 @@ let liveBusesOn = true; // riders can switch live buses off; remembered on their
 try { liveBusesOn = localStorage.getItem("gmt-live-buses") !== "off"; } catch {}
 let view = ["frequency", "plan"].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
 const planState = { from: null, to: null, when: "now", time: "", result: null, selected: 0, live: {} }; // trip planner
+let ridershipData = null, riderOpen = false, riderRange = "12M"; // ridership section starts collapsed for each stop
 let svOpen = false, svCam = null; // Street View section open?  camera marker on the map
 let picking = false; // false: the legend shows its defaults; true: the rider has picked specific routes
 let freqData;
@@ -424,6 +461,7 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
   .then(async ([lines, stops, meta]) => {
     linesData = lines; stopsData = stops;
     freqData = await fetch(DIR + "frequency.geojson").then((r) => (r.ok ? r.json() : null)).catch(() => null) || { type: "FeatureCollection", features: [] };
+    fetch(DIR + "ridership.json").then((r) => (r.ok ? r.json() : null)).then((d) => (ridershipData = d)).catch(() => {}); // optional
     meta.routes.forEach((r) => (routes[r.route_id] = r));
     groups = meta.groups.length ? meta.groups : [{ id: "local", name: "Routes", default: "on" }];
     routeStops = meta.stops;
@@ -922,7 +960,7 @@ const stopPanel = document.getElementById("stop-panel");
 function showStop(id, fly) {
   const s = stopsById[id]; if (!s) return;
   const wasOpen = !!openStopId;
-  openStopId = id; hideTip(); showAllTimes = false; svOpen = false; setCamera(null);
+  openStopId = id; hideTip(); showAllTimes = false; svOpen = false; setCamera(null); riderOpen = false;
   openPopup?.remove();
   highlight(s.routes.filter((rid) => visibleRoutes().includes(rid)));
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
@@ -961,12 +999,14 @@ async function refreshPopup(announce) {
   if (showAllTimes) try { allTimes = (await GMTLive.arrivals({ stop: id, all: true, only })).arrivals[id] || []; } catch {}
   if (id !== openStopId) return;
   const body = stopPanel.querySelector(".sp-body"); if (!body) return;
-  const scrollTop = body.scrollTop, keepSv = body.querySelector("#sv-box[data-wired]");
+  const scrollTop = body.scrollTop, keepSv = body.querySelector("#sv-box[data-wired]"), keepRd = body.querySelector("#rider-box[data-wired]");
   body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
   if (keepSv) body.querySelector("#sv-box")?.replaceWith(keepSv); // keep the loaded Street View as is
+  if (keepRd) body.querySelector("#rider-box")?.replaceWith(keepRd); // and the ridership chart
   body.scrollTop = scrollTop;
   body.querySelector("#see-all")?.addEventListener("click", () => { showAllTimes = !showAllTimes; refreshPopup(); });
   wireStreetView(body, stopsById[id]);
+  wireRidership(body, stopsById[id]);
   if (announce && Array.isArray(arrivals)) {
     const s = stopsById[id];
     document.getElementById("announce").textContent = `${s.name}. ` + (arrivals.length
@@ -1013,6 +1053,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
     `<li class="${no ? "no" : ""}"><span class="ico" aria-hidden="true">${ICON[icon]}</span>${esc(label)}</li>`).join("")}</ul>` : "";
 
   const rs = (routeParam ? [routeParam] : s.routes).map((id) => routes[id]).filter(Boolean);
+  const rider = ridershipHtml(s);
   const sv = s.sv ? `<details class="sv-box" id="sv-box" ${svOpen ? "open" : ""}><summary>Street View</summary><div class="sv-body"></div></details>` : "";
   const about = `<details><summary>About ${rs.length === 1 ? "this route" : `these ${rs.length} routes`}</summary><div class="about">${rs.map((r) =>
     `${chip(r)}<p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
@@ -1022,7 +1063,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
     : !liveReady ? `<p class="src-line">Scheduled times. Live predictions aren’t connected yet.</p>`
     : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions · updated ${clock(Date.now() / 1000)}</p>`
     : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
-  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${sv}${about}
+  return `<div class="pop"><h3 class="sp-sub" id="next-h">Next departures</h3>${source}${body}${seeAll}${featHtml}${rider}${sv}${about}
     ${n && (n.food || n.shopping || n.restroom) ? `<p class="src">Nearby means within about a 3-minute walk. Places from OpenStreetMap.</p>` : ""}</div>`;
 }
 
@@ -1204,6 +1245,125 @@ function drawPlan(fit) {
     geo.features.forEach((ft) => (ft.geometry.type === "Point" ? [ft.geometry.coordinates] : ft.geometry.coordinates).forEach((c) => b.extend(c)));
     map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
   }
+}
+
+// ---------- ridership (from GMT's ArcGIS Online stops data, summarized nightly) ----------
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthLabel = (k, short) => { const [y, m] = k.split("-").map(Number); return `${(short ? MONTH_NAMES[m - 1].slice(0, 3) : MONTH_NAMES[m - 1])} ${y}`; };
+const fmtN = (n) => Math.round(n).toLocaleString("en-US");
+// Ridership is shown at the STOP level only: the stop's total boardings, all routes combined.
+// Ranks compare stop totals: among all GMT stops, and among the stops each serving route stops at.
+function riderSeries(s) {
+  const d = ridershipData, st = d?.stops?.[s.stop_id];
+  if (!st || !st.t?.some((v) => v > 0)) return null;
+  return { st, total: st.t, months: d.months };
+}
+// Rank of a stop among the stops a route serves (by each stop's 12-month average total boardings).
+function routeRank(stopId, routeId) {
+  const d = ridershipData;
+  const onRoute = Object.values(stopsById).filter((x) => x.routes.includes(routeId) && d.stops[x.stop_id]);
+  const sorted = onRoute.map((x) => [x.stop_id, d.stops[x.stop_id].avg || 0]).sort((a, b) => b[1] - a[1]);
+  const i = sorted.findIndex(([id]) => id === stopId);
+  return i < 0 ? null : { rank: i + 1, of: sorted.length };
+}
+function ridershipHtml(s) {
+  const sr = riderSeries(s);
+  if (!sr) return "";
+  const last12 = sr.total.slice(-12);
+  const avg = Math.round(last12.reduce((a, b) => a + b, 0) / last12.length);
+  const routeIds = (routeParam ? [routeParam] : s.routes).filter((id) => routes[id]);
+  const ranks = routeIds.map((id) => [routes[id], routeRank(s.stop_id, id)]).filter(([, r]) => r);
+  return `<details class="rd-box" id="rider-box" ${riderOpen ? "open" : ""}><summary>Ridership</summary>
+    <div class="rd-stats">
+      <div><strong>${fmtN(avg)}</strong><span>boardings a month at this stop, 12-month average</span></div>
+      <div><strong>#${sr.st.rank}</strong><span>of ${fmtN(ridershipData.of)} GMT stops by boardings</span></div>
+    </div>
+    ${ranks.length ? `<p class="rd-h">Rank among stops on ${ranks.length === 1 ? "the route" : "each route"}</p>
+      <ul class="rd-ranks">${ranks.map(([r, k]) => `<li>${chip(r)}<span><b>#${k.rank}</b> of ${k.of} stops${r.long_name ? ` on ${esc(r.long_name)}` : ""}</span></li>`).join("")}</ul>` : ""}
+    <div class="rd-graph"></div>
+    <p class="src">Estimated monthly boardings at this stop, all routes combined, from GMT ridership data. <a href="${esc(ridershipData.dashboard)}" target="_blank" rel="noopener">Explore the stops dashboard ↗</a></p>
+  </details>`;
+}
+// Trends for the chosen range: net and % change (first month vs. last), the overall direction from a
+// straight-line fit (so one odd month doesn't decide it), and year-over-year.
+function fitSlope(vals) {
+  const n = vals.length; if (n < 2) return 0;
+  const mx = (n - 1) / 2, my = vals.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  vals.forEach((v, i) => { num += (i - mx) * (v - my); den += (i - mx) ** 2; });
+  return den ? num / den : 0; // boardings per month
+}
+function trendsHtml(total, months, rangeText, sr) {
+  const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${fmtN(Math.abs(n))}`;
+  const pctOf = (a, b) => (a ? ((b - a) / a) * 100 : null);
+  const pctText = (p) => (p == null ? "–" : `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(p).toFixed(1)}%`);
+  const tone = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
+  const first = total[0], last = total[total.length - 1], net = last - first, pct = pctOf(first, last);
+  const slope = fitSlope(total), mean = total.reduce((a, b) => a + b, 0) / total.length;
+  const steady = Math.abs(slope) < mean * 0.01; // less than 1% of a typical month per month
+  const direction = total.length < 3 ? "Not enough months" : steady ? "Steady" : slope > 0 ? "Growing" : "Declining";
+  const all = sr.total, n = all.length, yoy = n > 12 ? pctOf(all[n - 13], all[n - 1]) : null;
+  return `<div class="rd-trends">
+      <p class="rd-h">Trends, ${rangeText}</p>
+      <div class="rd-tiles">
+        <div><span>Net ${net >= 0 ? "growth" : "decline"}</span><strong class="${tone(net)}">${signed(net)}</strong><em>boardings a month</em></div>
+        <div><span>Change</span><strong class="${tone(net)}">${pctText(pct)}</strong><em>${monthLabel(months[0], true)} to ${monthLabel(months[months.length - 1], true)}</em></div>
+        <div><span>Trend</span><strong class="${steady ? "" : tone(slope)}">${direction}</strong><em>${total.length < 3 || steady ? "about flat" : `${signed(Math.round(slope))} a month`}</em></div>
+      </div>
+      ${yoy != null ? `<p class="rd-yoy">Compared with a year earlier (${monthLabel(sr.months[n - 13], true)}): <b class="${tone(yoy)}">${pctText(yoy)}</b></p>` : ""}
+    </div>`;
+}
+// Stock-style chart of the stop's total boardings: big number for the latest (or scrubbed) month, change
+// over the chosen range (green up, red down), scrub with mouse or finger, and 6M / YTD / 12M / All buttons.
+function wireRidership(root, s) {
+  const box = root.querySelector("#rider-box"); if (!box || box.dataset.wired) return;
+  box.dataset.wired = "1";
+  box.addEventListener("toggle", () => (riderOpen = box.open));
+  const sr = riderSeries(s), graph = box.querySelector(".rd-graph");
+  const RANGES = [["6M", "past 6 months"], ["YTD", "year to date"], ["12M", "past 12 months"], ["All", "all time"]];
+  const draw = () => {
+    const n = sr.months.length, latestYear = sr.months[n - 1].slice(0, 4);
+    const start = riderRange === "6M" ? n - 6 : riderRange === "12M" ? n - 12 : riderRange === "YTD" ? sr.months.findIndex((m) => m.startsWith(latestYear)) : 0;
+    const from = Math.max(0, start), months = sr.months.slice(from), total = sr.total.slice(from), m = months.length;
+    const first = total[0], last = total[m - 1], diff = last - first, pct = first ? (diff / first) * 100 : 0;
+    const up = diff >= 0, trend = up ? "#0a8a3e" : "#c2410c", rangeText = RANGES.find((r) => r[0] === riderRange)[1];
+    // Like a stock chart, the vertical scale runs from the lowest to the highest month shown.
+    const W = 320, H = 130, P = 10, lo = Math.min(...total), hi = Math.max(...total), span = Math.max(1, hi - lo);
+    const X = (i) => (m === 1 ? W / 2 : P + (i / (m - 1)) * (W - 2 * P)), Y = (v) => H - P - ((v - lo) / span) * (H - 2 * P);
+    const path = total.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join("");
+    graph.innerHTML = `
+      <div class="rd-head"><strong class="rd-big">${fmtN(last)}</strong>
+        <span class="rd-when">boardings in ${monthLabel(months[m - 1])}</span>
+        <span class="rd-chg" style="color:${trend}">${up ? "▲" : "▼"} ${fmtN(Math.abs(diff))} (${Math.abs(pct).toFixed(1)}%) <span>${rangeText}</span></span></div>
+      <svg class="rd-line" viewBox="0 0 ${W} ${H}" role="img" aria-label="Monthly boardings at this stop, ${rangeText}: from ${fmtN(first)} in ${monthLabel(months[0])} to ${fmtN(last)} in ${monthLabel(months[m - 1])}">
+        <line x1="${P}" x2="${W - P}" y1="${Y(first)}" y2="${Y(first)}" class="rd-base"/>
+        <path d="${path}" stroke="${trend}" class="rd-path"/>
+        <line class="rd-cursor" y1="0" y2="${H}" x1="0" x2="0" visibility="hidden"/>
+        <circle class="rd-dot" r="4" cx="0" cy="0" fill="${trend}" visibility="hidden"/>
+        <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
+      </svg>
+      <div class="rd-axis"><span>${monthLabel(months[0], true)}</span><span>${monthLabel(months[m - 1], true)}</span></div>
+      <div class="rd-ranges" role="group" aria-label="Time range">${RANGES.map(([k]) =>
+        `<button type="button" data-range="${k}" aria-pressed="${k === riderRange}" style="--tc:${trend}">${k}</button>`).join("")}</div>
+      ${trendsHtml(total, months, rangeText, sr)}`;
+    // Scrub: move across the chart to read any month, then it springs back to the latest.
+    const svgEl = graph.querySelector("svg"), big = graph.querySelector(".rd-big"), whenEl = graph.querySelector(".rd-when");
+    const cursor = graph.querySelector(".rd-cursor"), dot = graph.querySelector(".rd-dot");
+    const show = (i) => {
+      big.textContent = fmtN(total[i]); whenEl.textContent = `boardings in ${monthLabel(months[i])}`;
+      cursor.setAttribute("x1", X(i)); cursor.setAttribute("x2", X(i)); cursor.setAttribute("visibility", "visible");
+      dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(total[i])); dot.setAttribute("visibility", "visible");
+    };
+    const reset = () => { show(m - 1); cursor.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); };
+    const move = (e) => {
+      const r = svgEl.getBoundingClientRect(), x = ((e.clientX - r.left) / r.width) * W;
+      show(Math.max(0, Math.min(m - 1, Math.round(((x - P) / (W - 2 * P)) * (m - 1)))));
+    };
+    svgEl.addEventListener("pointermove", move); svgEl.addEventListener("pointerdown", move);
+    svgEl.addEventListener("pointerleave", reset); svgEl.addEventListener("pointerup", (e) => e.pointerType !== "mouse" && reset());
+    graph.querySelectorAll("[data-range]").forEach((b) => (b.onclick = () => { riderRange = b.dataset.range; draw(); }));
+  };
+  draw();
 }
 
 // ---------- Street View (collapsed until opened; nothing loads before that) ----------
