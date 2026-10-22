@@ -1275,7 +1275,7 @@ function ridershipHtml(s) {
   const ranks = routeIds.map((id) => [routes[id], routeRank(s.stop_id, id)]).filter(([, r]) => r);
   return `<details class="rd-box" id="rider-box" ${riderOpen ? "open" : ""}><summary>Ridership</summary>
     <div class="rd-stats">
-      <div><strong>${fmtN(avg)}</strong><span>boardings a month at this stop, 12-month average</span></div>
+      <div><strong class="rd-avg">${fmtN(avg)}</strong><span class="rd-avg-label">boardings a month at this stop, average past 12 months</span></div>
       <div><strong>#${sr.st.rank}</strong><span>of ${fmtN(ridershipData.of)} GMT stops by boardings</span></div>
     </div>
     ${ranks.length ? `<p class="rd-h">Rank among stops on ${ranks.length === 1 ? "the route" : "each route"}</p>
@@ -1346,6 +1346,10 @@ function wireRidership(root, s) {
       <div class="rd-ranges" role="group" aria-label="Time range">${RANGES.map(([k]) =>
         `<button type="button" data-range="${k}" aria-pressed="${k === riderRange}" style="--tc:${trend}">${k}</button>`).join("")}</div>
       ${trendsHtml(total, months, rangeText, sr)}`;
+    // Keep the average tile in step with the range too.
+    const avgEl = box.querySelector(".rd-avg"), avgLabel = box.querySelector(".rd-avg-label");
+    if (avgEl) avgEl.textContent = fmtN(total.reduce((a, b) => a + b, 0) / m);
+    if (avgLabel) avgLabel.textContent = `boardings a month at this stop, average ${rangeText}`;
     // Scrub: move across the chart to read any month, then it springs back to the latest.
     const svgEl = graph.querySelector("svg"), big = graph.querySelector(".rd-big"), whenEl = graph.querySelector(".rd-when");
     const cursor = graph.querySelector(".rd-cursor"), dot = graph.querySelector(".rd-dot");
