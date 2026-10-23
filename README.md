@@ -11,7 +11,7 @@ A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 
 Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, ridership (the stop's total monthly boardings as a stock-style chart with 6M / YTD / 12M / All, growth or decline, and its rank among all stops and among the stops on each of its routes; stop level only, from GMT's ArcGIS Online stops data), accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
-Other features: service alerts and detours with temporary stops and their times (via the relay), "next service near you" from the locate button (nearest stop in each direction, walk time and next trips; on route pages the search also takes addresses), a trip planner with leave-now / leave-at / arrive-by, live bus destinations, a desktop 3D view where you can follow a bus (a 3D bus with its speed, refreshed every 5 seconds), local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
+Other features: service alerts and detours with temporary stops and their times (via the relay), "next service near you" from the locate button (nearest stop in each direction, walk time and next trips; on route pages the search also takes addresses), a trip planner with leave-now / leave-at / arrive-by, live bus destinations, a desktop 3D view where every live bus is a 3D GMT bus you can click to follow (with its speed), and clicking a stop gives a street-level view beside a GMT stop sign, watching for the next bus, local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
 
 ## What's in the repo
 
@@ -19,7 +19,7 @@ Other features: service alerts and detours with temporary stops and their times 
 | --- | --- |
 | `public/index.html` | The map page (all views). Holds the opening view (`HOME_BOUNDS`); keys and tokens are added at publish time from GitHub secrets. |
 | `public/planner.js` | The trip planner: finds trips with transfers from the timetable (RAPTOR), and checks each trip's first bus against live predictions. |
-| `public/bus3d.js`, `public/assets/gmt-logo.png` | The detailed 3D bus shown when following a bus in 3D view (GMT livery and logo, destination sign, driver). |
+| `public/bus3d.js`, `public/gmt-logo.png` | The 3D models for the 3D view: GMT buses (livery, logo, destination sign, driver) and the GMT bus stop sign. |
 | `public/live.js` | Fetches live bus locations (`/vehicles`) and stop predictions (`/predictions`) from Swiftly in the visitor's browser and merges them with the timetable. |
 | `scripts/build-data.mjs` | Turns GMT's GTFS into the route, stop, schedule and frequency files in `public/data/`, adds amenities and nearby places. |
 | `scripts/prepare-amenities.mjs` | Turns the field-survey exports into `amenities.csv`. |
