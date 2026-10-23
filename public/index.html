@@ -354,6 +354,11 @@
   .mapboxgl-ctrl-top-right, .mapboxgl-ctrl-bottom-right { transition: right .2s; }
   #toggle { display: none; }
   @media (max-width: 640px) {
+    /* Phones: service alerts in the top-left corner, clear of the basemap buttons on the right */
+    #alert-banner { top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; transform: none; max-width: calc(100% - 215px); }
+    #alert-banner .ab-btn { margin: 0; padding: 7px 11px; font-size: .8rem; max-width: 100%; }
+    #alert-banner .ab-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #alert-banner .ab-list { box-sizing: border-box; width: calc(100vw - 20px); max-width: 420px; max-height: 55vh; }
     #panel, #stop-panel { transition: height .22s ease; touch-action: none; }
     #panel.dragging, #stop-panel.dragging { transition: none; }
     #panel .scroll, .sp-body { touch-action: pan-y; }
