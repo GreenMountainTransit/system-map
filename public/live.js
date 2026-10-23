@@ -82,7 +82,7 @@
           type: "Feature",
           properties: {
             id: v.id, label: v.id, route_id: v.routeId, headsign: v.headsign || "",
-            heading: v.loc.heading ?? null, time: (v.loc.time || now) * 1000,
+            heading: v.loc.heading ?? null, time: (v.loc.time || now) * 1000, speed: v.loc.speed ?? null, // meters per second
           },
           geometry: { type: "Point", coordinates: [v.loc.lon, v.loc.lat] },
         })),

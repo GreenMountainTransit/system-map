@@ -197,6 +197,8 @@
   #follow-bar { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 10px;
     background: #fff; border-radius: 999px; padding: 6px 8px 6px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.2); font-size: .84rem; font-weight: 600; white-space: nowrap; }
   #follow-bar[hidden] { display: none; }
+  .follow-speed { font-variant-numeric: tabular-nums; color: var(--gmt); font-weight: 800; }
+  .follow-speed:empty { display: none; }
   #follow-bar button { border: 0; background: var(--ink); color: #fff; border-radius: 999px; padding: 5px 12px; font-weight: 700; cursor: pointer; font-size: .8rem; }
   .toast { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 5; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px;
     font-size: .82rem; box-shadow: 0 4px 14px rgba(0,0,0,.25); transition: opacity .6s ease; max-width: 90%; text-align: center; }
@@ -230,6 +232,7 @@
   .alerts { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
   .ab-list .alerts { margin: 8px 0; }
   .alert { border-left: 4px solid #ea580c; background: #fff7ef; border-radius: 6px; padding: 8px 10px; font-size: .8rem; }
+  .al-click { cursor: pointer; } .al-click:hover { background: #ffefe0; }
   .al-head { display: flex; gap: 6px; align-items: flex-start; margin: 0; color: #7c2d12; line-height: 1.35; }
   .al-head svg { width: 16px; height: 16px; flex: none; margin-top: 1px; color: #ea580c; }
   .al-routes { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 6px 0 0; } .al-routes span { font-size: .72rem; font-weight: 700; color: #9a3412; margin-left: 4px; }
@@ -583,19 +586,22 @@ map.addControl({
   onRemove() {},
 }, "bottom-right");
 
-// A short hint by the Expand button on load, so people know full screen is there. Fades after 5 seconds.
-map.once("load", () => setTimeout(() => {
+// A short hint beside the Expand / Minimize button, fading after 5 seconds: on load ("Expand to full screen"),
+// and after going full screen ("Minimize").
+function ctrlHint(text) {
   const btn = document.querySelector(".expand-ctrl:not([hidden]) .expand-btn");
-  if (!btn || isFullscreen()) return;
-  const hint = document.createElement("div"); hint.className = "fs-hint"; hint.setAttribute("role", "status");
-  hint.textContent = "Expand to full screen";
+  if (!btn) return;
+  document.querySelectorAll(".fs-hint").forEach((h) => h.remove());
+  const hint = document.createElement("div"); hint.className = "fs-hint"; hint.setAttribute("role", "status"); hint.textContent = text;
   document.getElementById("wrap").appendChild(hint);
   const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect();
   hint.style.right = (w.right - r.left + 10) + "px"; hint.style.top = (r.top - w.top + r.height / 2) + "px";
   btn.classList.add("pulse");
   setTimeout(() => { hint.classList.add("out"); btn.classList.remove("pulse"); }, 5000);
   setTimeout(() => hint.remove(), 5600);
-}, 800));
+}
+map.once("load", () => setTimeout(() => ctrlHint(isFullscreen() || new URLSearchParams(location.search).get("full") === "1" ? "Minimize" : "Expand to full screen"), 800));
+["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => { if (isFullscreen()) setTimeout(() => ctrlHint("Minimize"), 400); }));
 // ---------- 3D mode (desktop only): tilted map with 3D buildings; click a bus to ride along behind it ----------
 const three = { on: false, follow: null, misses: 0 };
 const canThreeD = () => !matchMedia("(hover: none) and (pointer: coarse)").matches && innerWidth > 640;
@@ -628,26 +634,88 @@ function setThreeD(on) {
     try { map.setConfigProperty("basemap", "show3dObjects", false); } catch {}
   }
 }
+const FOLLOW_MS = 5000; // while following a bus, ask for its position every 5 seconds
+const BUS_LEN = 30.5;   // the 3D bus is ~100 ft long at map scale (exaggerated so it reads at street zoom)
+let followState = null;  // { id, route, fix: {c, heading, speed, at}, shown: {c, heading}, prev, timer, raf }
 function startFollow(p) {
+  stopFollow();
   three.follow = p.id; three.misses = 0;
+  const now = performance.now();
+  followState = { id: p.id, route: p.route_id, fix: { c: null, heading: p.heading ?? map.getBearing(), speed: p.speed, at: now, time: p.time }, shown: null };
+  const f = lastBuses.features.find((x) => x.properties.id === p.id);
+  if (f) { followState.fix.c = f.geometry.coordinates; followState.shown = { c: [...f.geometry.coordinates], heading: followState.fix.heading }; }
   let bar = document.getElementById("follow-bar");
   if (!bar) { bar = document.createElement("div"); bar.id = "follow-bar"; document.getElementById("map").appendChild(bar); }
   const r = routes[p.route_id] || {};
-  bar.innerHTML = `${chip(r)}<span>Following bus ${esc(p.label || p.id)}${p.headsign ? ` to ${esc(niceDest(p.headsign))}` : ""}</span><button type="button" id="follow-stop">Stop</button>`;
+  bar.innerHTML = `${chip(r)}<span>Following bus ${esc(p.label || p.id)}${p.headsign ? ` to ${esc(niceDest(p.headsign))}` : ""}</span>
+    <span class="follow-speed" id="follow-speed">${speedText(p.speed)}</span><button type="button" id="follow-stop">Stop</button>`;
   bar.hidden = false;
   document.getElementById("follow-stop").onclick = stopFollow;
-  followBus(true);
+  if (map.getLayer("stop-names")) { map.setFilter("stop-names", ["in", `|${p.route_id}|`, ["get", "routes_key"]]); map.setLayoutProperty("stop-names", "visibility", "visible"); }
+  applyFilters(); // hides the followed bus's flat badge; the 3D bus takes its place
+  if (followState.shown) map.easeTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: reduceMotion ? 0 : 1200 });
+  followState.timer = setInterval(() => refreshBuses(), FOLLOW_MS);
+  setTimeout(() => { if (followState) followState.raf = requestAnimationFrame(followFrame); }, reduceMotion ? 0 : 1250);
 }
-function stopFollow() { three.follow = null; const bar = document.getElementById("follow-bar"); if (bar) bar.hidden = true; }
-// Glide behind the bus to its newest position over the refresh interval, facing the way it's heading.
-function followBus(first) {
-  if (!three.follow) return;
-  const f = lastBuses.features.find((x) => x.properties.id === three.follow);
-  if (!f) { if (++three.misses > 2) { stopFollow(); toast("That bus stopped reporting its location."); } return; }
+function stopFollow() {
+  if (followState) { clearInterval(followState.timer); cancelAnimationFrame(followState.raf); }
+  followState = null; three.follow = null;
+  const bar = document.getElementById("follow-bar"); if (bar) bar.hidden = true;
+  map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] });
+  if (map.getLayer("stop-names")) map.setLayoutProperty("stop-names", "visibility", "none");
+  if (map.getLayer("buses")) applyFilters();
+}
+const speedText = (mps) => (mps == null ? "" : `${Math.round(mps * 2.237)} mph`);
+// A new reported position arrived (every 5 s): note it, and work out speed if Swiftly didn't send one.
+function followBus() {
+  if (!followState) return;
+  const f = lastBuses.features.find((x) => x.properties.id === followState.id);
+  if (!f) { if (++three.misses > 3) { stopFollow(); toast("That bus stopped reporting its location."); } return; }
   three.misses = 0;
-  const move = { center: f.geometry.coordinates, bearing: f.properties.heading ?? map.getBearing(), pitch: 62, zoom: 17, duration: first ? 1200 : REFRESH_MS * 0.95 };
-  if (!first) move.easing = (t) => t; // steady glide between updates
-  map.easeTo(move);
+  const c = f.geometry.coordinates, now = performance.now(), old = followState.fix;
+  if (old.c && c[0] === old.c[0] && c[1] === old.c[1]) return; // same report as before
+  let speed = f.properties.speed;
+  if (speed == null && old.c) { const dt = (f.properties.time - (old.time || f.properties.time)) / 1000; if (dt > 0) speed = meters(old.c, c) / dt; }
+  followState.fix = { c, heading: f.properties.heading ?? old.heading, speed: speed ?? old.speed ?? 0, at: now, time: f.properties.time };
+  const el = document.getElementById("follow-speed"); if (el) el.textContent = speedText(followState.fix.speed);
+}
+// Every animation frame: keep the bus moving along its heading at its speed since the last report, ease the
+// shown position toward that, redraw the 3D bus, and keep the camera behind it.
+function followFrame() {
+  if (!followState) return;
+  const st = followState, fx = st.fix;
+  if (fx.c) {
+    const secs = Math.min(15, (performance.now() - fx.at) / 1000), dist = (fx.speed || 0) * secs, h = (fx.heading * Math.PI) / 180;
+    const target = offsetMeters(fx.c, Math.sin(h) * dist, Math.cos(h) * dist);
+    if (!st.shown) st.shown = { c: target, heading: fx.heading };
+    st.shown.c = [st.shown.c[0] + (target[0] - st.shown.c[0]) * 0.08, st.shown.c[1] + (target[1] - st.shown.c[1]) * 0.08];
+    let dh = ((fx.heading - st.shown.heading + 540) % 360) - 180; st.shown.heading = (st.shown.heading + dh * 0.08 + 360) % 360;
+    map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
+    map.jumpTo({ center: st.shown.c, bearing: st.shown.heading });
+  }
+  st.raf = requestAnimationFrame(followFrame);
+}
+// Move a point by meters east (dx) and north (dy).
+function offsetMeters([lon, lat], dx, dy) { return [lon + dx / (111320 * Math.cos((lat * Math.PI) / 180)), lat + dy / 110540]; }
+// The 3D bus, built from map shapes: wheels, a body in the route color, a dark window band, a light roof
+// and headlights at the front. Each piece is a box: length and width in meters, and its bottom and top.
+function busModel(c, heading, color) {
+  const L = BUS_LEN, W = L * 0.22, h = (heading * Math.PI) / 180, fx = Math.sin(h), fy = Math.cos(h), rx = Math.cos(h), ry = -Math.sin(h);
+  const box = (along, across, len, wid, base, top, col) => {
+    const pts = [[-len / 2, -wid / 2], [len / 2, -wid / 2], [len / 2, wid / 2], [-len / 2, wid / 2], [-len / 2, -wid / 2]]
+      .map(([a, b]) => offsetMeters(c, fx * (along + a) + rx * (across + b), fy * (along + a) + ry * (across + b)));
+    return { type: "Feature", properties: { base, top, color: col }, geometry: { type: "Polygon", coordinates: [pts] } };
+  };
+  const H = L * 0.27; // overall height
+  return { type: "FeatureCollection", features: [
+    ...[-0.33, 0.3].flatMap((a) => [-1, 1].map((s) => box(a * L, s * (W / 2 - W * 0.06), L * 0.11, W * 0.12, 0, H * 0.2, "#151a1e"))), // wheels
+    box(0, 0, L, W, H * 0.12, H * 0.48, color),                       // lower body
+    box(0, 0, L * 0.97, W * 0.97, H * 0.48, H * 0.82, "#1d2b36"),    // windows
+    box(L * 0.4, 0, L * 0.12, W * 0.9, H * 0.5, H * 0.78, "#2c3e4c"), // windshield (front)
+    box(0, 0, L, W, H * 0.82, H * 0.96, "#f2f4f3"),                   // roof
+    box(L / 2 - 0.4, -W * 0.32, 0.8, W * 0.16, H * 0.2, H * 0.32, "#ffe08a"), // headlights
+    box(L / 2 - 0.4, W * 0.32, 0.8, W * 0.16, H * 0.2, H * 0.32, "#ffe08a"),
+  ] };
 }
 map.on("dragstart", (e) => { if (e.originalEvent && three.follow) stopFollow(); }); // dragging the map ends following
 function toast(text) {
@@ -680,13 +748,16 @@ geolocate.on("geolocate", (e) => {
 // "Next service near you": for each nearby route, the closest stop in EACH direction (one stop for loop
 // routes), the walk there, and the next departures that way. Used by the locate button and, on route
 // pages, by address search.
-const WALK = { mps: 1.25, detour: 1.3, maxM: 1200 };
+const WALK = { mps: 1.25, detour: 1.3, maxM: 8000 }; // show the nearest stops up to ~5 miles away; beyond that, "no service nearby"
+// "4 min walk (300 m)", or for long distances "1.8 mi away (about 45 min walk)".
+const walkText = (m) => m < 1600 ? `${walkMin(m)} min walk (${Math.round(m / 10) * 10} m)` : `${(m / 1609).toFixed(1)} mi away (about ${walkMin(m)} min walk)`;
 const walkMin = (m) => Math.max(1, Math.round((m * WALK.detour) / WALK.mps / 60));
 const meters = (a, b) => { const k = Math.cos((a[1] * Math.PI) / 180); return Math.hypot((b[0] - a[0]) * k, b[1] - a[1]) * 111320; };
 async function showNearby(here, title, onlyRoutes) {
   closeStop();
   const near = Object.values(stopsById).map((s) => [s, meters(here, s.coords)]).filter(([, m]) => m <= WALK.maxM);
-  const routeIds = onlyRoutes || [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r] && visibleRoutes().includes(r));
+  let routeIds = onlyRoutes || [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r] && visibleRoutes().includes(r));
+  if (!onlyRoutes && !routeIds.length) routeIds = [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r]);
   const options = [];
   for (const rid of routeIds) {
     for (const [dir, pat] of Object.entries(routeStops[rid] || {})) {
@@ -696,12 +767,15 @@ async function showNearby(here, title, onlyRoutes) {
     }
   }
   options.sort((a, b) => a.m - b.m);
+  // Keep routes whose nearest stop is reasonably close compared with the very nearest (and at most 8 routes).
+  if (options.length) { const nearestM = options[0].m, keepRoutes = [...new Set(options.filter((o) => o.m <= Math.max(1200, nearestM * 1.6)).map((o) => o.rid))].slice(0, 8);
+    for (let i = options.length - 1; i >= 0; i--) if (!keepRoutes.includes(options[i].rid)) options.splice(i, 1); }
   const byRoute = {};
   for (const o of options) (byRoute[o.rid] ??= []).push(o);
   openStopId = "near:" + here.join(",");
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span><h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
       <button type="button" class="sp-close" aria-label="Close">×</button></div>
-    <div class="sp-body"><div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">No GMT stops within a ${walkMin(WALK.maxM)}-minute walk.</p>`}</div></div>`;
+    <div class="sp-body"><div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
   stopPanel.hidden = false; document.getElementById("wrap").classList.add("stop-open"); map.resize();
   stopPanel.querySelector(".sp-close").onclick = () => { closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
   if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
@@ -719,7 +793,7 @@ async function showNearby(here, title, onlyRoutes) {
       ${opts.map((o) => { const list = arr[rid]?.[o.st.stop_id]?.[o.dir] || [];
         return `<button type="button" class="near-opt" data-stop="${esc(o.st.stop_id)}">
           <span class="near-dir">${o.loop ? "Loop" : `To ${esc(o.headsign || "")}`}</span>
-          <span class="near-stop">${esc(o.st.name)} · ${walkMin(o.m)} min walk (${o.m < 1000 ? Math.round(o.m / 10) * 10 + " m" : (o.m / 1609).toFixed(1) + " mi"})</span>
+          <span class="near-stop">${esc(o.st.name)} · ${walkText(o.m)}</span>
           <span class="near-next">${list.length ? list.map((a, i) => `<b class="${a.live && i === 0 ? "now" : ""}">${when(a.time)}</b>`).join(" · ") : "No more trips today"}</span></button>`; }).join("")}
     </div>`).join("") + `<p class="src">Walking times are estimates. Tap a stop for full details.</p>`;
     document.querySelectorAll(".near-opt").forEach((btn) => (btn.onclick = () => showStop(btn.dataset.stop, true)));
@@ -869,6 +943,13 @@ function addOverlay() {
     layout: { "text-field": ["format", ["get", "name"], {}, "\n", {}, "Temporary stop", { "font-scale": 0.82 }], "text-size": 12,
       "text-anchor": "top", "text-offset": [0, 0.9], "text-max-width": 12, "text-optional": true },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
+  // 3D bus (only while following a bus in 3D view) and stop names along the followed route
+  if (!map.getSource("bus3d")) map.addSource("bus3d", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  add({ id: "bus3d", type: "fill-extrusion", source: "bus3d",
+    paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "base"], "fill-extrusion-height": ["get", "top"], "fill-extrusion-opacity": 1 } }, "top");
+  add({ id: "stop-names", type: "symbol", source: "stops", minzoom: 13, layout: { visibility: "none", "text-field": ["get", "name"], "text-size": 12,
+      "text-anchor": "top", "text-offset": [0, 0.8], "text-max-width": 10, "text-optional": true },
+    paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
   // "Near you" / searched address marker
   if (!map.getSource("near")) map.addSource("near", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
   add({ id: "near-pt", type: "circle", source: "near", paint: { "circle-radius": 8, "circle-color": "#0b5cad", "circle-stroke-color": "#fff", "circle-stroke-width": 3 } }, "top");
@@ -963,7 +1044,7 @@ function applyFilters() {
     for (const [l, k] of Object.entries(kinds)) map.setFilter(l, ["all", ["==", ["get", "kind"], k], onDetourRoute]);
     DETOUR_LAYERS.forEach((l) => map.setLayoutProperty(l, "visibility", view === "routes" || routeParam ? "visible" : "none"));
   }
-  map.setFilter("buses", onRoute);
+  map.setFilter("buses", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
   if (view === "plan" && !routeParam) { // trip planner: only buses on the chosen trip's routes
     const tripRoutes = selectedOption()?.legs?.filter((l) => l.kind === "ride").map((l) => l.route) || [];
     map.setFilter("buses", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
@@ -1114,7 +1195,7 @@ async function refreshBuses() {
     }
     lastBuses = data;
     map.getSource("buses")?.setData(data);
-    if (three.follow) followBus(false);
+    if (followState) followBus();
     const n = visibleRoutes().reduce((sum, id) => sum + (liveCounts[id] || 0), 0);
     if (status) { status.textContent = `${n} bus${n === 1 ? "" : "es"} running now · updated ${clock(Date.now() / 1000)}`; status.classList.remove("problem"); }
     document.querySelectorAll("[data-live]").forEach((el) => {
@@ -1610,11 +1691,29 @@ function alertsHtml(list) {
   if (!list.length) return "";
   return `<ul class="alerts" aria-label="Service alerts">${list.map((a) => {
     const end = a.periods.map((p) => p[1]).filter(Boolean).sort((x, y) => x - y)[0];
-    return `<li class="alert"><p class="al-head">${ICON.warn}<strong>${esc(a.header || EFFECT_TEXT[a.effect] || "Service alert")}</strong></p>
+    return `<li class="alert ${a.routes.length ? "al-click" : ""}" ${a.routes.length ? `tabindex="0" role="button" data-routes="${esc(a.routes.join(","))}" title="Show on the map"` : ""}><p class="al-head">${ICON.warn}<strong>${esc(a.header || EFFECT_TEXT[a.effect] || "Service alert")}</strong></p>
       ${a.routes.length ? `<p class="al-routes">${a.routes.map((r) => chip(routes[r])).join("")}${EFFECT_TEXT[a.effect] ? `<span>${EFFECT_TEXT[a.effect]}</span>` : ""}</p>` : ""}
       ${a.description ? `<p class="al-desc">${esc(a.description)}</p>` : ""}
       <p class="al-meta">${end ? `Until ${new Date(end * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}` : "Until further notice"}${a.url ? ` · <a href="${esc(a.url)}" target="_blank" rel="noopener">More info ↗</a>` : ""}</p></li>`;
   }).join("")}</ul>`;
+}
+// Click an alert: zoom to its detour on the affected route(s), or to the route(s) if there's no detour.
+document.addEventListener("click", (e) => {
+  const li = e.target.closest?.(".al-click"); if (!li || e.target.closest("a")) return;
+  focusAlertRoutes(li.dataset.routes.split(","));
+});
+document.addEventListener("keydown", (e) => { const li = e.target.closest?.(".al-click"); if (li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); focusAlertRoutes(li.dataset.routes.split(",")); } });
+function focusAlertRoutes(rids) {
+  const det = detourGeo.features.filter((f) => rids.includes(f.properties.route_id));
+  const feats = det.length ? det : linesData.features.filter((f) => rids.includes(f.properties.route_id));
+  if (!feats.length) return;
+  const b = new mapboxgl.LngLatBounds();
+  feats.forEach((f) => (f.geometry.type === "Point" ? [f.geometry.coordinates] : f.geometry.coordinates).forEach((c) => b.extend(c)));
+  document.querySelector(".ab-list")?.setAttribute("hidden", ""); document.querySelector(".ab-btn")?.setAttribute("aria-expanded", "false");
+  if (!routeParam && view !== "routes") setView("routes");
+  highlight(rids);
+  map.fitBounds(b, { padding: panelPad(), maxZoom: det.length ? 16.5 : 14, duration: reduceMotion ? 0 : 800 });
+  setTimeout(() => { if (!openStopId) highlight([]); }, 4000);
 }
 // Banner over the map: how many alerts apply to what's shown; opens the full list.
 function renderAlertBanner() {
@@ -1754,7 +1853,7 @@ async function planTrip(force) {
   } catch (err) { planState.result = { options: [], error: true }; }
   planState.selected = 0; planState.live = {};
   if (out()) { out().innerHTML = planResultsHtml(); wirePlanResults(); }
-  drawPlan(true); applyFilters(); checkLive();
+  drawPlan(true); applyFilters(); checkLive(); fetchWalks(selectedOption());
 }
 // Check the first bus of the shown trips against Swiftly's live predictions (one stop each).
 async function checkLive(selectedOnly) {
@@ -1802,7 +1901,7 @@ function planResultsHtml() {
 function stepsHtml(o) {
   const last = o.legs.length - 1;
   return o.legs.map((l, i) => l.kind === "walk"
-    ? `<li class="st-walk"><span class="st-ico">${ICON.walk}</span><span>Walk ${dur(l.secs)} to ${esc(i === last ? planState.to.label : l.toName)}</span></li>`
+    ? `<li class="st-walk"><span class="st-ico">${ICON.walk}</span><span>Walk ${dur(walkInfo.get(walkKey(l))?.secs ?? l.secs)}${walkInfo.get(walkKey(l)) ? ` (${walkInfo.get(walkKey(l)).meters < 1000 ? Math.round(walkInfo.get(walkKey(l)).meters / 10) * 10 + " m" : (walkInfo.get(walkKey(l)).meters / 1609).toFixed(1) + " mi"})` : ""} to ${esc(i === last ? planState.to.label : l.toName)}</span></li>`
     : `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
         <span><strong>${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
         <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${clock(l.arr)}</span></span></li>`).join("");
@@ -1811,13 +1910,29 @@ function wirePlanResults() {
   document.querySelectorAll("[data-opt]").forEach((b) => b.onclick = () => {
     planState.selected = +b.dataset.opt;
     document.getElementById("pl-results").innerHTML = planResultsHtml(); wirePlanResults();
-    drawPlan(true); applyFilters();
+    drawPlan(true); applyFilters(); fetchWalks(selectedOption());
   });
+}
+// Walking legs follow real streets and paths (Mapbox walking directions), fetched for the trip being shown.
+const walkInfo = new Map(); // "lon,lat|lon,lat" -> { coords, meters, secs }
+const walkKey = (l) => `${l.from.map((x) => x.toFixed(5))}|${l.to.map((x) => x.toFixed(5))}`;
+async function fetchWalks(o) {
+  if (!o) return;
+  const todo = o.legs.filter((l) => l.kind === "walk" && !walkInfo.has(walkKey(l)));
+  if (!todo.length) return;
+  await Promise.all(todo.map(async (l) => {
+    try {
+      const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${l.from.join(",")};${l.to.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+      const r = (await (await fetch(url)).json()).routes?.[0];
+      if (r?.geometry?.coordinates?.length > 1) walkInfo.set(walkKey(l), { coords: [l.from, ...r.geometry.coordinates, l.to], meters: r.distance, secs: r.duration });
+    } catch {}
+  }));
+  if (selectedOption() === o) { drawPlan(false); const el = document.querySelector(".pl-opt.open .pl-steps"); if (el) el.innerHTML = stepsHtml(o); }
 }
 function planGeo() {
   const f = [], o = selectedOption();
   if (o) for (const l of o.legs) {
-    if (l.kind === "walk") f.push({ type: "Feature", properties: { kind: "walk" }, geometry: { type: "LineString", coordinates: [l.from, l.to] } });
+    if (l.kind === "walk") f.push({ type: "Feature", properties: { kind: "walk" }, geometry: { type: "LineString", coordinates: walkInfo.get(walkKey(l))?.coords || [l.from, l.to] } });
     else {
       // Follow the route's actual shape between the boarding and alighting stops (straight lines if it can't be matched).
       const along = routeBetween(l.route, l.path[0], l.path[l.path.length - 1]);

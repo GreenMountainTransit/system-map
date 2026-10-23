@@ -142,10 +142,12 @@
         fromStop: n.stops[lb.from].id, fromName: n.stops[lb.from].name, toStop: n.stops[s].id, toName: n.stops[s].name,
         dep: lb.trip.times[lb.boardPos], arr: lb.trip.times[lb.alightPos], stopsCount: lb.alightPos - lb.boardPos,
         path: p.stops.slice(lb.boardPos, lb.alightPos + 1).filter((x) => x != null).map((x) => n.stops[x].c),
+        _p: p, _trip: lb.trip, _b: lb.boardPos, _a: lb.alightPos, // for the walking clean-up below
       });
       s = lb.from; k--;
     }
     legs.push({ kind: "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
+    shortenWalks(n, legs, from, to, depart);
     // Times: walking legs are placed right before / after the rides they connect.
     const firstRide = legs.find((l) => l.kind === "ride");
     let t = firstRide.dep - (legs[0].kind === "walk" ? legs[0].secs : 0);
@@ -157,6 +159,46 @@
     const arrive = legs[legs.length - 1].end;
     return { legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind === "walk" ? legs[0].start : firstRide.dep, arrive,
       rides: legs.filter((l) => l.kind === "ride").length, leaveBy: start };
+  }
+
+  // Least walking for the same buses: board the first bus at whichever of its stops is the shortest walk from
+  // the start (if it still leaves after you could get there), and get off the last bus at whichever of its later
+  // stops is the shortest walk to the destination.
+  function shortenWalks(n, legs, from, to, depart) {
+    const rides = legs.filter((l) => l.kind === "ride");
+    const first = rides[0], last = rides[rides.length - 1];
+    const set = (l, b, a) => {
+      l._b = b; l._a = a;
+      l.fromStop = n.stops[l._p.stops[b]].id; l.fromName = n.stops[l._p.stops[b]].name; l.dep = l._trip.times[b];
+      l.toStop = n.stops[l._p.stops[a]].id; l.toName = n.stops[l._p.stops[a]].name; l.arr = l._trip.times[a];
+      l.stopsCount = a - b; l.path = l._p.stops.slice(b, a + 1).filter((x) => x != null).map((x) => n.stops[x].c);
+    };
+    if (legs[0].kind === "walk" && legs[1] === first) {
+      let best = first._b, bestW = legs[0].secs;
+      for (let pos = 0; pos < first._a; pos++) {
+        const sIdx = first._p.stops[pos]; if (sIdx == null) continue;
+        const w = walkSecs(meters(from, n.stops[sIdx].c));
+        if (w < bestW && first._trip.times[pos] - w >= depart - 60) { best = pos; bestW = w; }
+      }
+      if (best !== first._b) { set(first, best, first._a); legs[0].to = n.stops[first._p.stops[best]].c; legs[0].toName = first.fromName; legs[0].secs = bestW; }
+    }
+    const lastWalk = legs[legs.length - 1];
+    if (lastWalk.kind === "walk" && legs[legs.length - 2] === last) {
+      let best = last._a, bestW = lastWalk.secs;
+      for (let pos = last._b + 1; pos < last._p.stops.length; pos++) {
+        const sIdx = last._p.stops[pos]; if (sIdx == null) continue;
+        const w = walkSecs(meters(n.stops[sIdx].c, to));
+        if (w < bestW) { best = pos; bestW = w; }
+      }
+      if (best !== last._a) { set(last, last._b, best); lastWalk.from = n.stops[last._p.stops[best]].c; lastWalk.fromName = last.toName; lastWalk.secs = bestW; }
+    }
+    // A transfer walk next to a changed ride starts or ends at that ride's new stop.
+    for (let i = 1; i < legs.length - 1; i++) if (legs[i].kind === "walk") {
+      const before = legs[i - 1], after = legs[i + 1];
+      if (before.kind === "ride") { legs[i].from = n.stops[before._p.stops[before._a]].c; legs[i].fromName = before.toName; }
+      if (after.kind === "ride") { legs[i].to = n.stops[after._p.stops[after._b]].c; legs[i].toName = after.fromName; }
+    }
+    for (const l of rides) { delete l._p; delete l._trip; delete l._b; delete l._a; }
   }
 
   // ---------- public: plan a trip ----------
