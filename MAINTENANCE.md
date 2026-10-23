@@ -149,6 +149,9 @@ To start a fresh build any time: **Actions → Build map data and publish → Ru
 
 ---
 
+### Checking live data on a phone (or any device)
+Add `?debug=1` to the map's address, for example `https://greenmountaintransit.github.io/system-map/?debug=1`, or `?route=2&debug=1` on a route page. A small panel in the bottom-left shows whether the relay is working, how many buses are on the map, today's date as the map sees it, how many detours Swiftly sent and how many are drawn, and how many alerts are active. Useful when something shows on one device but not another.
+
 ## 5. Undo a bad change
 
 GitHub keeps every version of every file.
