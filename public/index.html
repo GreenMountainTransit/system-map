@@ -200,6 +200,7 @@
   #follow-bar[hidden] { display: none; }
   .follow-speed { font-variant-numeric: tabular-nums; color: var(--gmt); font-weight: 800; }
   .follow-speed:empty { display: none; }
+  .follow-note { font-size: .72rem; font-weight: 500; color: var(--muted); }
   #follow-bar button { border: 0; background: var(--ink); color: #fff; border-radius: 999px; padding: 5px 12px; font-weight: 700; cursor: pointer; font-size: .8rem; }
   .toast { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 5; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px;
     font-size: .82rem; box-shadow: 0 4px 14px rgba(0,0,0,.25); transition: opacity .6s ease; max-width: 90%; text-align: center; }
@@ -670,14 +671,14 @@ function startFollow(p) {
   stopFollow();
   three.follow = p.id; three.misses = 0;
   const now = performance.now();
-  followState = { id: p.id, route: p.route_id, fix: { c: null, heading: p.heading ?? map.getBearing(), speed: p.speed, at: now, time: p.time }, shown: null };
+  followState = { id: p.id, route: p.route_id, hist: [], line: null, shown: null };
   const f = lastBuses.features.find((x) => x.properties.id === p.id);
-  if (f) { followState.fix.c = f.geometry.coordinates; followState.shown = { c: [...f.geometry.coordinates], heading: followState.fix.heading }; }
+  if (f) { addFix(f); const pos = replayPosition(followState); if (pos) followState.shown = { c: pos.c, heading: pos.heading }; }
   let bar = document.getElementById("follow-bar");
   if (!bar) { bar = document.createElement("div"); bar.id = "follow-bar"; document.getElementById("map").appendChild(bar); }
   const r = routes[p.route_id] || {};
   bar.innerHTML = `${chip(r)}<span>Following bus ${esc(p.label || p.id)}${p.headsign ? ` to ${esc(niceDest(p.headsign))}` : ""}</span>
-    <span class="follow-speed" id="follow-speed">${speedText(p.speed)}</span><button type="button" id="follow-stop">Stop</button>`;
+    <span class="follow-speed" id="follow-speed">${speedText(p.speed)}</span><span class="follow-note">about 15 s behind live</span><button type="button" id="follow-stop">Stop</button>`;
   bar.hidden = false;
   document.getElementById("follow-stop").onclick = stopFollow;
   if (map.getLayer("stop-names")) { map.setFilter("stop-names", ["in", `|${p.route_id}|`, ["get", "routes_key"]]); map.setLayoutProperty("stop-names", "visibility", "visible"); }
@@ -704,36 +705,107 @@ function stopFollow() {
   if (map.getLayer("buses")) applyFilters();
 }
 const speedText = (mps) => (mps == null ? "" : `${Math.round(mps * 2.237)} mph`);
-// A new reported position arrived (every 5 s): note it, and work out speed if Swiftly didn't send one.
+// ---------- smooth following: replay the bus a little behind live, along the route's line ----------
+// Position reports arrive every 5-15 s. Showing the bus ~15 s behind real time means the next report is
+// almost always already in hand, so the bus can glide between reports at the pace the real bus kept (from
+// its GPS times) instead of guessing ahead and jumping back. It travels along the route's own line, so it
+// follows the streets and turns at corners. If a report is late, it rolls on at its last speed for a few
+// seconds, then waits.
+const FOLLOW_DELAY_MS = 15000;
+// A new position report: keep it (with the bus's GPS time) and snap it onto the route line.
 function followBus() {
   if (!followState) return;
   const f = lastBuses.features.find((x) => x.properties.id === followState.id);
   if (!f) { if (++three.misses > 3) { stopFollow(); toast("That bus stopped reporting its location."); } return; }
   three.misses = 0;
-  const c = f.geometry.coordinates, now = performance.now(), old = followState.fix;
-  if (old.c && c[0] === old.c[0] && c[1] === old.c[1]) return; // same report as before
-  let speed = f.properties.speed;
-  if (speed == null && old.c) { const dt = (f.properties.time - (old.time || f.properties.time)) / 1000; if (dt > 0) speed = meters(old.c, c) / dt; }
-  followState.fix = { c, heading: f.properties.heading ?? old.heading, speed: speed ?? old.speed ?? 0, at: now, time: f.properties.time };
-  const el = document.getElementById("follow-speed"); if (el) el.textContent = speedText(followState.fix.speed);
+  addFix(f);
 }
-// Every animation frame: keep the bus moving along its heading at its speed since the last report, ease the
-// shown position toward that, redraw the 3D bus, and keep the camera behind it.
+function addFix(f) {
+  const st = followState, c = f.geometry.coordinates, t = f.properties.time || Date.now();
+  const last = st.hist[st.hist.length - 1];
+  if (last && (t <= last.t || (c[0] === last.c[0] && c[1] === last.c[1]))) return; // same or older report
+  let speed = f.properties.speed;
+  if (speed == null && last) speed = meters(last.c, c) / Math.max(1, (t - last.t) / 1000);
+  const fix = { t, c, speed: speed ?? 0, heading: f.properties.heading };
+  st.hist.push(fix); if (st.hist.length > 12) st.hist.shift();
+  if (!st.line || st.hist.length <= 3) st.line = chooseLine(st.route, st.hist);
+  if (st.line) { const pr = projectOnLine(st.line, c, last?.s); fix.s = pr.s; fix.off = pr.d; }
+  if (fix.off > 60 && st.hist.length > 2) { st.line = chooseLine(st.route, st.hist.slice(-3)); st.hist.forEach((h) => { if (st.line) { const p = projectOnLine(st.line, h.c); h.s = p.s; h.off = p.d; } }); }
+  const el = document.getElementById("follow-speed"); if (el) el.textContent = speedText(fix.speed);
+}
+// The route shape this bus is driving: the one closest to its recent reports, in the direction it's moving.
+function chooseLine(rid, hist) {
+  let best = null;
+  for (const f of linesData.features) {
+    if (f.properties.route_id !== rid) continue;
+    const line = prepLine(f.geometry.coordinates);
+    const ps = hist.map((h) => projectOnLine(line, h.c));
+    const off = ps.reduce((a, p) => a + p.d, 0) / ps.length;
+    const forward = ps.length < 2 || ps[ps.length - 1].s >= ps[0].s - 5;
+    const score = off + (forward ? 0 : 500);
+    if (off < 80 && (!best || score < best.score)) best = { score, line };
+  }
+  return best?.line || null;
+}
+function prepLine(coords) { // cumulative distance along the line, in meters
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) cum.push(cum[i - 1] + meters(coords[i - 1], coords[i]));
+  return { coords, cum, len: cum[cum.length - 1] };
+}
+// Nearest point on the line: distance along it (s) and how far off it (d). Near `hint`, prefer progress forward.
+function projectOnLine(line, p, hint) {
+  const { coords, cum } = line, k = Math.cos((p[1] * Math.PI) / 180);
+  let best = { s: 0, d: Infinity };
+  for (let i = 0; i < coords.length - 1; i++) {
+    const a = coords[i], b = coords[i + 1];
+    const ax = a[0] * k, ay = a[1], bx = b[0] * k, by = b[1], px = p[0] * k, py = p[1];
+    const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L)) : 0;
+    const d = Math.hypot(px - ax - t * dx, py - ay - t * dy) * 111320, s = cum[i] + t * (cum[i + 1] - cum[i]);
+    const penalty = hint != null && s < hint - 30 ? 40 : 0; // routes that cross themselves: don't jump backwards
+    if (d + penalty < best.d + (best.pen || 0)) best = { s, d, pen: penalty };
+  }
+  return best;
+}
+function pointAt(line, s) {
+  const { coords, cum } = line; s = Math.max(0, Math.min(line.len, s));
+  let i = 1; while (i < cum.length - 1 && cum[i] < s) i++;
+  const seg = cum[i] - cum[i - 1] || 1, t = (s - cum[i - 1]) / seg, a = coords[i - 1], b = coords[i];
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+const bearingOf = (a, b) => (Math.atan2((b[0] - a[0]) * Math.cos((a[1] * Math.PI) / 180), b[1] - a[1]) * 180 / Math.PI + 360) % 360;
+// Where the bus was FOLLOW_DELAY_MS ago: between the two reports around that moment, along the line.
+function replayPosition(st) {
+  const h = st.hist; if (!h.length) return null;
+  const rt = Date.now() - FOLLOW_DELAY_MS;
+  let i = h.findIndex((x) => x.t > rt);
+  const onLine = st.line && h.every((x) => x.s != null && x.off < 60);
+  if (onLine) {
+    let s;
+    if (i === -1) { const last = h[h.length - 1]; s = last.s + (last.speed || 0) * Math.min(6, (rt - last.t) / 1000); } // late report: roll on briefly
+    else if (i === 0) s = h[0].s;
+    else { const a = h[i - 1], b = h[i], f = (rt - a.t) / (b.t - a.t); s = b.s >= a.s ? a.s + (b.s - a.s) * f : a.s; }
+    const c = pointAt(st.line, s), ahead = pointAt(st.line, s + 12), behind = pointAt(st.line, s - 12);
+    return { c, heading: bearingOf(behind, ahead) };
+  }
+  // Off the route (or no matching shape): glide in a straight line between reports.
+  if (i === -1 || i === 0) { const x = h[i === 0 ? 0 : h.length - 1]; return { c: x.c, heading: x.heading ?? st.shown?.heading ?? 0 }; }
+  const a = h[i - 1], b = h[i], f = (rt - a.t) / (b.t - a.t);
+  return { c: [a.c[0] + (b.c[0] - a.c[0]) * f, a.c[1] + (b.c[1] - a.c[1]) * f], heading: bearingOf(a.c, b.c) };
+}
+// Every animation frame: place the bus at its replay position, ease its turning, redraw it, keep the camera on it.
 function followFrame() {
   if (!followState) return;
-  const st = followState, fx = st.fix;
-  if (fx.c) {
-    const secs = Math.min(15, (performance.now() - fx.at) / 1000), dist = (fx.speed || 0) * secs, h = (fx.heading * Math.PI) / 180;
-    const target = offsetMeters(fx.c, Math.sin(h) * dist, Math.cos(h) * dist);
-    if (!st.shown) st.shown = { c: target, heading: fx.heading };
-    st.shown.c = [st.shown.c[0] + (target[0] - st.shown.c[0]) * 0.08, st.shown.c[1] + (target[1] - st.shown.c[1]) * 0.08];
-    let dh = ((fx.heading - st.shown.heading + 540) % 360) - 180; st.shown.heading = (st.shown.heading + dh * 0.08 + 360) % 360;
+  const st = followState, pos = replayPosition(st);
+  if (pos) {
+    if (!st.shown) st.shown = { c: pos.c, heading: pos.heading };
+    st.shown.c = pos.c;
+    const dh = ((pos.heading - st.shown.heading + 540) % 360) - 180;
+    st.shown.heading = (st.shown.heading + dh * 0.12 + 360) % 360; // turn smoothly through corners
     if (st.model && map.getLayer("bus3d-model")) {
-      // Detailed model: move its point and turn it to face the way it's going (the model's front is +X, i.e. east).
       map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] });
       map.getSource("bus3d-pt")?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: st.shown.c } });
-      // Model rotation turns counterclockwise from east; bus headings turn clockwise from north.
-      map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, 90 - st.shown.heading]);
+      // Turned to face the direction of travel (rotation is counterclockwise; bus headings are clockwise from north).
+      map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, 270 - st.shown.heading]);
     } else map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
     map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0) });
   }
