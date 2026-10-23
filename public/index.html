@@ -1946,6 +1946,33 @@ function markRoutes() {
   });
 }
 
+// ---------- searching places and addresses (Vermont only) ----------
+// Mapbox Search Box finds places (City Hall, hospitals, schools, businesses) as well as addresses and towns.
+// Results are limited to Vermont: the search covers Vermont's area, and anything outside Vermont is dropped.
+// If Search Box ever fails, it falls back to Mapbox's address search.
+const VT_BBOX = "-73.44,42.72,-71.46,45.02";
+const inVermont = (ctx) => { const r = ctx?.region; return !!r && (r.region_code === "VT" || r.region_code === "US-VT" || /vermont/i.test(r.name || "")); };
+async function searchPlaces(q, limit = 6) {
+  const near = map.getCenter ? map.getCenter().toArray().map((x) => x.toFixed(4)).join(",") : "-73.2,44.48";
+  try {
+    const url = `https://api.mapbox.com/search/searchbox/v1/forward?q=${encodeURIComponent(q)}&proximity=${near}&bbox=${VT_BBOX}&country=US&language=en`
+      + `&types=poi,address,place,street,neighborhood,locality&auto_complete=true&limit=10&access_token=${MAPBOX_TOKEN}`;
+    const res = await fetch(url); if (!res.ok) throw new Error(res.status);
+    const out = ((await res.json()).features || []).filter((f) => inVermont(f.properties.context)).map((f) => ({
+      c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address,
+      sub: f.properties.feature_type === "poi" ? (f.properties.full_address || f.properties.place_formatted || "") : (f.properties.place_formatted || ""),
+      poi: f.properties.feature_type === "poi" }));
+    return out.slice(0, limit);
+  } catch {
+    try { // fallback: address search, also limited to Vermont
+      const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}&proximity=${near}&bbox=${VT_BBOX}&country=us&limit=8&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
+      const res = await (await fetch(url)).json();
+      return (res.features || []).filter((f) => inVermont(f.properties.context)).slice(0, limit)
+        .map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
+    } catch { return []; }
+  }
+}
+
 // ---------- trip planner ----------
 const PLAN_LAYERS = ["plan-casing", "plan-ride", "plan-walk", "plan-stops", "plan-ends"];
 const selectedOption = () => planState.result?.options?.[planState.selected] || null;
@@ -1954,11 +1981,11 @@ function plannerHtml() {
   return `<div class="scroll planner">
     <div class="pl-fields">
       <div class="pl-field"><span class="pl-dot from" aria-hidden="true"></span><label for="pl-from" class="sr-only">From</label>
-        <input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: address, place or stop" value="${v(planState.from)}" autocomplete="off">
+        <input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: place, address or stop in Vermont" value="${v(planState.from)}" autocomplete="off">
         <button type="button" class="pl-me" id="pl-me" title="Use my location" aria-label="Use my location">${ICON.locate}</button>
         <ul id="pl-from-list" class="pl-list" role="listbox" hidden></ul></div>
       <div class="pl-field"><span class="pl-dot to" aria-hidden="true"></span><label for="pl-to" class="sr-only">To</label>
-        <input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: address, place or stop" value="${v(planState.to)}" autocomplete="off">
+        <input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: place, address or stop in Vermont" value="${v(planState.to)}" autocomplete="off">
         <button type="button" class="pl-me" id="pl-swap" title="Swap From and To" aria-label="Swap From and To">${ICON.swap}</button>
         <ul id="pl-to-list" class="pl-list" role="listbox" hidden></ul></div>
     </div>
@@ -2001,7 +2028,7 @@ function planCombobox(which) {
   const close = () => { list.hidden = true; list.innerHTML = ""; input.setAttribute("aria-expanded", "false"); items = []; active = -1; };
   const render = () => {
     list.innerHTML = items.length ? items.map((it, i) => `<li role="option" id="pl-${which}-${i}" data-i="${i}" aria-selected="${i === active}">
-      <span class="q-pin">${it.stop ? ICON.pin : ICON.place}</span><span class="q-name">${esc(it.label)}${it.sub ? `<span class="pl-sub">${esc(it.sub)}</span>` : ""}</span></li>`).join("")
+      <span class="q-pin">${it.stop ? ICON.pin : it.poi ? ICON.landmark : ICON.place}</span><span class="q-name">${esc(it.label)}${it.sub ? `<span class="pl-sub">${esc(it.sub)}</span>` : ""}</span></li>`).join("")
       : `<li class="q-empty" role="presentation">${pending ? "Searching…" : "No matches"}</li>`;
     list.hidden = false; input.setAttribute("aria-expanded", "true");
   };
@@ -2018,10 +2045,8 @@ function planCombobox(which) {
     if (q.length < 3) return;
     timer = setTimeout(async () => {
       try {
-        const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(input.value)}&proximity=-73.2,44.48&bbox=-73.45,44.25,-72.55,44.95&country=us&limit=5&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
-        const res = await (await fetch(url)).json();
+        const places = await searchPlaces(input.value, 6);
         if (mine !== seq) return;
-        const places = (res.features || []).map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
         pending = false; items = [...stopHits, ...places]; if (active < 0 && items.length) active = 0; render();
       } catch { if (mine === seq) { pending = false; render(); } }
     }, 250);
@@ -2365,10 +2390,9 @@ function wireSearch(routePool, stopPool) {
       clearTimeout(placeTimer);
       placeTimer = setTimeout(async () => {
         try {
-          const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(raw)}&proximity=-73.2,44.48&bbox=-73.45,44.25,-72.55,44.95&country=us&limit=4&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
-          const res = await (await fetch(url)).json();
+          const found = await searchPlaces(raw, 5);
           if (mine !== placeSeq) return;
-          places = (res.features || []).map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
+          places = found;
         } catch { places = []; }
         if (mine === placeSeq) { placePending = false; if (document.activeElement === input) render(); }
       }, 250);
@@ -2385,7 +2409,7 @@ function wireSearch(routePool, stopPool) {
         const rr = st.routes.map((id) => routes[id]).filter(Boolean);
         return opt(`<span class="q-pin">${ICON.pin}</span><span class="q-name">${mark(st.name, q)}<span class="q-chips">${rr.slice(0, 6).map(chip).join("")}${rr.length > 6 ? `<span class="q-more">+${rr.length - 6}</span>` : ""}</span></span>`, "q-stop");
       }).join("") : "") +
-      (ps.length ? `<li class="q-head" role="presentation">Addresses and places</li>` + ps.map((p) => opt(`<span class="q-pin">${ICON.place}</span><span class="q-name">${esc(p.label)}<span class="pl-sub">${esc(p.sub)}</span></span>`, "q-stop")).join("")
+      (ps.length ? `<li class="q-head" role="presentation">Places and addresses</li>` + ps.map((p) => opt(`<span class="q-pin">${p.poi ? ICON.landmark : ICON.place}</span><span class="q-name">${esc(p.label)}<span class="pl-sub">${esc(p.sub)}</span></span>`, "q-stop")).join("")
         : searching && items.length ? `<li class="q-empty" role="presentation">Searching addresses…</li>` : "");
     list.hidden = false; input.setAttribute("aria-expanded", "true"); sync();
   }
@@ -2587,6 +2611,7 @@ const ICON = {
   locate: svg('<circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/>'),
   swap: svg('<path d="M8 4v14M8 4L4.5 7.5M8 4l3.5 3.5M16 20V6M16 20l-3.5-3.5M16 20l3.5-3.5"/>'),
   walk: svg('<circle cx="13" cy="4" r="1.8" fill="currentColor" stroke="none"/><path d="M10 21l2-6 2.5 2.5V21M8 12l2.5-4h3l2 3.5 2.5 1M12.5 8l-1 5"/>'),
+  landmark: svg('<path d="M3 21h18M5 21V10M19 21V10M9 21v-6h6v6M3 10l9-6 9 6z"/>'),
   place: svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>'),
   warn: svg('<path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.2v.3"/>'),
   check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
