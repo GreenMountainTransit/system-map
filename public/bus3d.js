@@ -10,9 +10,9 @@
   const L = 12.2, W = 2.6, H = 2.95, LIFT = 0.42; // length, width, body height, height of the body above the road
   const GREEN = "#7dc242", CHARCOAL = "#2b2f33", WHITE = "#f7f8f6", GLASS = "#1d2a33";
   let logoImg = null;
-  const loadLogo = () => logoImg ?? (logoImg = new Promise((res) => {
-    const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = "assets/gmt-logo.png";
-  }));
+  // The logo can sit in public/ or public/assets/; whichever loads first is used. No logo: the bus is drawn without it.
+  const tryImg = (src) => new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = src; });
+  const loadLogo = () => logoImg ?? (logoImg = tryImg("gmt-logo.png").then((im) => im || tryImg("assets/gmt-logo.png")));
 
   // ---------- texture: one 1024x1024 image holding every face ----------
   // regions: right side, left side, front, back, roof (x, y, w, h in pixels)
