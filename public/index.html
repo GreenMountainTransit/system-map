@@ -22,7 +22,6 @@
   #wrap { position: relative; height: 100%; min-height: 460px; overflow: hidden; }
   #map { position: absolute; top: 0; bottom: 0; left: var(--panel-w); right: 0; }
   #wrap.stop-open #map { right: var(--stop-w); }
-  #wrap.legend-hidden #map { left: 0; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   button { font: inherit; color: inherit; }
@@ -32,13 +31,6 @@
     position: absolute; top: 0; left: 0; bottom: 0; z-index: 2; width: var(--panel-w); box-sizing: border-box;
     display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line); overflow: hidden;
   }
-  #wrap.legend-hidden #panel { display: none; }
-  /* Tab on the panel's edge to hide or show it, for more map. */
-  #legend-tab { position: absolute; z-index: 3; top: 50%; left: var(--panel-w); transform: translateY(-50%); width: 18px; height: 52px; padding: 0;
-    border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; background: #fff; color: var(--muted); cursor: pointer;
-    display: grid; place-items: center; box-shadow: 2px 0 6px rgba(20,40,30,.08); }
-  #legend-tab svg { width: 14px; height: 14px; transition: transform .15s; }
-  #wrap.legend-hidden #legend-tab { left: 0; } #wrap.legend-hidden #legend-tab svg { transform: rotate(180deg); }
   #panel header { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
   #panel h1 { font-size: 1.08rem; line-height: 1.3; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; }
   .status { font-size: .8rem; color: var(--muted); margin: 0; }
@@ -199,6 +191,24 @@
     padding: 6px 10px; border-radius: 6px; white-space: nowrap; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
   .ctrl-tip[hidden] { display: none; }
   .expand-ctrl[hidden] { display: none; }
+  .three-ctrl[hidden] { display: none; }
+  .three-btn { width: 36px !important; height: 30px !important; font-weight: 800; font-size: .78rem; color: var(--ink); }
+  .three-btn[aria-pressed=true] { background: var(--gmt) !important; color: #fff; }
+  #follow-bar { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 10px;
+    background: #fff; border-radius: 999px; padding: 6px 8px 6px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.2); font-size: .84rem; font-weight: 600; white-space: nowrap; }
+  #follow-bar[hidden] { display: none; }
+  #follow-bar button { border: 0; background: var(--ink); color: #fff; border-radius: 999px; padding: 5px 12px; font-weight: 700; cursor: pointer; font-size: .8rem; }
+  .toast { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 5; background: var(--ink); color: #fff; padding: 8px 14px; border-radius: 8px;
+    font-size: .82rem; box-shadow: 0 4px 14px rgba(0,0,0,.25); transition: opacity .6s ease; max-width: 90%; text-align: center; }
+  .toast.out { opacity: 0; }
+  .fs-hint { position: absolute; z-index: 21; transform: translateY(-50%); background: var(--ink); color: #fff; font-size: .8rem; font-weight: 600;
+    padding: 7px 11px; border-radius: 8px; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 14px rgba(0,0,0,.25); animation: fs-in .35s ease both; transition: opacity .6s ease; }
+  .fs-hint::after { content: ""; position: absolute; right: -6px; top: 50%; transform: translateY(-50%); border: 6px solid transparent; border-right: 0; border-left-color: var(--ink); }
+  .fs-hint.out { opacity: 0; }
+  .expand-btn.pulse { animation: fs-pulse 1.2s ease-in-out 4; }
+  @keyframes fs-in { from { opacity: 0; transform: translate(6px, -50%); } to { opacity: 1; transform: translate(0, -50%); } }
+  @keyframes fs-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(0,112,60,.45); } 50% { box-shadow: 0 0 0 7px rgba(0,112,60,0); } }
+  @media (prefers-reduced-motion: reduce) { .fs-hint, .expand-btn.pulse { animation: none; } }
   /* Click-to-activate shade (embeds only) */
   #activate { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; border: 0; padding: 0; margin: 0; cursor: pointer;
     background: rgba(28, 42, 34, .16); transition: opacity .3s ease; font: inherit; }
@@ -228,6 +238,14 @@
   .closed-note { display: flex; gap: 8px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; font-size: .8rem; color: #7f1d1d; }
   .closed-note svg { width: 18px; height: 18px; flex: none; color: #c2410c; } .closed-note p { margin: 3px 0 0; line-height: 1.45; }
   .closed-tag { color: #c2410c; font-weight: 700; }
+  .near-route { border-top: 1px solid var(--line); padding: 8px 0 4px; } .near-route:first-child { border-top: 0; padding-top: 0; }
+  .near-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: .86rem; }
+  .near-opt { display: grid; gap: 1px; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 8px; cursor: pointer; font: inherit; }
+  .near-opt:hover { background: var(--hover); }
+  .near-dir { font-weight: 700; font-size: .84rem; } .near-stop { font-size: .76rem; color: var(--muted); }
+  .near-next { font-size: .82rem; font-variant-numeric: tabular-nums; } .near-next .now { color: var(--live); }
+  .temp-tag { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: .8rem; color: #7c2d12; background: #fff7ef; border-radius: 8px; padding: 7px 9px; }
+  .temp-tag svg { width: 16px; height: 16px; color: #ea580c; flex: none; }
   .rwarn { display: inline-flex; vertical-align: -2px; margin-left: 5px; color: #ea580c; } .rwarn svg { width: 14px; height: 14px; }
   #route-alerts .alerts { margin: 10px 0 0; }
   .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
@@ -339,10 +357,8 @@
       box-shadow: 0 -4px 20px rgba(20,40,30,.22); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .sp-head { grid-template-columns: 1fr auto; padding-top: 4px; cursor: grab; }
     .sp-grip { display: block; grid-column: 1 / -1; justify-self: center; width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; margin: 2px 0 6px; }
-    #map, #wrap.stop-open #map, #wrap.legend-hidden #map { left: 0; right: 0; }
-    #legend-tab { display: none; }
-    #panel { border-right: 0; }
-    #wrap.legend-hidden #panel { display: flex; }
+    #map, #wrap.stop-open #map { left: 0; right: 0; }
+      #panel { border-right: 0; }
     #panel header { cursor: grab; }
     :root { --panel-w: auto; }
     /* bottom sheet */
@@ -478,7 +494,8 @@ const activation = (() => {
   const el = document.createElement("button");
   el.id = "activate"; el.type = "button";
   const what = new URLSearchParams(location.search).get("route") ? "route map" : "system map";
-  el.innerHTML = `<span class="act-pill"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V10m0-1.5a1.5 1.5 0 0 1 3 0V11m0-1a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7L4 14.5a1.6 1.6 0 0 1 2.5-2L9 15"/></svg>Click to activate ${what}</span>`;
+  const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
+  el.innerHTML = `<span class="act-pill"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V10m0-1.5a1.5 1.5 0 0 1 3 0V11m0-1a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7L4 14.5a1.6 1.6 0 0 1 2.5-2L9 15"/></svg>${verb} to activate ${what}</span>`;
   el.setAttribute("aria-label", `Activate the ${what}`);
   document.getElementById("wrap").appendChild(el);
   const state = { active: false };
@@ -566,25 +583,84 @@ map.addControl({
   onRemove() {},
 }, "bottom-right");
 
-// Hide/show tab on the docked panel's edge (desktop and embeds), for a bigger map when needed.
-{
-  const tab = document.createElement("button");
-  tab.id = "legend-tab"; tab.type = "button"; tab.setAttribute("aria-expanded", "true"); tab.setAttribute("aria-label", "Hide the list"); tab.title = "Hide the list";
-  tab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>';
-  tab.onclick = () => {
-    const hiddenNow = document.getElementById("wrap").classList.toggle("legend-hidden");
-    tab.setAttribute("aria-expanded", String(!hiddenNow));
-    tab.setAttribute("aria-label", hiddenNow ? "Show the list" : "Hide the list"); tab.title = hiddenNow ? "Show the list" : "Hide the list";
-    map.resize();
-  };
-  document.getElementById("wrap").appendChild(tab);
+// A short hint by the Expand button on load, so people know full screen is there. Fades after 5 seconds.
+map.once("load", () => setTimeout(() => {
+  const btn = document.querySelector(".expand-ctrl:not([hidden]) .expand-btn");
+  if (!btn || isFullscreen()) return;
+  const hint = document.createElement("div"); hint.className = "fs-hint"; hint.setAttribute("role", "status");
+  hint.textContent = "Expand to full screen";
+  document.getElementById("wrap").appendChild(hint);
+  const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect();
+  hint.style.right = (w.right - r.left + 10) + "px"; hint.style.top = (r.top - w.top + r.height / 2) + "px";
+  btn.classList.add("pulse");
+  setTimeout(() => { hint.classList.add("out"); btn.classList.remove("pulse"); }, 5000);
+  setTimeout(() => hint.remove(), 5600);
+}, 800));
+// ---------- 3D mode (desktop only): tilted map with 3D buildings; click a bus to ride along behind it ----------
+const three = { on: false, follow: null, misses: 0 };
+const canThreeD = () => !matchMedia("(hover: none) and (pointer: coarse)").matches && innerWidth > 640;
+map.addControl({
+  onAdd() {
+    const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group three-ctrl";
+    el.innerHTML = `<button type="button" class="three-btn" aria-pressed="false" title="3D view" aria-label="3D view">3D</button>`;
+    el.hidden = !canThreeD();
+    addEventListener("resize", () => { el.hidden = !canThreeD(); if (!canThreeD() && three.on) setThreeD(false); });
+    el.querySelector("button").onclick = () => setThreeD(!three.on);
+    return el;
+  }, onRemove() {},
+}, "top-right");
+function setThreeD(on) {
+  three.on = on;
+  document.querySelector(".three-btn")?.setAttribute("aria-pressed", String(on));
+  if (on) {
+    map.setMaxPitch(70); map.dragRotate.enable(); map.keyboard.enableRotation();
+    if (!basemap.standard) { // 3D buildings come with the Detailed basemap
+      basemap = BASEMAPS.find((b) => b.standard);
+      document.querySelectorAll(".basemaps button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.id === basemap.id));
+      map.setStyle(basemap.url, { diff: false });
+    } else try { map.setConfigProperty("basemap", "show3dObjects", true); } catch {}
+    map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 14.5), duration: reduceMotion ? 0 : 900 });
+    toast("3D view: click any bus to follow it. Right-click and drag to turn the map.");
+  } else {
+    stopFollow();
+    map.easeTo({ pitch: 0, bearing: 0, duration: reduceMotion ? 0 : 700 });
+    setTimeout(() => { if (!three.on) { map.setMaxPitch(0); map.dragRotate.disable(); map.keyboard.disableRotation(); } }, reduceMotion ? 0 : 750);
+    try { map.setConfigProperty("basemap", "show3dObjects", false); } catch {}
+  }
+}
+function startFollow(p) {
+  three.follow = p.id; three.misses = 0;
+  let bar = document.getElementById("follow-bar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "follow-bar"; document.getElementById("map").appendChild(bar); }
+  const r = routes[p.route_id] || {};
+  bar.innerHTML = `${chip(r)}<span>Following bus ${esc(p.label || p.id)}${p.headsign ? ` to ${esc(niceDest(p.headsign))}` : ""}</span><button type="button" id="follow-stop">Stop</button>`;
+  bar.hidden = false;
+  document.getElementById("follow-stop").onclick = stopFollow;
+  followBus(true);
+}
+function stopFollow() { three.follow = null; const bar = document.getElementById("follow-bar"); if (bar) bar.hidden = true; }
+// Glide behind the bus to its newest position over the refresh interval, facing the way it's heading.
+function followBus(first) {
+  if (!three.follow) return;
+  const f = lastBuses.features.find((x) => x.properties.id === three.follow);
+  if (!f) { if (++three.misses > 2) { stopFollow(); toast("That bus stopped reporting its location."); } return; }
+  three.misses = 0;
+  const move = { center: f.geometry.coordinates, bearing: f.properties.heading ?? map.getBearing(), pitch: 62, zoom: 17, duration: first ? 1200 : REFRESH_MS * 0.95 };
+  if (!first) move.easing = (t) => t; // steady glide between updates
+  map.easeTo(move);
+}
+map.on("dragstart", (e) => { if (e.originalEvent && three.follow) stopFollow(); }); // dragging the map ends following
+function toast(text) {
+  const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = text;
+  document.getElementById("map").appendChild(t);
+  setTimeout(() => t.classList.add("out"), 4500); setTimeout(() => t.remove(), 5200);
 }
 const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
 map.addControl(geolocate, "top-right");
 // Hover label on the locate button. Mapbox adds the button a moment after the map starts, so listen on
 // the page rather than the button itself.
 {
-  const label = "Click to see service near you";
+  const label = `${matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click"} to see next service near you`;
   const tipEl = document.createElement("div"); tipEl.className = "ctrl-tip"; tipEl.textContent = label; tipEl.hidden = true;
   document.getElementById("wrap").appendChild(tipEl);
   document.addEventListener("mouseover", (e) => {
@@ -599,14 +675,58 @@ map.addControl(geolocate, "top-right");
 geolocate.on("geolocate", (e) => {
   const here = [e.coords.longitude, e.coords.latitude];
   if (view === "plan") { planState.from = { c: here, label: "My location" }; buildSystemPanel(); planTrip(); return; }
-  const near = nearestStop(here);
-  if (!near) { document.getElementById("announce").textContent = "There are no GMT stops within 3 km of you."; return; }
-  setTimeout(() => {
-    showStop(near.stop_id);
-    const b = new mapboxgl.LngLatBounds(here, here).extend(near.coords);
-    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
-  }, 400); // after the map has moved to the rider
+  setTimeout(() => showNearby(here, "Service near you", routeParam ? [routeParam] : null), 400); // after the map moves to the rider
 });
+// "Next service near you": for each nearby route, the closest stop in EACH direction (one stop for loop
+// routes), the walk there, and the next departures that way. Used by the locate button and, on route
+// pages, by address search.
+const WALK = { mps: 1.25, detour: 1.3, maxM: 1200 };
+const walkMin = (m) => Math.max(1, Math.round((m * WALK.detour) / WALK.mps / 60));
+const meters = (a, b) => { const k = Math.cos((a[1] * Math.PI) / 180); return Math.hypot((b[0] - a[0]) * k, b[1] - a[1]) * 111320; };
+async function showNearby(here, title, onlyRoutes) {
+  closeStop();
+  const near = Object.values(stopsById).map((s) => [s, meters(here, s.coords)]).filter(([, m]) => m <= WALK.maxM);
+  const routeIds = onlyRoutes || [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r] && visibleRoutes().includes(r));
+  const options = [];
+  for (const rid of routeIds) {
+    for (const [dir, pat] of Object.entries(routeStops[rid] || {})) {
+      let best = null;
+      pat.stops.slice(0, -1).forEach((sid) => { const st = stopsById[sid]; if (!st) return; const m = meters(here, st.coords); if (m <= WALK.maxM && (!best || m < best.m)) best = { st, m }; });
+      if (best) options.push({ rid, dir, headsign: pat.headsign, loop: Object.keys(routeStops[rid]).length === 1, ...best });
+    }
+  }
+  options.sort((a, b) => a.m - b.m);
+  const byRoute = {};
+  for (const o of options) (byRoute[o.rid] ??= []).push(o);
+  openStopId = "near:" + here.join(",");
+  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span><h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
+      <button type="button" class="sp-close" aria-label="Close">×</button></div>
+    <div class="sp-body"><div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">No GMT stops within a ${walkMin(WALK.maxM)}-minute walk.</p>`}</div></div>`;
+  stopPanel.hidden = false; document.getElementById("wrap").classList.add("stop-open"); map.resize();
+  stopPanel.querySelector(".sp-close").onclick = () => { closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
+  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
+  map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: here } }] });
+  if (options.length) {
+    const b = new mapboxgl.LngLatBounds(here, here); options.slice(0, 6).forEach((o) => b.extend(o.st.coords));
+    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
+  }
+  const render = async () => {
+    const arr = {};
+    await Promise.all(Object.keys(byRoute).map(async (rid) => { try { arr[rid] = (await GMTLive.arrivals({ route: rid })).arrivals; } catch { arr[rid] = {}; } }));
+    if (openStopId !== "near:" + here.join(",")) return;
+    document.getElementById("near-list").innerHTML = Object.entries(byRoute).map(([rid, opts]) => `<div class="near-route">
+      <p class="near-head">${chip(routes[rid])}<strong>${esc(routes[rid].long_name)}</strong></p>
+      ${opts.map((o) => { const list = arr[rid]?.[o.st.stop_id]?.[o.dir] || [];
+        return `<button type="button" class="near-opt" data-stop="${esc(o.st.stop_id)}">
+          <span class="near-dir">${o.loop ? "Loop" : `To ${esc(o.headsign || "")}`}</span>
+          <span class="near-stop">${esc(o.st.name)} · ${walkMin(o.m)} min walk (${o.m < 1000 ? Math.round(o.m / 10) * 10 + " m" : (o.m / 1609).toFixed(1) + " mi"})</span>
+          <span class="near-next">${list.length ? list.map((a, i) => `<b class="${a.live && i === 0 ? "now" : ""}">${when(a.time)}</b>`).join(" · ") : "No more trips today"}</span></button>`; }).join("")}
+    </div>`).join("") + `<p class="src">Walking times are estimates. Tap a stop for full details.</p>`;
+    document.querySelectorAll(".near-opt").forEach((btn) => (btn.onclick = () => showStop(btn.dataset.stop, true)));
+  };
+  if (options.length) { await render(); nearbyTimer && clearInterval(nearbyTimer); nearbyTimer = setInterval(() => (openStopId?.startsWith("near:") ? render() : clearInterval(nearbyTimer)), REFRESH_MS); }
+}
+let nearbyTimer = null;
 function nearestStop(c, maxM = 3000) {
   let best = null, bestM = maxM;
   const k = Math.cos((c[1] * Math.PI) / 180);
@@ -653,7 +773,7 @@ dataReady.then(() => {
 
 // Overlay layers are re-added whenever the basemap changes.
 map.on("style.load", async () => {
-  if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: false, showTransitLabels: false, lightPreset: "day" }))
+  if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: three.on, showTransitLabels: false, lightPreset: "day" }))
     try { map.setConfigProperty("basemap", k, v); } catch {}
   await dataReady.catch(() => {});
   if (!linesData) return;
@@ -715,23 +835,43 @@ function addOverlay() {
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
   add({ id: "buses", type: "symbol", source: "buses",
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
-      "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop] } }, "top"); // local buses drawn last (on top)
-  // Detours (from Swiftly Service Adjustments): the detour path, closed stops (×) and temporary stops.
+      "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop],
+      // Where the bus is headed, under its badge once zoomed in a little (hidden if it would overlap another label).
+      "text-field": ["step", ["zoom"], "", 12, ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]],
+      "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25], "text-optional": true, "text-max-width": 14 },
+    paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top"); // local buses drawn last (on top)
+  // Detours (from Swiftly Service Adjustments):
+  //  - the new detour path, drawn exactly like the route (solid, route color, direction arrows)
+  //  - the closed stretch of the regular route, faded back
+  //  - closed stops (×) and temporary stops (with their names)
   if (!map.getSource("detours")) map.addSource("detours", { type: "geojson", data: detourGeo });
+  add({ id: "detour-closed-mask", type: "line", source: "detours", filter: ["==", ["get", "kind"], "closed"], layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": sat ? "#000" : "#f4f5f2", "line-opacity": sat ? 0.6 : 0.88, "line-width": width(4.5, 12) } }, "middle");
+  add({ id: "detour-closed-line", type: "line", source: "detours", filter: ["==", ["get", "kind"], "closed"], layout: { "line-join": "round" },
+    paint: { "line-color": ["get", "color"], "line-opacity": 0.45, "line-width": width(1, 2.5), "line-dasharray": [2, 2] } }, "middle");
   add({ id: "detour-casing", type: "line", source: "detours", filter: ["==", ["get", "kind"], "path"], layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": "#fff", "line-width": width(5, 12) } }, "middle");
+    paint: { "line-color": sat ? "#000" : "#fff", "line-opacity": sat ? 0.5 : 1, "line-width": width(3.5, 10) } }, "middle");
   add({ id: "detour-line", type: "line", source: "detours", filter: ["==", ["get", "kind"], "path"], layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": ["get", "color"], "line-width": width(2.5, 7), "line-dasharray": [1.2, 1.2] } }, "middle");
-  add({ id: "detour-label", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "path"], minzoom: 13,
-    layout: { "symbol-placement": "line", "text-field": "DETOUR", "text-size": 11, "symbol-spacing": 250, "text-letter-spacing": 0.1 },
-    paint: { "text-color": "#9a3412", "text-halo-color": "#fff", "text-halo-width": 2 } }, "top");
-  add({ id: "detour-closed", type: "circle", source: "detours", filter: ["==", ["get", "kind"], "closed"], minzoom: 11,
+    paint: { "line-color": ["get", "color"], "line-width": width(1.8, 6) } }, "middle");
+  add({ id: "detour-arrows", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "path"], minzoom: 12, maxzoom: 17,
+    layout: { "symbol-placement": "line", "icon-image": "route-arrow", "icon-rotation-alignment": "map",
+      "symbol-spacing": ["interpolate", ["linear"], ["zoom"], 12, 90, 16, 180],
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.65, 14, 0.95, 16, 1.2], "icon-allow-overlap": true, "icon-ignore-placement": true },
+    paint: { "icon-color": "#fff", "icon-opacity": ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.95, 16.3, 0.95, 17, 0] } }, "middle");
+  add({ id: "detour-closed-stops", type: "circle", source: "detours", filter: ["==", ["get", "kind"], "closedstop"], minzoom: 11,
     paint: { "circle-radius": width(5, 9), "circle-color": "#fff", "circle-stroke-color": "#c2410c", "circle-stroke-width": 2.5 } }, "top");
-  add({ id: "detour-closed-x", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "closed"], minzoom: 11,
+  add({ id: "detour-closed-x", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "closedstop"], minzoom: 11,
     layout: { "text-field": "×", "text-size": ["interpolate", ["linear"], ["zoom"], 11, 12, 16, 18], "text-allow-overlap": true, "text-ignore-placement": true },
     paint: { "text-color": "#c2410c" } }, "top");
   add({ id: "detour-temp", type: "circle", source: "detours", filter: ["==", ["get", "kind"], "temp"], minzoom: 11,
-    paint: { "circle-radius": width(5, 9), "circle-color": "#fde7d4", "circle-stroke-color": "#c2410c", "circle-stroke-width": 2.5 } }, "top");
+    paint: { "circle-radius": width(5, 9), "circle-color": "#fff", "circle-stroke-color": ["get", "color"], "circle-stroke-width": 3 } }, "top");
+  add({ id: "detour-temp-label", type: "symbol", source: "detours", filter: ["==", ["get", "kind"], "temp"], minzoom: 13.5,
+    layout: { "text-field": ["format", ["get", "name"], {}, "\n", {}, "Temporary stop", { "font-scale": 0.82 }], "text-size": 12,
+      "text-anchor": "top", "text-offset": [0, 0.9], "text-max-width": 12, "text-optional": true },
+    paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
+  // "Near you" / searched address marker
+  if (!map.getSource("near")) map.addSource("near", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  add({ id: "near-pt", type: "circle", source: "near", paint: { "circle-radius": 8, "circle-color": "#0b5cad", "circle-stroke-color": "#fff", "circle-stroke-width": 3 } }, "top");
   // Trip planner: the chosen trip's rides (route colors), walks (dashed) and start/end points.
   if (!map.getSource("plan")) map.addSource("plan", { type: "geojson", data: planGeo() });
   add({ id: "plan-casing", type: "line", source: "plan", filter: ["==", ["get", "kind"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
@@ -750,7 +890,7 @@ function addOverlay() {
   add({ id: "sv-cam", type: "symbol", source: "sv",
     layout: { "icon-image": "sv-cone", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
   // Keep detour lines under the stop circles (classic basemaps stack layers in the order they're added).
-  if (!basemap.standard) for (const l of ["detour-casing", "detour-line"]) if (map.getLayer(l)) map.moveLayer(l, "stops");
+  if (!basemap.standard) for (const l of ["detour-closed-mask", "detour-closed-line", "detour-casing", "detour-line", "detour-arrows"]) if (map.getLayer(l)) map.moveLayer(l, "stops");
   applyView();
 }
 
@@ -798,7 +938,7 @@ function visibleRoutes() {
   if (routeParam) return [routeParam];
   return Object.keys(routes).filter((id) => !hidden.has(id));
 }
-const DETOUR_LAYERS = ["detour-casing", "detour-line", "detour-label", "detour-closed", "detour-closed-x", "detour-temp"];
+const DETOUR_LAYERS = ["detour-closed-mask", "detour-closed-line", "detour-casing", "detour-line", "detour-arrows", "detour-closed-stops", "detour-closed-x", "detour-temp", "detour-temp-label"];
 function applyFilters() {
   if (!map.getLayer("route-lines")) return;
   const vis = visibleRoutes();
@@ -818,7 +958,8 @@ function applyFilters() {
   map.setPaintProperty("stops", "circle-stroke-width", ["interpolate", ["linear"], ["zoom"], 11, ["case", tp, 2, 1.2], 16, ["case", tp, 3.5, 2.5]]);
   if (map.getLayer("detour-line")) {
     const onDetourRoute = ["in", ["get", "route_id"], ["literal", vis]];
-    const kinds = { "detour-casing": "path", "detour-line": "path", "detour-label": "path", "detour-closed": "closed", "detour-closed-x": "closed", "detour-temp": "temp" };
+    const kinds = { "detour-closed-mask": "closed", "detour-closed-line": "closed", "detour-casing": "path", "detour-line": "path", "detour-arrows": "path",
+      "detour-closed-stops": "closedstop", "detour-closed-x": "closedstop", "detour-temp": "temp", "detour-temp-label": "temp" };
     for (const [l, k] of Object.entries(kinds)) map.setFilter(l, ["all", ["==", ["get", "kind"], k], onDetourRoute]);
     DETOUR_LAYERS.forEach((l) => map.setLayoutProperty(l, "visibility", view === "routes" || routeParam ? "visible" : "none"));
   }
@@ -903,15 +1044,18 @@ map.on("click", (e) => {
   }
   const b = isPhone() ? 12 : 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
   const freq = view === "frequency" && !routeParam;
-  const f = map.queryRenderedFeatures(box, { layers: freq ? ["buses", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"] })[0];
+  const clickable = freq ? ["buses", "freq-lines", "freq-low"] : ["buses", "detour-temp", "stops", "route-lines"].filter((l) => map.getLayer(l));
+  const f = map.queryRenderedFeatures(box, { layers: clickable })[0];
   // Clicking anywhere except another stop closes the stop panel.
-  if (f?.layer.id !== "stops") closeStop();
+  if (f?.layer.id !== "stops" && f?.layer.id !== "detour-temp") closeStop();
   if (!f) return;
   const p = f.properties;
   hideTip();
   if (f.layer.id === "stops") return showStop(p.stop_id);
+  if (f.layer.id === "detour-temp") return showTempStop(p.temp_id, p.route_id);
   if (openPopup) openPopup.remove();
   let html;
+  if (f.layer.id === "buses" && three.on) { openPopup?.remove(); startFollow(p); return; }
   if (f.layer.id === "buses") {
     const r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
     html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
@@ -948,6 +1092,8 @@ function tick(force) {
 }
 setInterval(() => tick(), REFRESH_MS);
 
+// "to Downtown Burlington", "to Essex Junction"… shown under each live bus.
+const niceDest = (h) => String(h || "").replace(/^Downtown Transit Center.*$/i, "Downtown Burlington").replace(/\s+(Bay|Berth)\s*\w*$/i, "");
 async function refreshBuses() {
   markRoutes(); // keep legend warning marks after the list is redrawn
   const status = document.getElementById("status");
@@ -963,11 +1109,12 @@ async function refreshBuses() {
     liveCounts = {};
     for (const f of data.features) {
       const r = routes[f.properties.route_id];
-      Object.assign(f.properties, { color: r.color, short_name: r.short_name, group: r.group });
+      Object.assign(f.properties, { color: r.color, short_name: r.short_name, group: r.group, dest: niceDest(f.properties.headsign) });
       liveCounts[r.route_id] = (liveCounts[r.route_id] || 0) + 1;
     }
     lastBuses = data;
     map.getSource("buses")?.setData(data);
+    if (three.follow) followBus(false);
     const n = visibleRoutes().reduce((sum, id) => sum + (liveCounts[id] || 0), 0);
     if (status) { status.textContent = `${n} bus${n === 1 ? "" : "es"} running now · updated ${clock(Date.now() / 1000)}`; status.classList.remove("problem"); }
     document.querySelectorAll("[data-live]").forEach((el) => {
@@ -1194,6 +1341,41 @@ function showStop(id, fly) {
   if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
   refreshPopup(true);
 }
+// A detour's temporary stop: its name, the detoured route, and next times (live from Swiftly when it predicts
+// this stop, otherwise estimated from the detour's timing).
+async function showTempStop(tempId, rid) {
+  const t = detourInfo.tempStops.find((x) => x.id === tempId && (!rid || x.route === rid)) || detourInfo.tempStops.find((x) => x.id === tempId);
+  if (!t) return;
+  closeStop();
+  openStopId = "temp:" + tempId; hideTip();
+  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>
+      <h2 id="sp-title" tabindex="-1">${esc(t.name)}</h2><button type="button" class="sp-close" aria-label="Close">×</button></div>
+    <div class="sp-body"><div class="pop"><p class="temp-tag">${ICON.warn}Temporary stop for the ${chip(routes[t.route])} detour</p>
+      <h3 class="sp-sub">Next departures</h3><div id="temp-times"><p class="none">Loading…</p></div></div></div>`;
+  stopPanel.hidden = false;
+  document.getElementById("wrap").classList.add("stop-open"); map.resize();
+  stopPanel.querySelector(".sp-close").onclick = closeStop;
+  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
+  highlight([t.route]);
+  map.easeTo({ center: t.c, zoom: Math.max(map.getZoom(), 15), duration: reduceMotion ? 0 : 500 });
+  const list = await tempStopTimes(t);
+  if (openStopId !== "temp:" + tempId) return;
+  document.getElementById("temp-times").innerHTML = list.length ? `<ol aria-label="Next departures">${list.map((a) => `<li>${chip(routes[t.route])}
+      <span>${esc(a.headsign ? "To " + a.headsign : "")}</span><span class="when ${a.live ? "live" : ""}">${when(a.time)}<small>${a.live ? "Live" : "Estimated"}</small></span></li>`).join("")}</ol>
+      <p class="src">${list.some((a) => !a.live) ? "Estimated times are based on the detour’s timing from the stop before it." : ""}</p>`
+    : `<p class="none">No upcoming buses predicted for this temporary stop.</p>`;
+}
+async function tempStopTimes(t) {
+  const live = await GMTLive.tempStopTimes(t.id).catch(() => []); // [{trip, time}] predicted by Swiftly
+  const liveByTrip = new Map(live.map((x) => [x.trip, x.time]));
+  let base = [];
+  if (t.refStop) try { base = ((await GMTLive.arrivals({ stop: t.refStop, only: [t.route] })).arrivals[t.refStop] || []).filter((a) => !t.trips || t.trips.has(a.trip)); } catch {}
+  const out = base.map((a) => liveByTrip.has(a.trip) ? { headsign: a.headsign, time: liveByTrip.get(a.trip), live: true }
+    : { headsign: a.headsign, time: a.time + t.travel, live: false });
+  for (const x of live) if (!base.some((a) => a.trip === x.trip)) out.push({ headsign: "", time: x.time, live: true });
+  const now = Date.now() / 1000;
+  return out.filter((a) => a.time >= now - 30).sort((a, b) => a.time - b.time).slice(0, 3);
+}
 function closeStop() {
   if (!openStopId) return;
   openStopId = null; showAllTimes = false; svOpen = false; setCamera(null);
@@ -1206,6 +1388,12 @@ function closeStop() {
 addEventListener("keydown", (e) => { if (e.key === "Escape" && openStopId && !e.target.closest?.("#q")) closeStop(); });
 async function refreshPopup(announce) {
   const id = openStopId; if (!id) return;
+  if (id.startsWith("temp:")) { // a detour's temporary stop
+    const t = detourInfo.tempStops.find((x) => "temp:" + x.id === id), el = document.getElementById("temp-times");
+    if (t && el) { const list = await tempStopTimes(t); if (openStopId === id && list.length) el.querySelectorAll(".when").forEach((w, i) => list[i] && (w.firstChild.textContent = when(list[i].time))); }
+    return;
+  }
+  if (id.startsWith("near:")) return; // "service near you" panel refreshes itself
   let arrivals = "error", allTimes = null, feedLive = false;
   const only = routeParam ? [routeParam] : null; // on a route page, only that route's buses
   const closed = detourInfo.closedStops[id] || []; // routes detoured away from this stop don't stop here now
@@ -1311,8 +1499,12 @@ async function refreshDetours() {
       byRoute[rid] = (byRoute[rid] || 0) + 1;
       // Swiftly sends the WHOLE shape of a detoured trip; draw only the stretches that leave the route's
       // normal path, so the rest of the route keeps its usual solid line.
-      if (sel.path?.length > 1) for (const piece of offRoutePieces(sel.path, rid))
+      if (sel.path?.length > 1) for (const piece of offRoutePieces(sel.path, rid)) {
         feats.push({ type: "Feature", properties: { kind: "path", route_id: rid, color }, geometry: { type: "LineString", coordinates: piece } });
+        // The stretch of the regular route the detour bypasses, between where it leaves and rejoins.
+        const closedPart = routeBetween(rid, piece[0], piece[piece.length - 1]);
+        if (closedPart) feats.push({ type: "Feature", properties: { kind: "closed", route_id: rid, color }, geometry: { type: "LineString", coordinates: closedPart } });
+      }
       // Closed stops: the stops between each change's start and end on one of the affected trips.
       const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch(() => []);
       const trip = sched.find((t) => sel.trips.includes(t.t));
@@ -1323,13 +1515,16 @@ async function refreshDetours() {
           if (a >= 0 && b >= a) for (const [sid] of trip.st.slice(a, b + 1)) {
             const st = stopsById[sid]; if (!st) continue;
             (closedStops[sid] ??= new Set()).add(rid);
-            feats.push({ type: "Feature", properties: { kind: "closed", route_id: rid, stop_id: sid }, geometry: { type: "Point", coordinates: st.coords } });
+            feats.push({ type: "Feature", properties: { kind: "closedstop", route_id: rid, stop_id: sid }, geometry: { type: "Point", coordinates: st.coords } });
           }
         }
+        // Temporary stops. Their times are measured from the stop just before the detour starts.
+        const startIdx = trip ? trip.st.findIndex((x) => (c.start?.seq != null ? x[2] === c.start.seq : x[0] === c.start?.stop)) : -1;
+        const refStop = startIdx > 0 ? trip.st[startIdx - 1][0] : null;
         for (const rs of c.replacement || []) {
           const ts = d.stops[rs.stop]; if (!ts?.c) continue;
-          tempStops.push({ id: rs.stop, name: ts.name, route: rid, c: ts.c });
-          feats.push({ type: "Feature", properties: { kind: "temp", route_id: rid, name: ts.name }, geometry: { type: "Point", coordinates: ts.c } });
+          if (!tempStops.some((t) => t.id === rs.stop && t.route === rid)) tempStops.push({ id: rs.stop, name: ts.name, route: rid, c: ts.c, refStop, travel: rs.t || 0, trips: new Set(sel.trips) });
+          feats.push({ type: "Feature", properties: { kind: "temp", route_id: rid, name: ts.name, temp_id: rs.stop, color }, geometry: { type: "Point", coordinates: ts.c } });
         }
       }
     }
@@ -1339,6 +1534,25 @@ async function refreshDetours() {
   detourGeo = { type: "FeatureCollection", features: feats };
   map.getSource("detours")?.setData(detourGeo);
   applyFilters(); markRoutes(); if (openStopId) refreshPopup();
+}
+// The part of a route's usual shape between two points (the one of its shapes that passes closest to both,
+// in the right order). Used for the closed stretch of a detour and for trip planner rides.
+function routeBetween(rid, from, to) {
+  let best = null;
+  for (const f of linesData.features) {
+    if (f.properties.route_id !== rid) continue;
+    const c = f.geometry.coordinates, k = Math.cos((from[1] * Math.PI) / 180);
+    const nearest = (p, startAt = 0) => {
+      let bi = -1, bd = Infinity;
+      for (let i = startAt; i < c.length; i++) { const d = Math.hypot((c[i][0] - p[0]) * k, c[i][1] - p[1]); if (d < bd) { bd = d; bi = i; } }
+      return [bi, bd * 111320];
+    };
+    const [i, di] = nearest(from), [j, dj] = nearest(to, i);
+    if (j <= i || di > 150 || dj > 150) continue;
+    const score = di + dj;
+    if (!best || score < best.score) best = { score, coords: [from, ...c.slice(i + 1, j), to] };
+  }
+  return best?.coords || null;
 }
 // Pieces of a detour shape more than ~25 m from any of the route's usual shapes (with the joining
 // points on each end, so the dashed line meets the route).
@@ -1411,6 +1625,10 @@ function renderAlertBanner() {
     document.getElementById("map").appendChild(el);
     const btn = el.querySelector(".ab-btn"), listEl = el.querySelector(".ab-list");
     btn.onclick = () => { const open = listEl.hidden; listEl.hidden = !open; btn.setAttribute("aria-expanded", String(open)); };
+    // Close the list on any click outside it, or Escape.
+    const close = () => { listEl.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+    document.addEventListener("pointerdown", (e) => { if (!listEl.hidden && !el.contains(e.target)) close(); }, true);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !listEl.hidden) { close(); btn.focus(); } });
   }
   const list = routeParam ? alertsFor({ route: routeParam }) : alertsList;
   el.hidden = !list.length;
@@ -1448,8 +1666,8 @@ function plannerHtml() {
     </div>
     <div class="pl-when">
       <label for="pl-when" class="sr-only">When</label>
-      <select id="pl-when"><option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option><option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at…</option></select>
-      <input type="time" id="pl-time" value="${esc(planState.time)}" aria-label="Departure time" ${planState.when === "at" ? "" : "hidden"}>
+      <select id="pl-when"><option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option><option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at…</option><option value="by" ${planState.when === "by" ? "selected" : ""}>Arrive by…</option></select>
+      <input type="time" id="pl-time" value="${esc(planState.time)}" aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" ${planState.when === "now" ? "hidden" : ""}>
       <button type="button" id="pl-go" class="pl-go">Plan trip</button>
     </div>
     <p class="legend-hint">Or click the map to set where you’re starting, then where you’re going.</p>
@@ -1468,7 +1686,10 @@ function wirePlanner() {
   document.getElementById("pl-swap").onclick = () => { [planState.from, planState.to] = [planState.to, planState.from]; buildSystemPanel(); planTrip(); };
   document.getElementById("pl-when").onchange = (e) => {
     planState.when = e.target.value;
-    document.getElementById("pl-time").hidden = planState.when !== "at";
+    const timeEl = document.getElementById("pl-time");
+    timeEl.hidden = planState.when === "now";
+    timeEl.setAttribute("aria-label", planState.when === "by" ? "Arrival time" : "Departure time");
+    if (planState.when === "by" && !planState.time) { const d = new Date(Date.now() + 60 * 60000); timeEl.value = planState.time = d.toTimeString().slice(0, 5); }
     if (planState.when === "at" && !planState.time) { const d = new Date(Date.now() + 15 * 60000); document.getElementById("pl-time").value = planState.time = d.toTimeString().slice(0, 5); }
   };
   document.getElementById("pl-time").onchange = (e) => (planState.time = e.target.value);
@@ -1478,12 +1699,12 @@ function wirePlanner() {
 // Address search: GMT stops (instant) plus places and addresses from Mapbox's geocoder.
 function planCombobox(which) {
   const input = document.getElementById("pl-" + which), list = document.getElementById(`pl-${which}-list`);
-  let items = [], active = -1, timer = null, seq = 0;
+  let items = [], active = -1, timer = null, seq = 0, pending = false;
   const close = () => { list.hidden = true; list.innerHTML = ""; input.setAttribute("aria-expanded", "false"); items = []; active = -1; };
   const render = () => {
     list.innerHTML = items.length ? items.map((it, i) => `<li role="option" id="pl-${which}-${i}" data-i="${i}" aria-selected="${i === active}">
       <span class="q-pin">${it.stop ? ICON.pin : ICON.place}</span><span class="q-name">${esc(it.label)}${it.sub ? `<span class="pl-sub">${esc(it.sub)}</span>` : ""}</span></li>`).join("")
-      : `<li class="q-empty" role="presentation">No matches</li>`;
+      : `<li class="q-empty" role="presentation">${pending ? "Searching…" : "No matches"}</li>`;
     list.hidden = false; input.setAttribute("aria-expanded", "true");
   };
   const choose = (i) => { const it = items[i]; if (!it) return; planState[which] = { c: it.c, label: it.label }; input.value = it.label; close(); input.blur(); planTrip(); };
@@ -1493,6 +1714,7 @@ function planCombobox(which) {
     if (q.length < 2) return close();
     const stopHits = Object.values(stopsById).filter((s) => s.name.toLowerCase().includes(q)).slice(0, 4)
       .map((s) => ({ c: s.coords, label: s.name, sub: "Bus stop", stop: true }));
+    pending = q.length >= 3; // addresses still to come
     items = stopHits; active = items.length ? 0 : -1; render();
     clearTimeout(timer);
     if (q.length < 3) return;
@@ -1502,8 +1724,8 @@ function planCombobox(which) {
         const res = await (await fetch(url)).json();
         if (mine !== seq) return;
         const places = (res.features || []).map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
-        items = [...stopHits, ...places]; if (active < 0 && items.length) active = 0; render();
-      } catch {}
+        pending = false; items = [...stopHits, ...places]; if (active < 0 && items.length) active = 0; render();
+      } catch { if (mine === seq) { pending = false; render(); } }
     }, 250);
   });
   input.addEventListener("keydown", (e) => {
@@ -1516,7 +1738,7 @@ function planCombobox(which) {
   list.addEventListener("mousedown", (e) => { const li = e.target.closest("[role=option]"); if (li) { e.preventDefault(); choose(+li.dataset.i); } });
 }
 function planDepart() {
-  if (planState.when !== "at" || !planState.time) return Math.floor(Date.now() / 1000);
+  if (planState.when === "now" || !planState.time) return Math.floor(Date.now() / 1000);
   const [h, m] = planState.time.split(":").map(Number);
   return dayEpoch(h * 3600 + m * 60);
 }
@@ -1526,7 +1748,9 @@ async function planTrip(force) {
   if (!planState.from || !planState.to) { if (force && out()) out().innerHTML = `<p class="none">Choose where you’re starting and where you’re going.</p>`; return; }
   if (out()) out().innerHTML = `<p class="none">Finding trips…</p>`;
   try {
-    planState.result = await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart() });
+    planState.result = planState.when === "by" && planState.time
+      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart() })
+      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart() });
   } catch (err) { planState.result = { options: [], error: true }; }
   planState.selected = 0; planState.live = {};
   if (out()) { out().innerHTML = planResultsHtml(); wirePlanResults(); }
@@ -1595,7 +1819,9 @@ function planGeo() {
   if (o) for (const l of o.legs) {
     if (l.kind === "walk") f.push({ type: "Feature", properties: { kind: "walk" }, geometry: { type: "LineString", coordinates: [l.from, l.to] } });
     else {
-      f.push({ type: "Feature", properties: { kind: "ride", color: l.color }, geometry: { type: "LineString", coordinates: l.path } });
+      // Follow the route's actual shape between the boarding and alighting stops (straight lines if it can't be matched).
+      const along = routeBetween(l.route, l.path[0], l.path[l.path.length - 1]);
+      f.push({ type: "Feature", properties: { kind: "ride", color: l.color }, geometry: { type: "LineString", coordinates: along && along.length >= 2 ? along : l.path } });
       for (const c of [l.path[0], l.path[l.path.length - 1]]) f.push({ type: "Feature", properties: { kind: "stop", color: l.color }, geometry: { type: "Point", coordinates: c } });
     }
   }
@@ -1796,7 +2022,7 @@ function searchBox(withRoutes, stopIds) {
   const stopPool = (stopIds ? stopIds.map((id) => stopsById[id]) : Object.values(stopsById)).filter(Boolean);
   const routePool = withRoutes ? Object.values(routes) : [];
   queueMicrotask(() => wireSearch(routePool, stopPool));
-  const ph = withRoutes ? "Search routes and stops" : "Search stops on this route";
+  const ph = withRoutes ? "Search routes and stops" : "Search a stop or an address";
   return `<div class="search">${ICON.search}<label for="q" class="sr-only">${ph}</label>
     <input id="q" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="q-list" placeholder="${ph}" autocomplete="off" spellcheck="false">
     <ul id="q-list" role="listbox" aria-label="Search results" hidden></ul></div>`;
@@ -1804,7 +2030,8 @@ function searchBox(withRoutes, stopIds) {
 function wireSearch(routePool, stopPool) {
   const input = document.getElementById("q"), list = document.getElementById("q-list");
   if (!input) return;
-  let items = [], active = -1;
+  let items = [], active = -1, places = [], placeQ = "", placeSeq = 0, placeTimer = null, placePending = false;
+  const findAddresses = !!routeParam; // on route pages, also search addresses (Mapbox geocoder)
   const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]+/g, " ");
   const mark = (text, q) => {
     const i = norm(text).indexOf(q);
@@ -1818,16 +2045,34 @@ function wireSearch(routePool, stopPool) {
       .filter((x) => x.s != null).sort((a, b) => a.s - b.s || a.r.sort - b.r.sort).slice(0, 5);
     const ss = stopPool.map((st) => ({ st, s: score(st.name, q) })).filter((x) => x.s != null)
       .sort((a, b) => a.s - b.s || a.st.name.localeCompare(b.st.name)).slice(0, 8);
-    items = [...rs.map((x) => ({ type: "route", id: x.r.route_id })), ...ss.map((x) => ({ type: "stop", id: x.st.stop_id }))];
+    // Addresses: looked up after a short pause; until they come back, say "Searching" rather than "No matches".
+    if (findAddresses && raw.length >= 3 && raw !== placeQ) {
+      placeQ = raw; placePending = true; places = []; const mine = ++placeSeq;
+      clearTimeout(placeTimer);
+      placeTimer = setTimeout(async () => {
+        try {
+          const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(raw)}&proximity=-73.2,44.48&bbox=-73.45,44.25,-72.55,44.95&country=us&limit=4&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
+          const res = await (await fetch(url)).json();
+          if (mine !== placeSeq) return;
+          places = (res.features || []).map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
+        } catch { places = []; }
+        if (mine === placeSeq) { placePending = false; if (document.activeElement === input) render(); }
+      }, 250);
+    }
+    const ps = findAddresses && raw === placeQ ? places : [];
+    items = [...rs.map((x) => ({ type: "route", id: x.r.route_id })), ...ss.map((x) => ({ type: "stop", id: x.st.stop_id })), ...ps.map((p) => ({ type: "place", ...p }))];
     active = items.length ? 0 : -1;
     let n = 0;
     const opt = (inner, cls) => `<li role="option" id="q-${n}" class="${cls}" data-i="${n}" aria-selected="${n++ === active}">${inner}</li>`;
-    list.innerHTML = (!items.length ? `<li class="q-empty" role="presentation">No routes or stops match “${esc(raw)}”</li>` : "") +
+    const searching = findAddresses && placePending && raw.length >= 3;
+    list.innerHTML = (!items.length ? `<li class="q-empty" role="presentation">${searching ? "Searching…" : `No ${findAddresses ? "stops or addresses" : "routes or stops"} match “${esc(raw)}”`}</li>` : "") +
       (rs.length ? `<li class="q-head" role="presentation">Routes</li>` + rs.map(({ r }) => opt(`${chip(r)}<span class="q-name">${mark(r.long_name, q)}</span><span class="q-meta">Show on map</span>`, "q-route")).join("") : "") +
       (ss.length ? `<li class="q-head" role="presentation">Stops</li>` + ss.map(({ st }) => {
         const rr = st.routes.map((id) => routes[id]).filter(Boolean);
         return opt(`<span class="q-pin">${ICON.pin}</span><span class="q-name">${mark(st.name, q)}<span class="q-chips">${rr.slice(0, 6).map(chip).join("")}${rr.length > 6 ? `<span class="q-more">+${rr.length - 6}</span>` : ""}</span></span>`, "q-stop");
-      }).join("") : "");
+      }).join("") : "") +
+      (ps.length ? `<li class="q-head" role="presentation">Addresses and places</li>` + ps.map((p) => opt(`<span class="q-pin">${ICON.place}</span><span class="q-name">${esc(p.label)}<span class="pl-sub">${esc(p.sub)}</span></span>`, "q-stop")).join("")
+        : searching && items.length ? `<li class="q-empty" role="presentation">Searching addresses…</li>` : "");
     list.hidden = false; input.setAttribute("aria-expanded", "true"); sync();
   }
   function sync() {
@@ -1839,6 +2084,7 @@ function wireSearch(routePool, stopPool) {
   function choose(i) {
     const it = items[i]; if (!it) return;
     input.value = ""; close(); input.blur();
+    if (it.type === "place") { showNearby(it.c, `Near ${it.label}`, routeParam ? [routeParam] : null); return; }
     if (it.type === "stop") {
       const st = stopsById[it.id];
       if (!routeParam) {

@@ -160,8 +160,9 @@
   }
 
   // ---------- public: plan a trip ----------
-  async function plan({ from, to, depart }) {
+  async function plan({ from, to, depart, arriveBy }) {
     const n = await network();
+    if (arriveBy) return planArriveBy(n, from, to, arriveBy);
     const options = [], seen = new Set();
     // Search from the requested time, then again just after each option's first bus, to offer later choices too.
     let t = depart;
@@ -182,6 +183,32 @@
     const direct = meters(from, to);
     const walkOnly = direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null;
     return { options: options.slice(0, 4), walkOnly };
+  }
+
+  // Arrive by: search forward from 3 hours before the target, collecting trips that get there in time,
+  // then offer the ones that leave latest (so riders don't wait around).
+  function planArriveBy(n, from, to, arriveBy) {
+    const options = [], seen = new Set();
+    let t = arriveBy - 3 * 3600;
+    for (let round = 0; round < 12; round++) {
+      const found = raptor(n, from, to, t);
+      if (!found.length) break;
+      let anyInTime = false;
+      for (const o of found) {
+        if (o.arrive > arriveBy) continue;
+        anyInTime = true;
+        const key = o.legs.filter((l) => l.kind === "ride").map((l) => l.trip).join(">");
+        if (!seen.has(key)) { seen.add(key); options.push(o); }
+      }
+      const nextT = Math.min(...found.map((o) => o.legs.find((l) => l.kind === "ride").dep)) + 60;
+      if (!anyInTime && Math.min(...found.map((o) => o.arrive)) > arriveBy) break;
+      t = nextT;
+    }
+    // Keep options not beaten by one that leaves later and still arrives in time with no more buses.
+    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && (x.depart > o.depart || x.rides < o.rides)));
+    keep.sort((a, b) => b.depart - a.depart || a.rides - b.rides);
+    const direct = meters(from, to);
+    return { options: keep.slice(0, 4), walkOnly: direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null, arriveBy };
   }
 
   // Check the first bus of a trip against Swiftly's live predictions for its boarding stop.

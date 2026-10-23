@@ -313,7 +313,16 @@
     return (b.alerts || []).filter((a) => !a.periods.length || a.periods.some(([s, e]) => (!s || s <= now) && (!e || e >= now)));
   }
 
+  // Predicted times Swiftly gives for a detour's temporary stop (via the relay's trip updates).
+  async function tempStopTimes(stopId) {
+    if (!RELAY) return [];
+    const tus = await relayTripUpdates(), out = [];
+    for (const [trip, tu] of tus) for (const u of tu.updates) if (u.stop === stopId && u.time) out.push({ trip, time: u.time });
+    return out;
+  }
+
   globalThis.GMTLive = {
+    tempStopTimes,
     configure({ key, dataDir, relay: r }) { KEY = key; if (dataDir) DATA = dataDir; RELAY = (r || "").replace(/\/$/, ""); },
     detours, alerts,
     vehicles, arrivals, decodeTripUpdates,
