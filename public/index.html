@@ -825,8 +825,9 @@ function followFrame() {
     if (st.model && map.getLayer("bus3d-model")) {
       if (!st.boxCleared) { map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] }); st.boxCleared = true; }
       map.getSource("bus3d-pt")?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: st.shown.c } });
-      // Turned to face the direction of travel (rotation is counterclockwise; bus headings are clockwise from north).
-      map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, 270 - st.shown.heading]);
+      // Turn the model to face its direction of travel. Model rotation turns clockwise, and at rotation 0 the
+      // model's front points east, so heading - 90 points it the way the bus is driving (checked in all directions).
+      map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, (st.shown.heading + 270) % 360]);
     } else map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
     const cam = st.cam; cam.zoom += (cam.zoomTo - cam.zoom) * 0.18; // smooth zoom, always centered on the bus
     map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0), pitch: cam.pitch, zoom: cam.zoom,
