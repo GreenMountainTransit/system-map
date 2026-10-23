@@ -199,7 +199,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Click-to-activate shade (embeds) | `public/index.html` | `Click to activate` |
 | Route draw-in animation on first load | `public/index.html` | `animateBuild` |
 | Walking limits for "service near you" | `public/index.html` | `const WALK` |
-| 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`) |
+| 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) | `public/bus3d.js` and `public/assets/gmt-logo.png` | `texture`, `drawDriver` |
 | Planner walking paths (Mapbox walking directions) | `public/index.html` | `fetchWalks` |
 | Frequency tiers and colors | `public/index.html` | `const FREQ` and `tierOf` |
