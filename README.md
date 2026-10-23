@@ -19,6 +19,7 @@ Other features: service alerts and detours with temporary stops and their times 
 | --- | --- |
 | `public/index.html` | The map page (all views). Holds the opening view (`HOME_BOUNDS`); keys and tokens are added at publish time from GitHub secrets. |
 | `public/planner.js` | The trip planner: finds trips with transfers from the timetable (RAPTOR), and checks each trip's first bus against live predictions. |
+| `public/bus3d.js`, `public/assets/gmt-logo.png` | The detailed 3D bus shown when following a bus in 3D view (GMT livery and logo, destination sign, driver). |
 | `public/live.js` | Fetches live bus locations (`/vehicles`) and stop predictions (`/predictions`) from Swiftly in the visitor's browser and merges them with the timetable. |
 | `scripts/build-data.mjs` | Turns GMT's GTFS into the route, stop, schedule and frequency files in `public/data/`, adds amenities and nearby places. |
 | `scripts/prepare-amenities.mjs` | Turns the field-survey exports into `amenities.csv`. |
