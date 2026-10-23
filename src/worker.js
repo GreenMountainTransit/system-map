@@ -1,242 +1,241 @@
-// GMT system map backend (Cloudflare Worker).
-// Two small APIs (and, if deployed with assets, the map files in /public):
-//   GET /api/vehicles                 -> live bus positions (GeoJSON)
-//   GET /api/arrivals?stop=STOP_ID    -> next 3 arrivals at one stop, all routes
-//   GET /api/arrivals?route=ROUTE_ID  -> next 3 arrivals per direction for every stop on one route
-// Swiftly GTFS-realtime is fetched at most once per CACHE_SECONDS no matter how
-// many people have the map open. The API key lives in the SWIFTLY_KEY secret.
-// When the map is hosted elsewhere (e.g. GitHub Pages), set DATA_BASE in wrangler.toml
-// to that site's data folder so the Worker and the page always use the same schedule.
+// GMT live map relay (Cloudflare Worker). Paste this whole file into the Worker's code editor.
+//
+// It fetches GMT's real-time data from Swiftly on a fixed schedule and shares it with every map visitor,
+// so the Swiftly key stays private and Swiftly sees the same small number of requests however busy the
+// site gets.
+//
+//   GET /v1/vehicles      bus locations (Swiftly's JSON, refreshed every 15 s)
+//   GET /v1/trip-updates  predicted times for every trip, plus active detours (every 15 s)
+//   GET /v1/alerts        service alerts (every 60 s)
+//
+// Settings (Worker → Settings → Variables and Secrets):
+//   SWIFTLY_KEY      (Secret, required)  GMT's Swiftly API key
+//   ALLOWED_ORIGINS  (Text, optional)    sites allowed to read the relay, comma-separated.
+//                                        Default: https://greenmountaintransit.github.io
+//   AGENCY           (Text, optional)    Swiftly agency key. Default: green-mountain
+//   VEHICLES_TTL     (Text, optional)    seconds between bus-location refreshes. Default 15. Set to 5 for
+//                                        smoother "follow a bus" once Swiftly's limit allows (~255 requests
+//                                        per 15 minutes per Cloudflare location at 5).
 
-import GtfsRealtimeBindings from "gtfs-realtime-bindings";
-const { FeedMessage } = GtfsRealtimeBindings.transit_realtime;
-
-const AGENCY = "green-mountain";
-const TZ = "America/New_York";
-const CACHE_SECONDS = 15;
-const COUNT = 3;
-const STALE_VEHICLE_SECONDS = 180;
+const FEEDS = {
+  vehicles: { path: "/vehicles", ttl: 15, kind: "json" },
+  "trip-updates": { path: "/gtfs-rt-trip-updates?enable-feature=duplicated-trips&enable-feature=trip-modifications", ttl: 15, kind: "tripUpdates" },
+  alerts: { path: "/gtfs-rt-alerts", ttl: 60, kind: "alerts" },
+};
+const STALE_OK = 600; // if Swiftly is briefly unreachable, keep serving the last data for up to 10 minutes
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const origin = request.headers.get("Origin") || "";
+    const allowed = (env.ALLOWED_ORIGINS || "https://greenmountaintransit.github.io").split(",").map((s) => s.trim());
+    const cors = { "Access-Control-Allow-Origin": allowed.includes(origin) ? origin : allowed[0], "Vary": "Origin" };
+    if (request.method === "OPTIONS") return new Response(null, { headers: { ...cors, "Access-Control-Allow-Methods": "GET", "Access-Control-Max-Age": "86400" } });
+    if (url.pathname === "/" || url.pathname === "/health") return new Response("GMT live map relay is running.", { headers: { "Content-Type": "text/plain", ...cors } });
+    const name = url.pathname.replace(/^\/v1\//, "");
+    const feed = name === "vehicles" && Number(env.VEHICLES_TTL) >= 3 ? { ...FEEDS.vehicles, ttl: Number(env.VEHICLES_TTL) } : FEEDS[name];
+    if (!feed) return json({ error: "Not found" }, 404, cors);
+    if (!env.SWIFTLY_KEY) return json({ error: "The relay's SWIFTLY_KEY secret isn't set." }, 500, cors);
     try {
-      if (url.pathname === "/api/vehicles") return json(await cached(ctx, url, () => vehicles(env, ctx, url)));
-      if (url.pathname === "/api/arrivals") {
-        const stop = url.searchParams.get("stop"), route = url.searchParams.get("route");
-        if (!stop && !route) return json({ error: "Pass ?stop= or ?route=" }, 400);
-        return json(await cached(ctx, url, () => arrivals(env, ctx, url, { stop, route })));
-      }
-    } catch (err) {
-      return json({ error: String(err.message || err) }, 502);
+      const { body, age, stale } = await getFeed(name, feed, env, ctx);
+      return json(body, 200, { ...cors, "Cache-Control": `public, max-age=${Math.max(1, feed.ttl - age)}`, ...(stale ? { "X-Relay-Stale": "1" } : {}) });
+    } catch (e) {
+      return json({ error: String(e.message || e) }, 502, cors);
     }
-    return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
   },
 };
 
-// ---------- helpers ----------
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status, headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${CACHE_SECONDS}`, "Access-Control-Allow-Origin": "*" },
-  });
+function json(body, status, headers) {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
 }
 
-// Edge cache for computed API responses, keyed by full URL.
-async function cached(ctx, url, make) {
-  const cache = globalThis.caches?.default;
-  const key = new Request(url.toString());
-  if (cache) {
-    const hit = await cache.match(key);
-    if (hit) return hit.json();
-  }
-  const body = await make();
-  if (cache) ctx.waitUntil(cache.put(key, new Response(JSON.stringify(body), { headers: { "Cache-Control": `public, max-age=${CACHE_SECONDS}` } })));
-  return body;
-}
-
-// Schedule data files, from DATA_BASE (e.g. GitHub Pages) or this Worker's own assets.
-// Kept in memory for DATA_TTL so a rebuilt schedule is picked up within the hour.
-const memo = new Map();
-const DATA_TTL = 3600 * 1000;
-async function data(env, url, file) {
-  const hit = memo.get(file);
-  if (hit && Date.now() - hit.at < DATA_TTL) return hit.body;
-  const res = env.DATA_BASE
-    ? await fetch(env.DATA_BASE.replace(/\/?$/, "/") + file, { cf: { cacheTtl: 600 } })
-    : await env.ASSETS.fetch(new Request(new URL(`/data/${file}`, url.origin)));
-  if (!res.ok) throw new Error(`Missing data file ${file}. Run scripts/build-data.mjs and publish.`);
-  const body = await res.json();
-  memo.set(file, { at: Date.now(), body });
-  return body;
-}
-
-// Swiftly GTFS-realtime feed, decoded and shared through the edge cache.
-async function feed(env, ctx, url, kind) {
-  const key = new URL(`/__feed/${kind}`, url.origin).toString();
-  return cached(ctx, new URL(key), async () => {
-    let res;
-    try {
-      res = await fetch(`https://api.goswift.ly/real-time/${AGENCY}/gtfs-rt-${kind}`, { headers: { Authorization: env.SWIFTLY_KEY } });
-    } catch {
-      throw new Error(`Could not reach Swiftly for ${kind}`);
+// One Swiftly request per feed per refresh interval: shared in memory, then through Cloudflare's cache.
+const memory = new Map();
+async function getFeed(name, feed, env, ctx) {
+  const now = Date.now() / 1000, hit = memory.get(name);
+  if (hit && now - hit.at < feed.ttl) return { body: hit.body, age: Math.floor(now - hit.at) };
+  if (hit?.pending) return hit.pending;
+  const cache = caches.default, key = new Request(`https://relay.cache/${name}`);
+  const pending = (async () => {
+    const cached = await cache.match(key);
+    if (cached) {
+      const at = Number(cached.headers.get("X-At")), body = await cached.json();
+      if (now - at < feed.ttl) { memory.set(name, { at, body }); return { body, age: Math.floor(now - at) }; }
+      try { return await refresh(name, feed, env, ctx, cache, key); }
+      catch (e) { if (now - at < STALE_OK) return { body, age: feed.ttl, stale: true }; throw e; }
     }
-    if (!res.ok) throw new Error(`Swiftly ${kind} returned ${res.status}`);
-    const msg = FeedMessage.decode(new Uint8Array(await res.arrayBuffer()));
-    return FeedMessage.toObject(msg, { longs: Number, enums: String, defaults: false });
-  });
+    return refresh(name, feed, env, ctx, cache, key);
+  })();
+  memory.set(name, { ...(hit || {}), pending });
+  try { return await pending; } finally { const m = memory.get(name); if (m?.pending === pending) delete m.pending; }
+}
+async function refresh(name, feed, env, ctx, cache, key) {
+  const agency = env.AGENCY || "green-mountain";
+  const base = env.SWIFTLY_BASE || "https://api.goswift.ly/real-time"; // SWIFTLY_BASE is only for testing
+  const res = await fetch(`${base}/${agency}${feed.path}`, { headers: { Authorization: env.SWIFTLY_KEY } });
+  if (!res.ok) throw new Error(`Swiftly ${name} returned ${res.status}`);
+  const body = feed.kind === "json" ? await res.json()
+    : feed.kind === "tripUpdates" ? decodeTripUpdates(new Uint8Array(await res.arrayBuffer()))
+    : decodeAlerts(new Uint8Array(await res.arrayBuffer()));
+  const at = Date.now() / 1000;
+  memory.set(name, { at, body });
+  ctx.waitUntil(cache.put(key, new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json", "X-At": String(at), "Cache-Control": `public, max-age=${STALE_OK}` } })));
+  return { body, age: 0 };
 }
 
-// ---------- vehicles ----------
-async function vehicles(env, ctx, url) {
-  const [rt, headsigns] = await Promise.all([feed(env, ctx, url, "vehicle-positions"), data(env, url, "headsigns.json")]);
-  const now = Date.now() / 1000;
-  const features = [];
-  for (const e of rt.entity || []) {
-    const v = e.vehicle;
-    if (!v?.position || !v.trip?.routeId) continue;
-    if (v.timestamp && now - v.timestamp > STALE_VEHICLE_SECONDS) continue;
-    features.push({
-      type: "Feature",
-      properties: {
-        id: v.vehicle?.id || e.id, label: v.vehicle?.label || "",
-        route_id: v.trip.routeId, headsign: headsigns[v.trip.tripId] || "",
-        heading: v.position.bearing ?? null, time: (v.timestamp || now) * 1000,
-      },
-      geometry: { type: "Point", coordinates: [v.position.longitude, v.position.latitude] },
+// ---------- minimal GTFS-realtime (protobuf) reader ----------
+const utf8 = new TextDecoder(); // one shared text decoder (making a new one per string is slow)
+function reader(buf) {
+  let pos = 0;
+  // Varints read with plain numbers (fast); 64-bit values are combined from two 32-bit halves.
+  const varint = () => {
+    let lo = 0, hi = 0, shift = 0, b;
+    do { b = buf[pos++]; if (shift < 28) lo |= (b & 0x7f) << shift; else if (shift === 28) { lo |= (b & 0x0f) << 28; hi |= (b & 0x7f) >> 4; } else hi |= (b & 0x7f) << (shift - 32); shift += 7; } while (b & 0x80);
+    return [lo >>> 0, hi >>> 0];
+  };
+  const uint = () => { const [lo, hi] = varint(); return hi * 4294967296 + lo; };
+  const skip = (w) => { if (w === 0) varint(); else if (w === 1) pos += 8; else if (w === 2) { const n = uint(); pos += n; } else if (w === 5) pos += 4; else throw new Error("bad wire type " + w); };
+  const message = (end, on) => { while (pos < end) { const tag = uint(), f = tag >>> 3, w = tag & 7; if (!on(f, w)) skip(w); } };
+  const sub = (fn) => { const n = uint(), end = pos + n, out = fn(end); pos = end; return out; };
+  const str = () => { const n = uint(), s = utf8.decode(buf.subarray(pos, pos + n)); pos += n; return s; };
+  const int = () => { const [lo, hi] = varint(); return hi >= 0x80000000 ? (hi - 4294967296) * 4294967296 + lo : hi * 4294967296 + lo; }; // signed (negative delays)
+  const float = () => { const v = new DataView(buf.buffer, buf.byteOffset + pos, 4).getFloat32(0, true); pos += 4; return v; };
+  return { message, sub, str, int, float, get length() { return buf.length; } };
+}
+// English text from a TranslatedString (falls back to the first translation).
+function translated(r) {
+  return (end) => {
+    const t = [];
+    r.message(end, (f, w) => {
+      if (f === 1 && w === 2) { const tr = {}; r.sub((e) => r.message(e, (g, x) => { if (g === 1 && x === 2) { tr.text = r.str(); return true; } if (g === 2 && x === 2) { tr.lang = r.str(); return true; } return false; })); t.push(tr); return true; }
+      return false;
     });
-  }
-  return { type: "FeatureCollection", features };
+    return (t.find((x) => !x.lang || /^en/i.test(x.lang)) || t[0] || {}).text || "";
+  };
 }
-
-// ---------- arrivals ----------
-function localClock() {
-  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
-    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
-  }).formatToParts(new Date()).map((x) => [x.type, x.value]));
-  const secs = +p.hour * 3600 + +p.minute * 60 + +p.second;
-  const now = Math.floor(Date.now() / 1000);
-  return { now, midnight: now - secs, ymd: `${p.year}${p.month}${p.day}` };
-}
-function shiftYmd(ymd, days) {
-  const d = new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8) + days, 12));
-  return { ymd: d.toISOString().slice(0, 10).replace(/-/g, ""), dow: (d.getUTCDay() + 6) % 7 }; // Monday = 0
-}
-function servicesOn(cal, ymd, dow) {
-  const on = new Set(cal.cal.filter((c) => c.a <= ymd && ymd <= c.b && c.d[dow]).map((c) => c.s));
-  const ex = cal.ex[ymd];
-  if (ex) { ex.add.forEach((s) => on.add(s)); ex.rm.forEach((s) => on.delete(s)); }
-  return on;
-}
-
-// Index realtime trip updates by trip_id.
-function indexTripUpdates(rt) {
-  const out = new Map();
-  for (const e of rt.entity || []) {
-    const tu = e.tripUpdate;
-    if (!tu?.trip?.tripId) continue;
-    out.set(tu.trip.tripId, {
-      startDate: tu.trip.startDate || null,
-      canceled: tu.trip.scheduleRelationship === "CANCELED",
-      updates: (tu.stopTimeUpdate || []).map((u) => ({
-        seq: u.stopSequence, stop: u.stopId,
-        time: u.arrival?.time ?? u.departure?.time ?? null,
-        delay: u.arrival?.delay ?? u.departure?.delay ?? null,
-        skipped: u.scheduleRelationship === "SKIPPED",
-      })).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
-    });
+function decodePolyline(s) {
+  const out = []; let i = 0, lat = 0, lon = 0;
+  while (i < s.length) {
+    for (const k of [0, 1]) {
+      let b, shift = 0, result = 0;
+      do { b = s.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      const d = result & 1 ? ~(result >> 1) : result >> 1;
+      if (k === 0) lat += d; else lon += d;
+    }
+    out.push([Math.round(lon * 1e-5 * 1e6) / 1e6, Math.round(lat * 1e-5 * 1e6) / 1e6]);
   }
   return out;
 }
 
-// Apply a trip's realtime update to its scheduled time at one stop.
-// Returns {epoch, live} or null when the stop is skipped / trip canceled.
-function applyRealtime(tu, trip, idx, scheduledEpoch, dayMidnight) {
-  if (!tu) return { epoch: scheduledEpoch, live: false };
-  if (tu.canceled) return null;
-  const [stopId, , seq] = trip.st[idx];
-  const exact = tu.updates.find((u) => (u.seq != null ? u.seq === seq : u.stop === stopId));
-  if (exact) {
-    if (exact.skipped) return null;
-    if (exact.time) return { epoch: exact.time, live: true };
-    if (exact.delay != null) return { epoch: scheduledEpoch + exact.delay, live: true };
-  }
-  // Otherwise carry forward the delay from the nearest earlier update on this trip.
-  let delay = null;
-  for (const u of tu.updates) {
-    if ((u.seq ?? Infinity) >= seq) break;
-    if (u.delay != null) delay = u.delay;
-    else if (u.time) {
-      const s = trip.st.find((x) => x[2] === u.seq);
-      if (s) delay = u.time - (dayMidnight + s[1]);
-    }
-  }
-  return delay != null ? { epoch: scheduledEpoch + delay, live: true } : { epoch: scheduledEpoch, live: false };
-}
-
-// A trip_id repeats every service day, so only one day's instance gets the live update:
-// the one named by the feed's start_date, or else the instance running closest to now.
-function realtimeFor(tu, trip, day, days, now) {
-  if (!tu) return null;
-  if (tu.startDate) return tu.startDate === day.ymd ? tu : null;
-  const mid = (d) => d.midnight + (trip.st[0][1] + trip.st[trip.st.length - 1][1]) / 2;
-  const best = days.filter((d) => d.services.has(trip.s)).sort((a, b) => Math.abs(mid(a) - now) - Math.abs(mid(b) - now))[0];
-  return best === day ? tu : null;
-}
-
-async function arrivals(env, ctx, url, { stop, route }) {
-  const [meta, cal, stops, rt] = await Promise.all([
-    data(env, url, "routes.json"), data(env, url, "calendar.json"),
-    data(env, url, "stops.geojson"), feed(env, ctx, url, "trip-updates"),
-  ]);
-  let routeIds;
-  if (route) {
-    if (!meta.stops[route]) throw new Error(`Unknown route ${route}`);
-    routeIds = [route];
-  } else {
-    const f = stops.features.find((x) => x.properties.stop_id === stop);
-    if (!f) throw new Error(`Unknown stop ${stop}`);
-    routeIds = f.properties.routes;
-  }
-
-  const clock = localClock();
-  const days = [-1, 0, 1].map((offset) => {
-    const { ymd, dow } = shiftYmd(clock.ymd, offset);
-    return { ymd, midnight: clock.midnight + offset * 86400, services: servicesOn(cal, ymd, dow) };
-  });
-  const tus = indexTripUpdates(rt);
-  const routeById = Object.fromEntries(meta.routes.map((r) => [r.route_id, r]));
-  const result = {}; // stop_id -> [arrival]
-
-  for (const rid of routeIds) {
-    const sched = await data(env, url, `sched/${encodeURIComponent(rid)}.json`);
-    for (const day of days) {
-      for (const trip of sched) {
-        if (!day.services.has(trip.s)) continue;
-        const tu = realtimeFor(tus.get(trip.t), trip, day, days, clock.now);
-        for (let i = 0; i < trip.st.length - 1; i++) { // skip the final stop: buses don't depart from it
-          const sid = trip.st[i][0];
-          if (stop && sid !== stop) continue;
-          const scheduled = day.midnight + trip.st[i][1];
-          if (scheduled < clock.now - 3 * 3600 || scheduled > clock.now + 30 * 3600) continue;
-          const r = applyRealtime(tu, trip, i, scheduled, day.midnight);
-          if (!r || r.epoch < clock.now - 30) continue;
-          (result[sid] ??= []).push({
-            route_id: rid, short_name: routeById[rid]?.short_name || rid, color: routeById[rid]?.color,
-            headsign: trip.h, direction: trip.d, time: r.epoch, live: r.live,
-          });
+// Trip updates -> { generated, trips: { tripId: [startDate, canceled, [[seq, stopId, time, delay, skipped], ...]] },
+//                   detours: [...], stops: { id: { name, c: [lon, lat] } } }
+function decodeTripUpdates(buf) {
+  const r = reader(buf), trips = {}, shapes = {}, stops = {}, mods = [];
+  const stopSel = (end) => { const s = {}; r.message(end, (f, w) => { if (f === 1 && w === 0) { s.seq = r.int(); return true; } if (f === 2 && w === 2) { s.stop = r.str(); return true; } return false; }); return s; };
+  r.message(r.length, (f, w) => {
+    if (f !== 2 || w !== 2) return false;
+    r.sub((eEnd) => {
+      let id = "";
+      r.message(eEnd, (ef, ew) => {
+        if (ef === 1 && ew === 2) { id = r.str(); return true; }
+        if (ef === 3 && ew === 2) { // trip update
+          const t = { updates: [] };
+          r.sub((end) => r.message(end, (g, x) => {
+            if (g === 1 && x === 2) { r.sub((e2) => r.message(e2, (h, y) => {
+              if (h === 1 && y === 2) { t.tripId = r.str(); return true; }
+              if (h === 3 && y === 2) { t.startDate = r.str(); return true; }
+              if (h === 4 && y === 0) { t.rel = r.int(); return true; }
+              return false; })); return true; }
+            if (g === 2 && x === 2) { const u = [null, null, null, null, 0]; r.sub((e2) => r.message(e2, (h, y) => {
+              if (h === 1 && y === 0) { u[0] = r.int(); return true; }
+              if ((h === 2 || h === 3) && y === 2) { r.sub((e3) => r.message(e3, (k, z) => {
+                if (k === 1 && z === 0) { const d = r.int(); if (u[3] == null) u[3] = d; return true; }
+                if (k === 2 && z === 0) { const tm = r.int(); if (u[2] == null && tm) u[2] = tm; return true; }
+                return false; })); return true; }
+              if (h === 4 && y === 2) { u[1] = r.str(); return true; }
+              if (h === 5 && y === 0) { u[4] = r.int() === 1 ? 1 : 0; return true; }
+              return false; })); t.updates.push(u); return true; }
+            return false;
+          }));
+          if (t.tripId && t.rel !== 1 /* ADDED: not in the timetable */) trips[t.tripId] = [t.startDate || null, t.rel === 3 ? 1 : 0, t.updates];
+          return true;
         }
-      }
-    }
-  }
-  const next = (list) => list.sort((a, b) => a.time - b.time).slice(0, COUNT);
-  for (const sid in result) {
-    if (stop) { result[sid] = next(result[sid]); continue; }
-    // Route view: next 3 per direction, so each direction's stop list gets its own times.
-    const byDir = {};
-    for (const a of result[sid]) (byDir[a.direction] ??= []).push(a);
-    for (const d in byDir) byDir[d] = next(byDir[d]);
-    result[sid] = byDir;
-  }
-  return { generated: clock.now, arrivals: result };
+        if (ef === 6 && ew === 2) { // shape (detour path)
+          const sh = {}; r.sub((end) => r.message(end, (g, x) => { if (g === 1 && x === 2) { sh.id = r.str(); return true; } if (g === 2 && x === 2) { sh.line = r.str(); return true; } return false; }));
+          if (sh.id && sh.line) shapes[sh.id] = decodePolyline(sh.line);
+          return true;
+        }
+        if (ef === 7 && ew === 2) { // stop (temporary stop on a detour)
+          const st = {}; r.sub((end) => r.message(end, (g, x) => {
+            if (g === 1 && x === 2) { st.id = r.str(); return true; }
+            if (g === 3 && x === 2) { st.name = r.sub(translated(r)); return true; }
+            if (g === 6 && x === 5) { st.lat = r.float(); return true; }
+            if (g === 7 && x === 5) { st.lon = r.float(); return true; }
+            return false; }));
+          if (st.id) stops[st.id] = { name: st.name || "Temporary stop", c: st.lat != null ? [+st.lon.toFixed(6), +st.lat.toFixed(6)] : null };
+          return true;
+        }
+        if (ef === 8 && ew === 2) { // trip modifications (a detour)
+          const m = { id, selected: [], startTimes: [], dates: [], changes: [] };
+          r.sub((end) => r.message(end, (g, x) => {
+            if (g === 1 && x === 2) { const s = { trips: [] }; r.sub((e2) => r.message(e2, (h, y) => { if (h === 1 && y === 2) { s.trips.push(r.str()); return true; } if (h === 2 && y === 2) { s.shape = r.str(); return true; } return false; })); m.selected.push(s); return true; }
+            if (g === 2 && x === 2) { m.startTimes.push(r.str()); return true; }
+            if (g === 3 && x === 2) { m.dates.push(r.str()); return true; }
+            if (g === 4 && x === 2) { const c = { replacement: [] }; r.sub((e2) => r.message(e2, (h, y) => {
+              if (h === 1 && y === 2) { c.start = r.sub(stopSel); return true; }
+              if (h === 2 && y === 2) { c.end = r.sub(stopSel); return true; }
+              if (h === 4 && y === 2) { const rs = {}; r.sub((e3) => r.message(e3, (k, z) => { if (k === 1 && z === 0) { rs.t = r.int(); return true; } if (k === 2 && z === 2) { rs.stop = r.str(); return true; } return false; })); c.replacement.push(rs); return true; }
+              if (h === 5 && y === 2) { c.alert = r.str(); return true; }
+              return false; })); m.changes.push(c); return true; }
+            return false;
+          }));
+          mods.push(m);
+          return true;
+        }
+        return false;
+      });
+    });
+    return true;
+  });
+  const detours = mods.map((m) => ({
+    id: m.id, dates: m.dates, startTimes: m.startTimes, changes: m.changes,
+    selected: m.selected.map((s) => ({ trips: s.trips, path: shapes[s.shape] || null })),
+  }));
+  return { generated: Math.floor(Date.now() / 1000), trips, detours, stops };
+}
+
+// Alerts -> { generated, alerts: [{ id, cause, effect, header, description, url, periods: [[start, end]], informed: [{ route, stop, trip }] }] }
+const CAUSES = [, "UNKNOWN_CAUSE", "OTHER_CAUSE", "TECHNICAL_PROBLEM", "STRIKE", "DEMONSTRATION", "ACCIDENT", "HOLIDAY", "WEATHER", "MAINTENANCE", "CONSTRUCTION", "POLICE_ACTIVITY", "MEDICAL_EMERGENCY", "SPECIAL_EVENT"];
+const EFFECTS = [, "NO_SERVICE", "REDUCED_SERVICE", "SIGNIFICANT_DELAYS", "DETOUR", "ADDITIONAL_SERVICE", "MODIFIED_SERVICE", "OTHER_EFFECT", "UNKNOWN_EFFECT", "STOP_MOVED", "NO_EFFECT", "ACCESSIBILITY_ISSUE"];
+function decodeAlerts(buf) {
+  const r = reader(buf), alerts = [];
+  r.message(r.length, (f, w) => {
+    if (f !== 2 || w !== 2) return false;
+    r.sub((eEnd) => {
+      let id = "";
+      r.message(eEnd, (ef, ew) => {
+        if (ef === 1 && ew === 2) { id = r.str(); return true; }
+        if (ef !== 5 || ew !== 2) return false;
+        const a = { id, periods: [], informed: [] };
+        r.sub((end) => r.message(end, (g, x) => {
+          if (g === 1 && x === 2) { const p = [null, null]; r.sub((e2) => r.message(e2, (h, y) => { if (h === 1 && y === 0) { p[0] = r.int(); return true; } if (h === 2 && y === 0) { p[1] = r.int(); return true; } return false; })); a.periods.push(p); return true; }
+          if (g === 5 && x === 2) { const s = {}; r.sub((e2) => r.message(e2, (h, y) => {
+            if (h === 2 && y === 2) { s.route = r.str(); return true; }
+            if (h === 5 && y === 2) { s.stop = r.str(); return true; }
+            if (h === 4 && y === 2) { r.sub((e3) => r.message(e3, (k, z) => { if (k === 1 && z === 2) { s.trip = r.str(); return true; } if (k === 5 && z === 2) { s.route ??= r.str(); return true; } return false; })); return true; }
+            return false; })); a.informed.push(s); return true; }
+          if (g === 6 && x === 0) { a.cause = CAUSES[r.int()] || "UNKNOWN_CAUSE"; return true; }
+          if (g === 7 && x === 0) { a.effect = EFFECTS[r.int()] || "UNKNOWN_EFFECT"; return true; }
+          if (g === 8 && x === 2) { a.url = r.sub(translated(r)); return true; }
+          if (g === 10 && x === 2) { a.header = r.sub(translated(r)); return true; }
+          if (g === 11 && x === 2) { a.description = r.sub(translated(r)); return true; }
+          return false;
+        }));
+        alerts.push(a);
+        return true;
+      });
+    });
+    return true;
+  });
+  return { generated: Math.floor(Date.now() / 1000), alerts };
 }
