@@ -644,8 +644,12 @@ const FOLLOW_MS = 5000; // while following a bus, ask for its position every 5 s
 const BUS_LEN = 30.5;   // the 3D bus is ~100 ft long at map scale (exaggerated so it reads at street zoom)
 let followState = null;  // { id, route, fix: {c, heading, speed, at}, shown: {c, heading}, prev, timer, raf }
 // Load the detailed 3D bus model for this bus (its sign shows its route and destination).
+// The basemap itself has finished loading (unlike isStyleLoaded, this doesn't wait on our own moving data).
+const basemapReady = () => !!(map.style && map.style._loaded);
 async function loadBusModel(p) {
   if (!map.addModel || !globalThis.GMTBus3D) return false;
+  // Right after turning on 3D the Detailed basemap may still be loading; adding the model now would lose it.
+  if (!basemapReady()) await new Promise((res) => { const check = () => (basemapReady() ? res() : setTimeout(check, 150)); check(); });
   try {
     const r = routes[p.route_id] || {};
     const url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "" });
@@ -667,6 +671,11 @@ function addBusModelLayer() {
     paint: { "model-scale": [scale, scale, scale], "model-rotation": [0, 0, 0], "model-type": "common-3d", "model-cast-shadows": true },
     ...((map.getStyle().imports || []).length ? { slot: "top" } : {}) }); // slots exist only in the Standard (Detailed) basemap
 }
+// Hide or show the Detailed basemap's place, business and street labels.
+function setBasemapLabels(on) {
+  if (!basemap.standard) return;
+  for (const k of ["showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels"]) try { map.setConfigProperty("basemap", k, on); } catch {}
+}
 function startFollow(p) {
   stopFollow();
   three.follow = p.id; three.misses = 0;
@@ -683,11 +692,14 @@ function startFollow(p) {
   document.getElementById("follow-stop").onclick = stopFollow;
   if (map.getLayer("stop-names")) { map.setFilter("stop-names", ["in", `|${p.route_id}|`, ["get", "routes_key"]]); map.setLayoutProperty("stop-names", "visibility", "visible"); }
   applyFilters(); // hides the followed bus's flat badge; the 3D bus takes its place
-  if (followState.shown) map.easeTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: reduceMotion ? 0 : 1200 });
   loadBusModel(p); // detailed model; until it's ready (or if it can't load) the simpler box bus shows
   // Look around the bus: drag to orbit (left/right) and tilt (up/down); scroll to zoom. The bus stays centered.
+  // The follow camera handles all of this itself, so nothing else moves the map underneath it.
   followState.orbit = 0; // degrees added to the bus's heading
-  map.dragPan.disable(); map.dragRotate.disable();
+  followState.cam = { zoom: 17.5, zoomTo: 17.5, pitch: 62 };
+  map.dragPan.disable(); map.dragRotate.disable(); map.scrollZoom.disable(); map.doubleClickZoom.disable(); map.touchZoomRotate.disable();
+  setBasemapLabels(false); // the moving camera makes basemap labels jump around
+  if (followState.shown) map.easeTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: reduceMotion ? 0 : 1200 });
   toast("Drag to look around the bus, scroll to zoom.");
   followState.timer = setInterval(() => refreshBuses(), FOLLOW_MS);
   setTimeout(() => { if (followState) followState.raf = requestAnimationFrame(followFrame); }, reduceMotion ? 0 : 1250);
@@ -697,6 +709,8 @@ function stopFollow() {
     clearInterval(followState.timer); cancelAnimationFrame(followState.raf);
     if (followState.model) { if (map.getLayer("bus3d-model")) map.removeLayer("bus3d-model"); try { map.removeModel?.(followState.model.id); } catch {} URL.revokeObjectURL(followState.model.url); }
     map.dragPan.enable(); if (three.on) map.dragRotate.enable();
+    map.scrollZoom.enable(); map.doubleClickZoom.enable(); map.touchZoomRotate.enable();
+    setBasemapLabels(true);
   }
   followState = null; three.follow = null;
   const bar = document.getElementById("follow-bar"); if (bar) bar.hidden = true;
@@ -801,13 +815,16 @@ function followFrame() {
     st.shown.c = pos.c;
     const dh = ((pos.heading - st.shown.heading + 540) % 360) - 180;
     st.shown.heading = (st.shown.heading + dh * 0.12 + 360) % 360; // turn smoothly through corners
+    if (st.model && !map.getLayer("bus3d-model") && basemapReady()) addBusModelLayer(); // lost in a basemap reload
     if (st.model && map.getLayer("bus3d-model")) {
-      map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] });
+      if (!st.boxCleared) { map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] }); st.boxCleared = true; }
       map.getSource("bus3d-pt")?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: st.shown.c } });
       // Turned to face the direction of travel (rotation is counterclockwise; bus headings are clockwise from north).
       map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, 270 - st.shown.heading]);
     } else map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
-    map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0) });
+    const cam = st.cam; cam.zoom += (cam.zoomTo - cam.zoom) * 0.18; // smooth zoom, always centered on the bus
+    map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0), pitch: cam.pitch, zoom: cam.zoom,
+      padding: { top: 0, bottom: 0, left: 0, right: 0 } }); // no leftover margins: the bus sits dead center
   }
   st.raf = requestAnimationFrame(followFrame);
 }
@@ -843,11 +860,17 @@ let followDragged = 0;
     if (!drag || !followState) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy) };
     if (drag.moved > 4) followDragged = Date.now(); // a drag, not a click: don't open popups when it ends
-    followState.orbit = ((followState.orbit || 0) - dx * 0.4) % 360;
-    map.setPitch(Math.max(0, Math.min(map.getMaxPitch(), map.getPitch() - dy * 0.3)));
+    followState.orbit = ((followState.orbit || 0) + dx * 0.4) % 360;
+    followState.cam.pitch = Math.max(0, Math.min(map.getMaxPitch(), followState.cam.pitch - dy * 0.3));
   });
   const end = () => (drag = null);
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+  // Scroll to zoom in or out on the bus (street level to close-up).
+  el.addEventListener("wheel", (e) => {
+    if (!followState?.cam) return;
+    e.preventDefault();
+    followState.cam.zoomTo = Math.max(14.5, Math.min(20, followState.cam.zoomTo - e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0022)));
+  }, { passive: false });
 }
 function toast(text) {
   const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = text;
@@ -1079,7 +1102,7 @@ function addOverlay() {
   add({ id: "bus3d", type: "fill-extrusion", source: "bus3d",
     paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "base"], "fill-extrusion-height": ["get", "top"], "fill-extrusion-opacity": 1 } }, "top");
   add({ id: "stop-names", type: "symbol", source: "stops", minzoom: 13, layout: { visibility: "none", "text-field": ["get", "name"], "text-size": 12,
-      "text-anchor": "top", "text-offset": [0, 0.8], "text-max-width": 10, "text-optional": true },
+      "text-anchor": "top", "text-offset": [0, 0.8], "text-max-width": 10, "text-allow-overlap": true, "text-ignore-placement": true },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
   // "Near you" / searched address marker
   if (!map.getSource("near")) map.addSource("near", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -1104,6 +1127,7 @@ function addOverlay() {
   // Keep detour lines under the stop circles (classic basemaps stack layers in the order they're added).
   if (!basemap.standard) for (const l of ["detour-closed-mask", "detour-closed-line", "detour-casing", "detour-line", "detour-arrows"]) if (map.getLayer(l)) map.moveLayer(l, "stops");
   if (followState?.model) addBusModelLayer();
+  if (followState) setBasemapLabels(false);
   applyView();
 }
 
