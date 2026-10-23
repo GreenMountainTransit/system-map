@@ -243,6 +243,8 @@
   .closed-note { display: flex; gap: 8px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; font-size: .8rem; color: #7f1d1d; }
   .closed-note svg { width: 18px; height: 18px; flex: none; color: #c2410c; } .closed-note p { margin: 3px 0 0; line-height: 1.45; }
   .closed-tag { color: #c2410c; font-weight: 700; }
+  #debug-box { position: absolute; left: 8px; bottom: 8px; z-index: 30; margin: 0; max-width: calc(100% - 16px); white-space: pre-wrap; font: 11px/1.4 ui-monospace, Menlo, monospace;
+    background: rgba(0,0,0,.78); color: #b9f6ca; padding: 8px 10px; border-radius: 8px; pointer-events: none; }
   .near-route { border-top: 1px solid var(--line); padding: 8px 0 4px; } .near-route:first-child { border-top: 0; padding-top: 0; }
   .near-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: .86rem; }
   .near-opt { display: grid; gap: 1px; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 8px; cursor: pointer; font: inherit; }
@@ -435,8 +437,7 @@ let routes = {}, groups = [], routeStops = {}, stopsById = {}, linesData, stopsD
 let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "FeatureCollection", features: [] };
 let openPopup = null, openStopId = null, routeArrivals = {}, routeArrivalsLoaded = false, activeDir = null;
 let basemap = BASEMAPS[0];
-let liveBusesOn = true; // riders can switch live buses off; remembered on their device
-try { liveBusesOn = localStorage.getItem("gmt-live-buses") !== "off"; } catch {}
+const liveBusesOn = true; // live buses are always shown
 let view = ["frequency", "plan"].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
 const planState = { from: null, to: null, when: "now", time: "", result: null, selected: 0, live: {} }; // trip planner
 let ridershipData = null, riderOpen = false, riderRange = "12M"; // ridership section starts collapsed for each stop
@@ -1343,11 +1344,6 @@ async function refreshBuses() {
   markRoutes(); // keep legend warning marks after the list is redrawn
   const status = document.getElementById("status");
   if (!liveReady) { if (status) status.textContent = "Live buses aren’t connected yet. Showing scheduled times."; return; }
-  if (!liveBusesOn) {
-    if (status) { status.textContent = "Live buses are off"; status.classList.remove("problem"); }
-    document.querySelectorAll("[data-live]").forEach((el) => (el.innerHTML = ""));
-    return; // no requests to Swiftly for bus locations while off
-  }
   try {
     const data = await GMTLive.vehicles();
     data.features = data.features.filter((f) => routes[f.properties.route_id]);
@@ -1726,11 +1722,17 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
 // ---------- service alerts and detours (need the relay) ----------
 let alertsList = [], detourInfo = { byRoute: {}, closedStops: {}, tempStops: [] }, detourGeo = { type: "FeatureCollection", features: [] };
 let tripRoutes = null, lastAlertsAt = 0, detourKey = "";
-const ymdToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()).replace(/-/g, "");
+// Today's date in Vermont as YYYYMMDD, built from its parts: a formatted date string differs between browsers
+// (some phones give "10/23/2026"), which would make every detour look like it isn't running today.
+const ymdToday = () => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return `${p.year}${p.month}${p.day}`;
+};
 async function tripRouteMap() { return (tripRoutes ??= await fetch(DIR + "trip-routes.json").then((r) => (r.ok ? r.json() : {})).catch(() => ({})).then((x) => (tripRoutes = x))); }
 async function refreshDetours() {
   if (!relayReady) return;
-  let d; try { d = await GMTLive.detours(); } catch { return; }
+  let d; try { d = await GMTLive.detours(); debugInfo.relayErr = ""; } catch (e) { debugInfo.relayErr = String(e.message || e); renderDebug(); return; }
   if (!d) return;
   const key = JSON.stringify(d.detours) + JSON.stringify(d.stops);
   if (key === detourKey) return; // unchanged
@@ -1775,6 +1777,8 @@ async function refreshDetours() {
     }
   }
   detourAlertSet = new Set(d.detours.flatMap((det) => det.changes.map((c) => c.alert).filter(Boolean)));
+  debugInfo.detoursIn = d.detours.length; debugInfo.detoursToday = d.detours.filter((det) => !det.dates?.length || det.dates.includes(today)).length;
+  debugInfo.drawn = feats.filter((f) => f.properties.kind === "path").length; renderDebug();
   detourInfo = { byRoute, closedStops: Object.fromEntries(Object.entries(closedStops).map(([k, v]) => [k, [...v]])), tempStops };
   detourGeo = { type: "FeatureCollection", features: feats };
   map.getSource("detours")?.setData(detourGeo);
@@ -1828,6 +1832,22 @@ function offRoutePieces(path, rid) {
   if (cur && cur.length > 1) pieces.push(cur);
   return lines.length ? pieces : [path];
 }
+// ---------- diagnostics (?debug=1): live-data status at a glance, readable on a phone ----------
+const debugOn = new URLSearchParams(location.search).get("debug") === "1";
+let debugInfo = { detoursIn: 0, detoursToday: 0, drawn: 0, alerts: 0, relayErr: "" };
+function renderDebug() {
+  if (!debugOn) return;
+  let el = document.getElementById("debug-box");
+  if (!el) { el = document.createElement("pre"); el.id = "debug-box"; document.getElementById("wrap").appendChild(el); }
+  el.textContent = [
+    `relay: ${relayReady ? "on" : "off (direct to Swiftly)"}${debugInfo.relayErr ? " · error: " + debugInfo.relayErr : ""}`,
+    `buses on map: ${lastBuses.features.length}`,
+    `today (Vermont): ${ymdToday()}`,
+    `detours from Swiftly: ${debugInfo.detoursIn} · running today: ${debugInfo.detoursToday} · shapes drawn: ${debugInfo.drawn}`,
+    `alerts: ${debugInfo.alerts}`,
+    `screen: ${innerWidth}×${innerHeight} · ${navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 70)}`,
+  ].join("\n");
+}
 async function refreshAlerts(force) {
   if (!relayReady || (!force && Date.now() - lastAlertsAt < 55000)) return;
   lastAlertsAt = Date.now();
@@ -1838,6 +1858,7 @@ async function refreshAlerts(force) {
     a.stops = [...new Set(a.informed.map((i) => i.stop).filter(Boolean))];
     a.systemWide = !a.routes.length && !a.stops.length;
   }
+  debugInfo.alerts = alertsList.length; renderDebug();
   renderAlertBanner(); markRoutes(); if (openStopId) refreshPopup();
   if (routeParam) { const el = document.getElementById("route-alerts"); if (el) el.innerHTML = alertsHtml(alertsFor({ route: routeParam })); }
 }
@@ -2534,18 +2555,10 @@ function draggable(el, handleSel) {
 draggable(document.getElementById("panel"), "header");
 draggable(stopPanel, ".sp-head");
 addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, "open"); });
-// Status line plus the live-buses switch.
-const statusRow = () => `<div class="status-row"><p class="status" id="status" aria-live="polite">${liveBusesOn ? "Loading buses…" : "Live buses are off"}</p>
-  <label class="switch"><input type="checkbox" id="live-toggle" role="switch" ${liveBusesOn ? "checked" : ""}><span class="track" aria-hidden="true"></span>Live buses</label></div>`;
-function wireLiveToggle() {
-  const t = document.getElementById("live-toggle"); if (!t) return;
-  t.onchange = () => {
-    liveBusesOn = t.checked;
-    try { localStorage.setItem("gmt-live-buses", liveBusesOn ? "on" : "off"); } catch {}
-    applyFilters(); refreshBuses();
-    document.getElementById("announce").textContent = liveBusesOn ? "Live buses on." : "Live buses off.";
-  };
-}
+// Status line (how many buses are running, when last updated). Live buses are always on.
+const statusRow = () => `<div class="status-row"><p class="status" id="status" aria-live="polite">Loading buses…</p></div>`;
+function wireLiveToggle() {} // (the live-buses switch was removed; kept so existing calls stay harmless)
+try { localStorage.removeItem("gmt-live-buses"); } catch {} // forget any old "off" setting
 const toggleBtn = (label) => `<button id="toggle" aria-expanded="true"><span class="grip" aria-hidden="true"></span><span class="t-label">${label}</span><span class="sr-only">Show the list</span></button>`;
 const chip = (r) => `<span class="chip" style="background:${esc(r.color || "#555")};color:${esc(r.text_color || "#fff")}">${esc(r.short_name || "")}</span>`;
 function when(epoch) {
