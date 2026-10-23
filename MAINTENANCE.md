@@ -63,7 +63,7 @@ Amenities come from `amenities.csv`: one row per stop ID, with `yes`/`no` column
 The relay is a small Cloudflare Worker. It fetches live data from Swiftly every 15 seconds (alerts every 60) and shares it with every visitor, so the Swiftly key never appears on the public page and Swiftly sees about 135 requests per 15 minutes no matter how busy the site is. It also carries **service alerts** and **detours** (from Swiftly Service Adjustments), which browsers can't read from Swiftly directly.
 
 1. Sign in at dash.cloudflare.com with the GMT Planning account. Open **Workers & Pages** (under **Compute** in newer layouts) → **Create** → **Hello World** → name it `gmt-live-relay` → **Deploy**.
-2. Click **Edit code**. Open `relay/worker.js` from this repo (click it, then the **copy raw file** button), select everything in Cloudflare's editor, paste over it, and click **Deploy**.
+2. The relay's code is `src/worker.js` in GitHub. If the Worker is connected to the repo (Cloudflare **Workers Builds**), committing a change to that file deploys it automatically; check the Worker's **Deployments** tab. Otherwise click **Edit code**, copy `src/worker.js` from GitHub (open it, then the **copy raw file** button), paste over everything in Cloudflare's editor, and click **Deploy**.
 3. Go back to the Worker → **Settings → Variables and Secrets** → **Add**: Type **Secret**, name `SWIFTLY_KEY`, value: the **Website Key** from Swiftly. **Deploy**.
 4. Copy the Worker's address from its overview page (like `https://gmt-live-relay.<name>.workers.dev`). Open it in a browser: it should say "GMT live map relay is running." Adding `/v1/vehicles` should show bus data.
 5. In GitHub: **Settings → Secrets and variables → Actions → New repository secret**: name `RELAY_URL`, value: the Worker address (no slash at the end).
@@ -211,7 +211,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | How "nearby" is defined (meters) | `scripts/build-data.mjs` | `NEARBY_METERS` |
 | Amenity labels | `scripts/build-data.mjs` | `AMENITY_COLUMNS` |
 | Talking to Swiftly (direct) or the relay | `public/live.js` | `swiftly(`, `relay(` |
-| The relay itself (refresh intervals, allowed sites) | `relay/worker.js` | `FEEDS`, `ALLOWED_ORIGINS` |
+| The relay itself (refresh intervals, allowed sites) | `src/worker.js` | `FEEDS`, `ALLOWED_ORIGINS` |
 | Trip planner walking limits, transfer time, number of buses | `public/planner.js` | `ACCESS_M`, `TRANSFER_M`, `TRANSFER_BUFFER`, `MAX_RIDES` |
 | Nightly schedule time | `.github/workflows/build-data.yml` | `cron` |
 

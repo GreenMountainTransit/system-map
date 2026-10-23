@@ -26,7 +26,7 @@ Other features: service alerts and detours with temporary stops and their times 
 | `route-info.json` | Route descriptions and legend groups (edit by hand). |
 | `amenities.csv` | Shelter, seating, schedule box and ADA pad for each stop. |
 | `MAINTENANCE.md` | How to run and fix the map without a developer. |
-| `relay/worker.js` | The relay: a Cloudflare Worker that fetches live data, service alerts and detours from Swiftly once for all visitors, keeping the key private. Setup steps are in MAINTENANCE.md. |
+| `src/worker.js` | The relay: a Cloudflare Worker that fetches live data, service alerts and detours from Swiftly once for all visitors, keeping the key private. Setup steps are in MAINTENANCE.md. |
 | `.github/workflows/build-data.yml` | Nightly (and on every change): downloads GMT's GTFS, builds the data, adds the Swiftly key, publishes the site. |
 
 The Mapbox token, relay address and optional Google key are stored as repository secrets, not in the code. With the relay (`RELAY_URL` secret), the Swiftly key lives only in Cloudflare and never appears on the page; without it, the page calls Swiftly directly with `SWIFTLY_KEY`. The workflow inserts it into the published page. Because the page calls Swiftly directly from visitors' browsers, the key is visible to anyone who inspects the live page, the same way Swiftly's own map works. If the key is ever misused, create a new one in Swiftly, update the secret, and re-run the workflow.
