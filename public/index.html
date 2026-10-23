@@ -9,6 +9,7 @@
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
 <script src="live.js"></script>
 <script src="planner.js"></script>
+<script src="bus3d.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
@@ -619,13 +620,17 @@ function setThreeD(on) {
   three.on = on;
   document.querySelector(".three-btn")?.setAttribute("aria-pressed", String(on));
   if (on) {
-    map.setMaxPitch(70); map.dragRotate.enable(); map.keyboard.enableRotation();
+    map.setMaxPitch(80); map.dragRotate.enable(); map.keyboard.enableRotation();
     if (!basemap.standard) { // 3D buildings come with the Detailed basemap
       basemap = BASEMAPS.find((b) => b.standard);
       document.querySelectorAll(".basemaps button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.id === basemap.id));
       map.setStyle(basemap.url, { diff: false });
     } else try { map.setConfigProperty("basemap", "show3dObjects", true); } catch {}
-    map.easeTo({ pitch: 60, zoom: Math.max(map.getZoom(), 14.5), duration: reduceMotion ? 0 : 900 });
+    // Tilt and frame every route currently shown (the legend's selection, or this page's route).
+    const vis = visibleRoutes(), b = new mapboxgl.LngLatBounds();
+    linesData.features.filter((f) => vis.includes(f.properties.route_id)).forEach((f) => f.geometry.coordinates.forEach((c) => b.extend(c)));
+    if (b.isEmpty()) map.easeTo({ pitch: 60, duration: reduceMotion ? 0 : 900 });
+    else map.fitBounds(b, { padding: panelPad(), pitch: 60, bearing: map.getBearing(), duration: reduceMotion ? 0 : 1100 });
     toast("3D view: click any bus to follow it. Right-click and drag to turn the map.");
   } else {
     stopFollow();
@@ -637,6 +642,30 @@ function setThreeD(on) {
 const FOLLOW_MS = 5000; // while following a bus, ask for its position every 5 seconds
 const BUS_LEN = 30.5;   // the 3D bus is ~100 ft long at map scale (exaggerated so it reads at street zoom)
 let followState = null;  // { id, route, fix: {c, heading, speed, at}, shown: {c, heading}, prev, timer, raf }
+// Load the detailed 3D bus model for this bus (its sign shows its route and destination).
+async function loadBusModel(p) {
+  if (!map.addModel || !globalThis.GMTBus3D) return false;
+  try {
+    const r = routes[p.route_id] || {};
+    const url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "" });
+    if (!followState || followState.id !== p.id) { URL.revokeObjectURL(url); return false; }
+    const id = "gmt-bus-" + Date.now();
+    map.addModel(id, url);
+    followState.model = { id, url };
+    addBusModelLayer();
+    return true;
+  } catch { return false; }
+}
+function addBusModelLayer() {
+  const m = followState?.model; if (!m) return;
+  if (!map.hasModel?.(m.id)) map.addModel(m.id, m.url); // after a basemap change
+  if (!map.getSource("bus3d-pt")) map.addSource("bus3d-pt", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  if (map.getLayer("bus3d-model")) map.removeLayer("bus3d-model");
+  const scale = BUS_LEN / GMTBus3D.LENGTH_M; // ~100 ft at map scale
+  map.addLayer({ id: "bus3d-model", type: "model", source: "bus3d-pt", layout: { "model-id": m.id },
+    paint: { "model-scale": [scale, scale, scale], "model-rotation": [0, 0, 0], "model-type": "common-3d", "model-cast-shadows": true },
+    ...((map.getStyle().imports || []).length ? { slot: "top" } : {}) }); // slots exist only in the Standard (Detailed) basemap
+}
 function startFollow(p) {
   stopFollow();
   three.follow = p.id; three.misses = 0;
@@ -654,11 +683,20 @@ function startFollow(p) {
   if (map.getLayer("stop-names")) { map.setFilter("stop-names", ["in", `|${p.route_id}|`, ["get", "routes_key"]]); map.setLayoutProperty("stop-names", "visibility", "visible"); }
   applyFilters(); // hides the followed bus's flat badge; the 3D bus takes its place
   if (followState.shown) map.easeTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: reduceMotion ? 0 : 1200 });
+  loadBusModel(p); // detailed model; until it's ready (or if it can't load) the simpler box bus shows
+  // Look around the bus: drag to orbit (left/right) and tilt (up/down); scroll to zoom. The bus stays centered.
+  followState.orbit = 0; // degrees added to the bus's heading
+  map.dragPan.disable(); map.dragRotate.disable();
+  toast("Drag to look around the bus, scroll to zoom.");
   followState.timer = setInterval(() => refreshBuses(), FOLLOW_MS);
   setTimeout(() => { if (followState) followState.raf = requestAnimationFrame(followFrame); }, reduceMotion ? 0 : 1250);
 }
 function stopFollow() {
-  if (followState) { clearInterval(followState.timer); cancelAnimationFrame(followState.raf); }
+  if (followState) {
+    clearInterval(followState.timer); cancelAnimationFrame(followState.raf);
+    if (followState.model) { if (map.getLayer("bus3d-model")) map.removeLayer("bus3d-model"); try { map.removeModel?.(followState.model.id); } catch {} URL.revokeObjectURL(followState.model.url); }
+    map.dragPan.enable(); if (three.on) map.dragRotate.enable();
+  }
   followState = null; three.follow = null;
   const bar = document.getElementById("follow-bar"); if (bar) bar.hidden = true;
   map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] });
@@ -690,8 +728,14 @@ function followFrame() {
     if (!st.shown) st.shown = { c: target, heading: fx.heading };
     st.shown.c = [st.shown.c[0] + (target[0] - st.shown.c[0]) * 0.08, st.shown.c[1] + (target[1] - st.shown.c[1]) * 0.08];
     let dh = ((fx.heading - st.shown.heading + 540) % 360) - 180; st.shown.heading = (st.shown.heading + dh * 0.08 + 360) % 360;
-    map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
-    map.jumpTo({ center: st.shown.c, bearing: st.shown.heading });
+    if (st.model && map.getLayer("bus3d-model")) {
+      // Detailed model: move its point and turn it to face the way it's going (the model's front is +X, i.e. east).
+      map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] });
+      map.getSource("bus3d-pt")?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: st.shown.c } });
+      // Model rotation turns counterclockwise from east; bus headings turn clockwise from north.
+      map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, 90 - st.shown.heading]);
+    } else map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
+    map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0) });
   }
   st.raf = requestAnimationFrame(followFrame);
 }
@@ -717,7 +761,22 @@ function busModel(c, heading, color) {
     box(L / 2 - 0.4, W * 0.32, 0.8, W * 0.16, H * 0.2, H * 0.32, "#ffe08a"),
   ] };
 }
-map.on("dragstart", (e) => { if (e.originalEvent && three.follow) stopFollow(); }); // dragging the map ends following
+// While following: drag left/right to circle the bus, up/down to tilt the view.
+let followDragged = 0;
+{
+  let drag = null;
+  const el = map.getCanvasContainer();
+  el.addEventListener("pointerdown", (e) => { if (followState && e.button === 0) { drag = { x: e.clientX, y: e.clientY, moved: 0 }; el.setPointerCapture?.(e.pointerId); } });
+  el.addEventListener("pointermove", (e) => {
+    if (!drag || !followState) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy) };
+    if (drag.moved > 4) followDragged = Date.now(); // a drag, not a click: don't open popups when it ends
+    followState.orbit = ((followState.orbit || 0) - dx * 0.4) % 360;
+    map.setPitch(Math.max(0, Math.min(map.getMaxPitch(), map.getPitch() - dy * 0.3)));
+  });
+  const end = () => (drag = null);
+  el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
+}
 function toast(text) {
   const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = text;
   document.getElementById("map").appendChild(t);
@@ -972,6 +1031,7 @@ function addOverlay() {
     layout: { "icon-image": "sv-cone", "icon-rotate": ["get", "heading"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
   // Keep detour lines under the stop circles (classic basemaps stack layers in the order they're added).
   if (!basemap.standard) for (const l of ["detour-closed-mask", "detour-closed-line", "detour-casing", "detour-line", "detour-arrows"]) if (map.getLayer(l)) map.moveLayer(l, "stops");
+  if (followState?.model) addBusModelLayer();
   applyView();
 }
 
@@ -1055,7 +1115,9 @@ function applyFilters() {
   map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
   map.setPaintProperty("buses", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
   const arrowFade = ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.95, 16.3, 0.95, 17, 0];
-  map.setPaintProperty("route-arrows", "icon-opacity", any ? ["case", isHl, arrowFade, 0] : arrowFade);
+  // Zoom must be the outer expression; the highlighted/not choice goes inside each zoom stop.
+  const arrowOn = any ? ["case", isHl, 0.95, 0] : 0.95;
+  map.setPaintProperty("route-arrows", "icon-opacity", any ? ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, arrowOn, 16.3, arrowOn, 17, 0] : arrowFade);
 }
 function highlight(ids) {
   const next = (ids || []).filter((id) => routes[id]);
@@ -1115,6 +1177,7 @@ function hideTip() { tip.hidden = true; }
 
 map.on("click", (e) => {
   if (!map.getLayer("route-lines")) return;
+  if (Date.now() - followDragged < 400) return; // the end of a look-around drag isn't a click
   if (view === "plan" && !routeParam) { // clicking the map sets From, then To
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
     const place = { c, label: near ? `Near ${near.name}` : "Point on map" };
@@ -1703,17 +1766,31 @@ document.addEventListener("click", (e) => {
   focusAlertRoutes(li.dataset.routes.split(","));
 });
 document.addEventListener("keydown", (e) => { const li = e.target.closest?.(".al-click"); if (li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); focusAlertRoutes(li.dataset.routes.split(",")); } });
+let alertFocus = null; // { hidden, picking } saved from before an alert was clicked
 function focusAlertRoutes(rids) {
+  rids = rids.filter((r) => routes[r]); if (!rids.length) return;
+  document.querySelector(".ab-list")?.setAttribute("hidden", ""); document.querySelector(".ab-btn")?.setAttribute("aria-expanded", "false");
+  if (!routeParam) {
+    if (view !== "routes") setView("routes");
+    if (!alertFocus) alertFocus = { hidden: new Set(hidden), picking };
+    hidden = new Set(Object.keys(routes).filter((x) => !rids.includes(x))); picking = true;
+    buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
+  }
   const det = detourGeo.features.filter((f) => rids.includes(f.properties.route_id));
   const feats = det.length ? det : linesData.features.filter((f) => rids.includes(f.properties.route_id));
-  if (!feats.length) return;
   const b = new mapboxgl.LngLatBounds();
   feats.forEach((f) => (f.geometry.type === "Point" ? [f.geometry.coordinates] : f.geometry.coordinates).forEach((c) => b.extend(c)));
-  document.querySelector(".ab-list")?.setAttribute("hidden", ""); document.querySelector(".ab-btn")?.setAttribute("aria-expanded", "false");
-  if (!routeParam && view !== "routes") setView("routes");
-  highlight(rids);
-  map.fitBounds(b, { padding: panelPad(), maxZoom: det.length ? 16.5 : 14, duration: reduceMotion ? 0 : 800 });
-  setTimeout(() => { if (!openStopId) highlight([]); }, 4000);
+  if (!b.isEmpty()) map.fitBounds(b, { padding: panelPad(), maxZoom: det.length ? 16.5 : 14, duration: reduceMotion ? 0 : 800 });
+  document.getElementById("announce").textContent = `Showing ${rids.map((r) => "Route " + routes[r].short_name).join(", ")} for this alert. Click elsewhere to go back.`;
+  // The next click anywhere else puts the legend back the way it was.
+  setTimeout(() => document.addEventListener("pointerdown", restoreAfterAlert, true), 50);
+}
+function restoreAfterAlert(e) {
+  if (e && e.target.closest?.("#alert-banner, .alerts")) return; // clicking another alert keeps focusing
+  document.removeEventListener("pointerdown", restoreAfterAlert, true);
+  if (!alertFocus) return;
+  hidden = alertFocus.hidden; picking = alertFocus.picking; alertFocus = null;
+  buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
 }
 // Banner over the map: how many alerts apply to what's shown; opens the full list.
 function renderAlertBanner() {
