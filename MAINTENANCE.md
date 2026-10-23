@@ -73,7 +73,7 @@ The relay is a small Cloudflare Worker. It fetches live data from Swiftly every 
 To stop using the relay (for example while troubleshooting), delete the `RELAY_URL` secret and re-run the workflow: the map goes back to calling Swiftly directly with `SWIFTLY_KEY` (which puts the key in the page).
 
 ### Detours and service alerts
-- **Detours** appear when GMT staff set one up in Swiftly **Service Adjustments**: a dashed line in the route's color labeled DETOUR, closed stops marked ×, and temporary stops marked in orange. Closed stops say so in their details and route pages show "Closed: detour". Nothing to do in this repo.
+- **Detours** appear when GMT staff set one up in Swiftly **Service Adjustments**: the detour path is drawn like the rest of the route (solid, route color, direction arrows), the bypassed stretch of the regular route fades back, closed stops are marked ×, and temporary stops are labeled with their names. Clicking a temporary stop shows its next times: live when Swiftly predicts them, otherwise estimated from the detour's timing. Nothing to do in this repo.
 - **Service alerts** entered in Swiftly appear in a banner at the top of the map, on affected route pages, in affected stops' details, and as a warning mark next to the route in the list.
 - Both need the relay. Without it, the map works the same but shows neither.
 
@@ -195,6 +195,8 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | How often live data refreshes | `public/index.html` | `REFRESH_MS` |
 | Click-to-activate shade (embeds) | `public/index.html` | `Click to activate` |
 | Route draw-in animation on first load | `public/index.html` | `animateBuild` |
+| Walking limits for "service near you" | `public/index.html` | `const WALK` |
+| 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `followBus` |
 | Frequency tiers and colors | `public/index.html` | `const FREQ` and `tierOf` |
 | Frequency time windows | `scripts/build-data.mjs` | `FREQ_WINDOWS` |
 | How "nearby" is defined (meters) | `scripts/build-data.mjs` | `NEARBY_METERS` |
