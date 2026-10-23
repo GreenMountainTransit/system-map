@@ -628,6 +628,7 @@ function setThreeD(on) {
   document.querySelector(".three-btn")?.setAttribute("aria-pressed", String(on));
   if (on) {
     map.setMaxPitch(80); map.dragRotate.enable(); map.keyboard.enableRotation();
+    startFleet();
     if (!basemap.standard) { // 3D buildings come with the Detailed basemap
       basemap = BASEMAPS.find((b) => b.standard);
       document.querySelectorAll(".basemaps button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.id === basemap.id));
@@ -640,7 +641,7 @@ function setThreeD(on) {
     else map.fitBounds(b, { padding: panelPad(), pitch: 60, bearing: map.getBearing(), duration: reduceMotion ? 0 : 1100 });
     toast("3D view: click any bus to follow it. Right-click and drag to turn the map.");
   } else {
-    stopFollow();
+    stopFollow(); exitStopView(); stopFleet();
     map.easeTo({ pitch: 0, bearing: 0, duration: reduceMotion ? 0 : 700 });
     setTimeout(() => { if (!three.on) { map.setMaxPitch(0); map.dragRotate.disable(); map.keyboard.disableRotation(); } }, reduceMotion ? 0 : 750);
     try { map.setConfigProperty("basemap", "show3dObjects", false); } catch {}
@@ -669,6 +670,7 @@ async function loadBusModel(p) {
 }
 function addBusModelLayer() {
   const m = followState?.model; if (!m) return;
+  followState.anchor = null; // the next frame sets a fresh anchor point
   if (!map.hasModel?.(m.id)) map.addModel(m.id, m.url); // after a basemap change
   if (!map.getSource("bus3d-pt")) map.addSource("bus3d-pt", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
   if (map.getLayer("bus3d-model")) map.removeLayer("bus3d-model");
@@ -683,7 +685,7 @@ function setBasemapLabels(on) {
   for (const k of ["showPlaceLabels", "showPointOfInterestLabels", "showRoadLabels"]) try { map.setConfigProperty("basemap", k, on); } catch {}
 }
 function startFollow(p) {
-  stopFollow();
+  stopFollow(); if (stopView) { stopView = null; map.getSource("stop-sign")?.setData({ type: "FeatureCollection", features: [] }); }
   three.follow = p.id; three.misses = 0;
   const now = performance.now();
   followState = { id: p.id, route: p.route_id, hist: [], line: null, shown: null };
@@ -824,7 +826,15 @@ function followFrame() {
     if (st.model && !map.getLayer("bus3d-model") && basemapReady()) addBusModelLayer(); // lost in a basemap reload
     if (st.model && map.getLayer("bus3d-model")) {
       if (!st.boxCleared) { map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] }); st.boxCleared = true; }
-      map.getSource("bus3d-pt")?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: st.shown.c } });
+      // Keep the model's point fixed and slide the model with model-translation (meters [east, south, up]).
+      // Replacing the point's data every frame makes Mapbox reload it constantly and the bus can vanish.
+      if (!st.anchor || meters(st.anchor, st.shown.c) > 400) {
+        st.anchor = [...st.shown.c];
+        map.getSource("bus3d-pt")?.setData({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: st.anchor } });
+      }
+      const k = Math.cos((st.anchor[1] * Math.PI) / 180);
+      const east = (st.shown.c[0] - st.anchor[0]) * 111320 * k, north = (st.shown.c[1] - st.anchor[1]) * 110540;
+      map.setPaintProperty("bus3d-model", "model-translation", [east, -north, 0]);
       // Turn the model to face its direction of travel. Model rotation turns clockwise, and at rotation 0 the
       // model's front points east, so heading - 90 points it the way the bus is driving (checked in all directions).
       map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, (st.shown.heading + 270) % 360]);
@@ -879,6 +889,130 @@ let followDragged = 0;
     followState.cam.zoomTo = Math.max(14.5, Math.min(20, followState.cam.zoomTo - e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0022)));
   }, { passive: false });
 }
+// ---------- 3D view: every live bus as a 3D bus (click any one to follow it) ----------
+// One map layer draws them all; each route-and-destination gets its own model, so signs read e.g. "2 ESSEX JUNCTION".
+// Positions glide toward each new report so buses don't jump. Zoomed far out, the flat badges show instead.
+const fleet = { on: false, models: new Map(), shown: new Map(), raf: 0, last: 0, n: 0 };
+const fleetKey = (p) => `${p.route_id}|${niceDest(p.headsign)}`;
+async function ensureFleetModel(p) {
+  const key = fleetKey(p); if (fleet.models.has(key)) return;
+  const entry = { id: `fleet-${++fleet.n}`, url: null, ready: false }; fleet.models.set(key, entry);
+  try {
+    const r = routes[p.route_id] || {};
+    entry.url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "" });
+    while (!basemapReady()) await new Promise((res) => setTimeout(res, 150));
+    map.addModel(entry.id, entry.url); entry.ready = true;
+    // The layer picks each bus's model by name, and only knows models that existed when it was made, so remake it.
+    if (map.getLayer("fleet3d")) { map.removeLayer("fleet3d"); addFleetLayer(); }
+  } catch { fleet.models.delete(key); }
+}
+function addFleetLayer() {
+  if (!fleet.on) return;
+  for (const e of fleet.models.values()) if (e.ready && !map.hasModel?.(e.id)) map.addModel(e.id, e.url); // after a basemap reload
+  if (!map.getSource("fleet3d")) map.addSource("fleet3d", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  fleet.sig = ""; // send data again to a new layer
+  if (!map.getLayer("fleet3d")) {
+    const scale = BUS_LEN / GMTBus3D.LENGTH_M;
+    map.addLayer({ id: "fleet3d", type: "model", source: "fleet3d", minzoom: 14, layout: { "model-id": ["get", "model"] },
+      paint: { "model-scale": [scale, scale, scale], "model-rotation": ["get", "r"], "model-type": "common-3d" },
+      ...((map.getStyle().imports || []).length ? { slot: "top" } : {}) });
+  }
+  // Flat badges fade out as the 3D buses take over (they stay clickable).
+  if (map.getLayer("buses")) for (const k of ["icon-opacity", "text-opacity"]) map.setPaintProperty("buses", k, ["interpolate", ["linear"], ["zoom"], 14, 1, 15, 0]);
+}
+function startFleet() {
+  if (fleet.on || !map.addModel || !globalThis.GMTBus3D) return;
+  fleet.on = true; addFleetLayer(); fleet.raf = requestAnimationFrame(fleetFrame);
+}
+function stopFleet() {
+  fleet.on = false; cancelAnimationFrame(fleet.raf);
+  if (map.getLayer("fleet3d")) map.removeLayer("fleet3d");
+  if (map.getSource("fleet3d")) map.removeSource("fleet3d");
+  if (map.getLayer("buses")) for (const k of ["icon-opacity", "text-opacity"]) map.setPaintProperty("buses", k, 1);
+}
+function fleetFrame(now) {
+  if (!fleet.on) return;
+  fleet.raf = requestAnimationFrame(fleetFrame);
+  // About six updates a second: replacing the layer's data much faster keeps Mapbox from finishing drawing it.
+  if (now - fleet.last < 160) return;
+  const dt = Math.min(0.5, (now - (fleet.last || now)) / 1000); fleet.last = now;
+  if (!map.getLayer("fleet3d")) { if (basemapReady()) addFleetLayer(); return; }
+  const vis = visibleRoutes(), k = 1 - Math.exp(-dt / 1.5), feats = [], seen = new Set();
+  for (const f of lastBuses.features) {
+    const p = f.properties;
+    if (!vis.includes(p.route_id) || p.id === followState?.id) continue;
+    seen.add(p.id);
+    const m = fleet.models.get(fleetKey(p)); if (!m) { ensureFleetModel(p); continue; }
+    if (!m.ready) continue;
+    const tgt = f.geometry.coordinates, h = p.heading ?? 0;
+    let sh = fleet.shown.get(p.id);
+    if (!sh || meters(sh.c, tgt) > 400) sh = { c: [...tgt], h }; // new bus, or a big jump: just place it
+    sh.c = [sh.c[0] + (tgt[0] - sh.c[0]) * k, sh.c[1] + (tgt[1] - sh.c[1]) * k];
+    const dh = ((h - sh.h + 540) % 360) - 180; sh.h = (sh.h + dh * k + 360) % 360;
+    fleet.shown.set(p.id, sh);
+    feats.push({ type: "Feature", properties: { model: m.id, r: [0, 0, (sh.h + 270) % 360] }, geometry: { type: "Point", coordinates: sh.c } });
+  }
+  for (const id of fleet.shown.keys()) if (!seen.has(id)) fleet.shown.delete(id);
+  const sig = feats.map((f) => f.properties.model + f.geometry.coordinates.map((x) => x.toFixed(6)).join() + Math.round(f.properties.r[2])).join("|");
+  if (sig !== fleet.sig) { fleet.sig = sig; map.getSource("fleet3d")?.setData({ type: "FeatureCollection", features: feats }); } // only when something moved
+}
+
+// ---------- stop view (3D view, desktop): stand at a stop and watch for the bus ----------
+// Clicking a stop in 3D view puts the camera at street level beside a 3D GMT bus stop sign, looking up the
+// street the next bus will come from. The live 3D buses drive into view as they approach.
+let stopView = null, signModel = null;
+async function enterStopView(s) {
+  if (!three.on || !map.addModel) return;
+  stopFollow();
+  stopView = { stop: s.stop_id };
+  // Which way do buses come from? Use the route and direction of the next bus (or the first route here).
+  let rid = s.routes.find((r) => visibleRoutes().includes(r)) || s.routes[0], dir = null, label = "";
+  try {
+    const arr = (await GMTLive.arrivals({ stop: s.stop_id })).arrivals[s.stop_id] || [];
+    const next = arr.find((a) => visibleRoutes().includes(a.route_id)) || arr[0];
+    if (next) { rid = next.route_id; dir = next.direction ?? null; label = `Next: ${routes[rid]?.short_name ? "Route " + routes[rid].short_name : ""} ${next.headsign ? "to " + niceDest(next.headsign) : ""} ${when(next.time) === "Due" ? "now" : "in " + when(next.time)}`; }
+  } catch {}
+  if (stopView?.stop !== s.stop_id) return;
+  const pats = routeStops[rid] || {};
+  const pat = (dir != null && pats[dir]) || Object.values(pats).find((p) => p.stops.includes(s.stop_id));
+  let upB = map.getBearing();
+  if (pat) {
+    const i = pat.stops.indexOf(s.stop_id);
+    if (i > 0) upB = bearingOf(s.coords, stopsById[pat.stops[i - 1]]?.coords || s.coords);       // toward the previous stop
+    else if (i === 0 && pat.stops[1]) upB = (bearingOf(s.coords, stopsById[pat.stops[1]].coords) + 180) % 360;
+  }
+  stopView.bearing = upB;
+  // The sign, facing the camera.
+  try {
+    if (!signModel) { signModel = await GMTBus3D.buildStopSign(); }
+    if (!map.hasModel?.("gmt-stop-sign")) map.addModel("gmt-stop-sign", signModel);
+    addStopSignLayer();
+    map.getSource("stop-sign")?.setData({ type: "Feature", properties: { r: [0, 0, upB % 360] }, geometry: { type: "Point", coordinates: s.coords } });
+  } catch {}
+  // Camera at street level just behind the stop, looking up the street.
+  // Close in and low: the stop sits in the foreground and the street runs away toward where the bus comes from.
+  map.easeTo({ center: offsetMeters(s.coords, Math.sin((upB * Math.PI) / 180) * 18, Math.cos((upB * Math.PI) / 180) * 18),
+    bearing: upB, pitch: 78, zoom: 20, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: reduceMotion ? 0 : 1400 });
+  let bar = document.getElementById("follow-bar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "follow-bar"; document.getElementById("map").appendChild(bar); }
+  bar.innerHTML = `<span>Stop view: ${esc(s.name)}</span>${label ? `<span class="follow-note">${esc(label.replace(/\s+/g, " ").trim())}</span>` : ""}<button type="button" id="stopview-exit">Exit</button>`;
+  bar.hidden = false;
+  document.getElementById("stopview-exit").onclick = () => { exitStopView(); closeStop(); };
+}
+function addStopSignLayer() {
+  if (!map.getSource("stop-sign")) map.addSource("stop-sign", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  if (!map.getLayer("stop-sign")) map.addLayer({ id: "stop-sign", type: "model", source: "stop-sign", layout: { "model-id": "gmt-stop-sign" },
+    paint: { "model-scale": [3, 3, 3], "model-rotation": ["get", "r"], "model-type": "common-3d" },
+    ...((map.getStyle().imports || []).length ? { slot: "top" } : {}) });
+}
+function exitStopView() {
+  if (!stopView) return;
+  const sv = stopView; stopView = null;
+  map.getSource("stop-sign")?.setData({ type: "FeatureCollection", features: [] });
+  const bar = document.getElementById("follow-bar"); if (bar && !followState) bar.hidden = true;
+  if (three.on) map.easeTo({ pitch: 60, zoom: 16, duration: reduceMotion ? 0 : 900, center: stopsById[sv.stop]?.coords });
+}
+
 function toast(text) {
   const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.textContent = text;
   document.getElementById("map").appendChild(t);
@@ -1134,6 +1268,8 @@ function addOverlay() {
   // Keep detour lines under the stop circles (classic basemaps stack layers in the order they're added).
   if (!basemap.standard) for (const l of ["detour-closed-mask", "detour-closed-line", "detour-casing", "detour-line", "detour-arrows"]) if (map.getLayer(l)) map.moveLayer(l, "stops");
   if (followState?.model) addBusModelLayer();
+  if (fleet.on) addFleetLayer();
+  if (stopView && signModel) { if (!map.hasModel?.("gmt-stop-sign")) map.addModel("gmt-stop-sign", signModel); addStopSignLayer(); }
   if (followState) setBasemapLabels(false);
   applyView();
 }
@@ -1216,7 +1352,10 @@ function applyFilters() {
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
   map.setPaintProperty("route-lines", "line-opacity", any ? ["case", isHl, 1, 0.2] : 1);
   map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
-  map.setPaintProperty("buses", "icon-opacity", any ? ["case", isHl, 1, 0.3] : 1);
+  // In 3D view the flat badges fade out as the 3D buses take over up close; highlighting still dims other routes.
+  const zoomFade = ["interpolate", ["linear"], ["zoom"], 14, any ? ["case", isHl, 1, 0.3] : 1, 15, 0];
+  map.setPaintProperty("buses", "icon-opacity", fleet.on ? zoomFade : any ? ["case", isHl, 1, 0.3] : 1);
+  if (fleet.on) map.setPaintProperty("buses", "text-opacity", ["interpolate", ["linear"], ["zoom"], 14, 1, 15, 0]);
   const arrowFade = ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.95, 16.3, 0.95, 17, 0];
   // Zoom must be the outer expression; the highlighted/not choice goes inside each zoom stop.
   const arrowOn = any ? ["case", isHl, 0.95, 0] : 0.95;
@@ -1580,7 +1719,8 @@ function showStop(id, fly) {
   const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.75), left: 0, right: 0 }
     : { top: 20, bottom: 20, left: 20, right: 20 };
   const inView = map.getBounds().contains(s.coords);
-  if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
+  if (three.on && !isPhone()) enterStopView(s); // 3D view: street-level stop view
+  else if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
   refreshPopup(true);
 }
 // A detour's temporary stop: its name, the detoured route, and next times (live from Swiftly when it predicts
@@ -1619,6 +1759,7 @@ async function tempStopTimes(t) {
   return out.filter((a) => a.time >= now - 30).sort((a, b) => a.time - b.time).slice(0, 3);
 }
 function closeStop() {
+  if (stopView) exitStopView();
   if (!openStopId) return;
   openStopId = null; showAllTimes = false; svOpen = false; setCamera(null);
   stopPanel.hidden = true; stopPanel.innerHTML = ""; stopPanel.style.height = "";
