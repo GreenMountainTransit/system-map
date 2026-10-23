@@ -11,7 +11,7 @@ A live map of Green Mountain Transit, hosted on GitHub Pages with no server.
 
 Selecting a stop opens its details (a side panel on desktop, a bottom sheet on phones): next departures marked **Live** (Swiftly prediction) or **Scheduled**, all of today's times, ridership (the stop's total monthly boardings as a stock-style chart with 6M / YTD / 12M / All, growth or decline, and its rank among all stops and among the stops on each of its routes; stop level only, from GMT's ArcGIS Online stops data), accessibility and amenities, nearby food, shopping and restrooms, and what each route does. On a route page, a stop shows only that route.
 
-Other features: service alerts and detours with temporary stops and their times (via the relay), "next service near you" from the locate button (nearest stop in each direction, walk time and next trips; on route pages the search also takes addresses), a trip planner with leave-now / leave-at / arrive-by, live bus destinations, a desktop 3D view where you can follow a bus, local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
+Other features: service alerts and detours with temporary stops and their times (via the relay), "next service near you" from the locate button (nearest stop in each direction, walk time and next trips; on route pages the search also takes addresses), a trip planner with leave-now / leave-at / arrive-by, live bus destinations, a desktop 3D view where you can follow a bus (a 3D bus with its speed, refreshed every 5 seconds), local routes drawn on top of other route types, a collapsible Street View of each stop with the camera's position shown on the map, search for routes and stops, a clickable legend with route groups, Show all / Hide all, a Live buses on/off switch, Map / Detailed / Satellite basemaps, direction arrows on routes, and phone-friendly bottom sheets.
 
 ## What's in the repo
 
@@ -72,7 +72,7 @@ The **Trip planner** tab finds bus trips between two places, including transfers
 
 - It searches with RAPTOR, the method most journey planners use, for trips with up to 3 buses (2 transfers), walking up to about 10 minutes to and from stops and up to about 5 minutes between stops when transferring, with at least 2 minutes to change buses. These settings are at the top of `public/planner.js`.
 - Live data: Swiftly only lets browsers get predictions one stop at a time, so each suggested trip's **first bus** is checked live (on time, late or early); later legs use the timetable. Fully live transfer timing would need the GTFS-realtime feed through a relay.
-- Address lookups count toward Mapbox's free geocoding allowance (100,000 a month at the time of writing).
+- Address lookups and walking paths count toward Mapbox's free geocoding and directions allowances. The planner boards and leaves each bus at the stop with the shortest walk for the same trip, and draws walks along real streets.
 
 ## Frequency map
 

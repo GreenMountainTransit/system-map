@@ -29,7 +29,7 @@ Keep every account under a GMT-owned login, with at least two staff who can get 
 2. Open the map and click a stop. Under "Next departures" you should see **● Live predictions**. Buses should appear on the map.
 
 **Quarterly (15 minutes)**
-1. **Mapbox usage:** account.mapbox.com → Statistics. The free plan covers 50,000 map loads a month, plus address searches from the trip planner (geocoding has its own free allowance).
+1. **Mapbox usage:** account.mapbox.com → Statistics. The free plan covers 50,000 map loads a month; address searches (geocoding) and the trip planner's walking paths (directions) each have their own free allowance.
 2. **Feed expiry:** open the latest run in **Actions** → **build** → **Build data**. Look for a yellow warning that the feed ends soon. If you see one, check with Trillium that a new GTFS is coming.
 3. **Outdated-step warnings:** in the same run, look for yellow warnings mentioning "deprecated" or "Node.js". See section 6.
 
@@ -71,6 +71,9 @@ The relay is a small Cloudflare Worker. It fetches live data from Swiftly every 
 7. Check the map: buses show, a stop says "● Live predictions", and the browser console (F12) shows requests to the Worker, none to `api.goswift.ly`.
 
 To stop using the relay (for example while troubleshooting), delete the `RELAY_URL` secret and re-run the workflow: the map goes back to calling Swiftly directly with `SWIFTLY_KEY` (which puts the key in the page).
+
+### Smoother bus following (after Swiftly raises the limit)
+In 3D view, following a bus asks the relay for its position every 5 seconds and glides the 3D bus between reports. The relay refreshes positions from Swiftly every 15 seconds by default. Once Swiftly's limit is at least 600 requests per 15 minutes, add a **Text** variable `VEHICLES_TTL` = `5` to the Worker (Settings → Variables and Secrets) and deploy, so positions update every 5 seconds. Remove it to go back to 15.
 
 ### Detours and service alerts
 - **Detours** appear when GMT staff set one up in Swiftly **Service Adjustments**: the detour path is drawn like the rest of the route (solid, route color, direction arrows), the bypassed stretch of the regular route fades back, closed stops are marked ×, and temporary stops are labeled with their names. Clicking a temporary stop shows its next times: live when Swiftly predicts them, otherwise estimated from the detour's timing. Nothing to do in this repo.
@@ -196,7 +199,8 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Click-to-activate shade (embeds) | `public/index.html` | `Click to activate` |
 | Route draw-in animation on first load | `public/index.html` | `animateBuild` |
 | Walking limits for "service near you" | `public/index.html` | `const WALK` |
-| 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `followBus` |
+| 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow`, `busModel` (the 3D bus's size and colors: `BUS_LEN`) |
+| Planner walking paths (Mapbox walking directions) | `public/index.html` | `fetchWalks` |
 | Frequency tiers and colors | `public/index.html` | `const FREQ` and `tierOf` |
 | Frequency time windows | `scripts/build-data.mjs` | `FREQ_WINDOWS` |
 | How "nearby" is defined (meters) | `scripts/build-data.mjs` | `NEARBY_METERS` |
