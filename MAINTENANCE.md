@@ -29,7 +29,7 @@ Keep every account under a GMT-owned login, with at least two staff who can get 
 2. Open the map and click a stop. Under "Next departures" you should see **● Live predictions**. Buses should appear on the map.
 
 **Quarterly (15 minutes)**
-1. **Mapbox usage:** account.mapbox.com → Statistics. The free plan covers 50,000 map loads a month; address searches (geocoding) and the trip planner's walking paths (directions) each have their own free allowance.
+1. **Mapbox usage:** account.mapbox.com → Statistics. The free plan covers 50,000 map loads a month; place and address searches (Search Box API, 50,000 free requests a month at the time of writing) and the trip planner's walking paths (directions) each have their own free allowance.
 2. **Feed expiry:** open the latest run in **Actions** → **build** → **Build data**. Look for a yellow warning that the feed ends soon. If you see one, check with Trillium that a new GTFS is coming.
 3. **Outdated-step warnings:** in the same run, look for yellow warnings mentioning "deprecated" or "Node.js". See section 6.
 
@@ -202,6 +202,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Click-to-activate shade (embeds) | `public/index.html` | `Click to activate` |
 | Route draw-in animation on first load | `public/index.html` | `animateBuild` |
 | Walking limits for "service near you" | `public/index.html` | `const WALK` |
+| Place and address search (Vermont only) | `public/index.html` | `searchPlaces`, `VT_BBOX` |
 | 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) | `public/bus3d.js` and `public/assets/gmt-logo.png` | `texture`, `drawDriver` |
 | Planner walking paths (Mapbox walking directions) | `public/index.html` | `fetchWalks` |

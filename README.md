@@ -73,7 +73,7 @@ The **Trip planner** tab finds bus trips between two places, including transfers
 
 - It searches with RAPTOR, the method most journey planners use, for trips with up to 3 buses (2 transfers), walking up to about 10 minutes to and from stops and up to about 5 minutes between stops when transferring, with at least 2 minutes to change buses. These settings are at the top of `public/planner.js`.
 - Live data: Swiftly only lets browsers get predictions one stop at a time, so each suggested trip's **first bus** is checked live (on time, late or early); later legs use the timetable. Fully live transfer timing would need the GTFS-realtime feed through a relay.
-- Address lookups and walking paths count toward Mapbox's free geocoding and directions allowances. The planner boards and leaves each bus at the stop with the shortest walk for the same trip, and draws walks along real streets.
+- Searches find places (like City Hall), addresses, towns and GMT stops, limited to Vermont. Place search uses Mapbox's Search Box API (billed per request after a free monthly allowance), falling back to Mapbox's address search if it's unavailable. Walking paths use Mapbox walking directions. The planner boards and leaves each bus at the stop with the shortest walk for the same trip, and draws walks along real streets.
 
 ## Frequency map
 
