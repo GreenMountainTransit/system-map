@@ -103,6 +103,13 @@ Without this, the Street View section in stop details shows a link that opens Go
    - **API restrictions:** Maps Embed API only.
 3. Add it to the repo as a secret named `GOOGLE_MAPS_KEY` (same steps as the Swiftly key), then run the workflow.
 
+### Trip planner: driving-cost comparison
+Each suggested trip shows what driving it would cost in a typical car compared with the bus fare, with a **?** that explains the method. The figures are in `route-info.json` under `"trip_costs"`:
+- `gas_price` and `gas_price_as_of`: update every few months (AAA's Vermont average is at gasprices.aaa.com/?state=VT).
+- `bus_fare`, `bus_fare_daily_cap`, `fare_note`: update if GMT's fares change.
+- `mpg`, `maintenance_cents_per_mile`, `depreciation_cents_per_mile` and their sources: update when AAA publishes a new Your Driving Costs study (each September), or if you choose a different typical car.
+Commit the file and the map picks up the new figures with the next build. Driving distances come from Mapbox driving directions (one request per trip searched, counted in Mapbox's free directions allowance).
+
 ### Ridership in stop details
 The **Ridership** section in each stop's details comes from GMT's ArcGIS Online layer `Detail_Ridership_V2` (one record per month, route and stop). Rows where `routes_token` is `|0|` are the layer's all-routes summary rows (for the AGOL dashboard) and are skipped, so boardings aren't double-counted. The build adds the remaining route rows together, so only stop-level totals are published; route-level numbers never reach the site. Ranks compare stop totals, among all stops and among the stops each route serves. The nightly build reads every month in it. Riders can view the last 6 months, year to date, the last 12 months, or all months.
 - New months appear automatically the night after the layer is updated.
@@ -203,10 +210,11 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Route draw-in animation on first load | `public/index.html` | `animateBuild` |
 | Walking limits for "service near you" | `public/index.html` | `const WALK` |
 | Place and address search (Vermont only) | `public/index.html` | `searchPlaces`, `VT_BBOX` |
+| Trip planner recent places and popular stops | `public/index.html` | `RECENT_MAX`, `popularStops` |
+| Trip planner preferences (fastest, least walking, fewest transfers, wheelchair-accessible stops) | `public/planner.js` | `sortByPref`, `acc` |
 | 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) and the 3D stop sign | `public/bus3d.js` and `public/gmt-logo.png` | `busTexture`, `drawDriver`, `signTexture` |
 | 3D view: all buses in 3D, and street-level stop view | `public/index.html` | `fleetFrame`, `enterStopView` |
-| Riders boarding a bus waiting 30+ seconds (stop view) | `public/index.html` and `public/bus3d.js` | `boardingFrame`, `dwellingBus`, `buildPerson` |
 | Planner walking paths (Mapbox walking directions) | `public/index.html` | `fetchWalks` |
 | Frequency tiers and colors | `public/index.html` | `const FREQ` and `tierOf` |
 | Frequency time windows | `scripts/build-data.mjs` | `FREQ_WINDOWS` |

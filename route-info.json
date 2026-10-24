@@ -2,7 +2,7 @@
   "_help": "Edit this file to change route descriptions or legend groups. Descriptions are keyed by route number. Group default: on, off, or sundays (on only on Sundays). The site rebuilds after you commit. The ridership block sets the ArcGIS Online layer the stop ridership charts come from, and where 'Explore the stops dashboard' links to.",
   "ridership": {
     "layer": "https://services6.arcgis.com/1pxfKKnRqKBsikRV/arcgis/rest/services/Detail_Ridership_V2/FeatureServer/0",
-    "dashboard": "https://gmtransit.maps.arcgis.com/apps/dashboards/1e816fda88fe4a589ef6ec582dcccdf2"
+    "dashboard": "https://ridegmt.com/dashboards/"
   },
   "groups": [
     {
@@ -70,5 +70,19 @@
     "96": "Downtown Burlington to St. Albans via US 7 and I-89, serving Winooski, Colchester, Milton and Georgia.",
     "756": "Sunday loop from downtown Burlington through the South End via Pine Street and Shelburne Road.",
     "778": "Sunday loop from downtown Burlington through the North End via North Avenue."
+  },
+  "trip_costs": {
+    "_help": "Used for 'Save about $X vs. driving' in the trip planner. Update gas_price (and gas_price_as_of) every few months. Per-mile costs are cents per mile.",
+    "car": "2020 Toyota Corolla",
+    "mpg": 33,
+    "gas_price": 4.2,
+    "gas_price_as_of": "July 2026 (Vermont average, AAA)",
+    "maintenance_cents_per_mile": 10.23,
+    "maintenance_source": "AAA Your Driving Costs 2025, small sedan (maintenance, repair and tires)",
+    "depreciation_cents_per_mile": 8,
+    "depreciation_source": "Estimate of the extra loss in a used compact car's value from added miles",
+    "bus_fare": 2.0,
+    "bus_fare_daily_cap": 4.0,
+    "fare_note": "$2.00 per ride, no free transfers; $4.00 daily cap with the Genfare Link app (GMT 2024 Urban Fare Plan)"
   }
 }
