@@ -232,20 +232,7 @@
 
   /* ---------- popup ---------- */
   .help-btn { width: 29px; height: 29px; font: 800 1rem/1 inherit; color: var(--ink); }
-  .help-btn[aria-expanded=true] { background: var(--ink) !important; color: #fff; }
-  #help-box { position: absolute; left: 10px; top: 48px; z-index: 6; width: min(340px, calc(100% - 20px)); max-height: calc(100% - 70px); overflow-y: auto;
-    background: #fff; border-radius: 4px; box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); font-size: .82rem; }
-  #help-box[hidden] { display: none; }
-  .hb-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .hb-head h2 { margin: 0; font-size: .95rem; }
-  .hb-close { border: 0; background: none; font-size: 1.3rem; line-height: 1; cursor: pointer; color: var(--muted); }
-  #help-box ul { list-style: none; margin: 0; padding: 6px 12px 10px; }
-  #help-box li { display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: start; padding: 7px 0; border-top: 1px solid #eef1ef; line-height: 1.4; }
-  #help-box li:first-child { border-top: 0; }
-  #help-box li strong { display: block; }
-  .hb-ico { display: flex; gap: 2px; justify-content: center; align-items: center; min-height: 26px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); font-size: .78rem; }
-  .hb-ico svg { width: 16px; height: 16px; } .hb-ico .chip { min-width: 0; }
-  .hb-bus { color: var(--gmt); }
+  .help-btn[aria-pressed=true] { background: var(--ink) !important; color: #fff; }
   @media (max-width: 640px) { #map #alert-banner { left: 50px; max-width: calc(100% - 265px); } } /* room for ? on phones */
   .spot-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); }
   .spot-btn[aria-pressed=true] { background: var(--gmt) !important; color: #fff; }
@@ -424,7 +411,8 @@
     /* Phones: service alerts in the top-left corner, clear of the basemap buttons on the right */
     #alert-banner { top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; transform: none; max-width: calc(100% - 215px); }
     #alert-banner .ab-btn { margin: 0; padding: 7px 11px; font-size: .8rem; max-width: 100%; }
-    #alert-banner .ab-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #alert-banner .ab-btn .ab-text, #alert-banner .ab-btn svg:last-child { display: none; } /* phones: just the warning symbol */
+    #alert-banner .ab-btn { padding: 7px 9px; }
     #alert-banner .ab-list { box-sizing: border-box; width: calc(100vw - 20px); max-width: 420px; max-height: 55vh; }
     #panel, #stop-panel { transition: height .22s ease; touch-action: none; }
     #panel.dragging, #stop-panel.dragging { transition: none; }
@@ -450,7 +438,8 @@
       background: none; border: 0; cursor: pointer; color: var(--gmt); font-size: .76rem; font-weight: 600; position: relative; }
     #toggle .grip { width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; }
     #toggle .t-label { position: absolute; right: 0; top: 30px; background: var(--chip-bg); border-radius: 3px; padding: 4px 10px; }
-    #panel:not(.collapsed) #toggle .t-label::after { content: " ▾"; } #panel.collapsed #toggle .t-label::after { content: " ▴"; }
+    #toggle .t-label { font-size: 0; } /* the label reads Collapse or Expand, by state */
+    #panel:not(.collapsed) #toggle .t-label::after { content: "Collapse ▾"; font-size: .78rem; } #panel.collapsed #toggle .t-label::after { content: "Expand ▴"; font-size: .78rem; }
     .route-row { padding: 9px 10px 9px 16px; } .route-go { width: 40px; height: 40px; }
     input[type=checkbox] { width: 20px; height: 20px; }
     .search input { font-size: 16px; } /* stops iOS zooming in on focus */
@@ -694,7 +683,7 @@ function restoreViewState() {
 }
 
 // Short hints beside map buttons, fading after 6 seconds.
-function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", keepOthers) {
+function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", keepOthers, persistent) {
   const btn = document.querySelector(selector);
   if (!btn || !btn.offsetParent) return;
   if (!keepOthers) document.querySelectorAll(".fs-hint").forEach((h) => h.remove());
@@ -702,6 +691,7 @@ function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", kee
   document.getElementById("wrap").appendChild(hint);
   const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect();
   hint.style.right = (w.right - r.left + 10) + "px"; hint.style.top = (r.top - w.top + r.height / 2) + "px";
+  if (persistent) { hint.classList.add("persistent"); return; } // Helpful hints: stay until ? is clicked again
   btn.classList.add("pulse");
   setTimeout(() => { hint.classList.add("out"); btn.classList.remove("pulse"); }, 6000);
   setTimeout(() => hint.remove(), 6600);
@@ -717,9 +707,11 @@ function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", kee
       ctrlHint(`${tapOrClick()} a location on the map to see nearby service`, ".spot-btn", true);
       ctrlHint(isFullscreen() || new URLSearchParams(location.search).get("full") === "1" ? "Minimize" : "Expand to full screen", ".expand-ctrl:not([hidden]) .expand-btn", true);
     }, 500); };
-  map.once("load", () => { if (activation.active) setTimeout(hintOnce, 300); else addEventListener("gmt-map-activated", hintOnce, { once: true }); });
+  // Only on this device's very first visit (remembered in its browser), and never in the full-page tab.
+  const firstVisit = (() => { try { if (localStorage.getItem("gmt-hints-seen")) return false; localStorage.setItem("gmt-hints-seen", "1"); return true; } catch { return true; } })();
+  if (firstVisit && new URLSearchParams(location.search).get("full") !== "1")
+    map.once("load", () => { if (activation.active) setTimeout(hintOnce, 300); else addEventListener("gmt-map-activated", hintOnce, { once: true }); });
 }
-["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => { if (isFullscreen()) setTimeout(() => ctrlHint("Minimize"), 400); }));
 const tapOrClick = () => (matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click");
 // ---------- 3D mode (desktop only): tilted map with 3D buildings; click a bus to ride along behind it ----------
 const three = { on: false, follow: null, misses: 0 };
@@ -1156,42 +1148,30 @@ function toast(text) {
 }
 const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
 map.addControl(geolocate, "top-right");
-// "?" in the top-left corner: a short guide to every button and control on the map.
+// "?" in the top-left corner: Helpful hints. Shows a label beside every map button; click ? again to hide them.
 map.addControl({
   onAdd() {
     const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group help-ctrl";
-    el.innerHTML = `<button type="button" class="help-btn" aria-expanded="false" aria-controls="help-box" aria-label="Help: what the buttons do" title="What the buttons do">?</button>`;
+    el.innerHTML = `<button type="button" class="help-btn" aria-pressed="false" aria-label="Helpful hints">?</button>`;
     el.querySelector("button").onclick = (e) => { e.stopPropagation(); toggleHelp(); };
     return el;
   }, onRemove() {},
 }, "top-left");
 function toggleHelp(force) {
-  let box = document.getElementById("help-box");
   const btn = document.querySelector(".help-btn");
-  if (!box) {
-    box = document.createElement("div"); box.id = "help-box"; box.setAttribute("role", "dialog"); box.setAttribute("aria-label", "What the buttons do"); box.hidden = true;
-    const t = tapOrClick();
-    const row = (icon, title, text) => `<li><span class="hb-ico">${icon}</span><span><strong>${title}</strong>${text}</span></li>`;
-    box.innerHTML = `<div class="hb-head"><h2>What the buttons do</h2><button type="button" class="hb-close" aria-label="Close">×</button></div><ul>
-      ${row("<b>+</b><b>−</b>", "Zoom", "Zoom in and out. You can also pinch or scroll.")}
-      ${row(ICON.locate, "Your location", "Shows the next service near where you are: the closest stop each way, the walk, and the next buses.")}
-      ${row(ICON.place, "Choose a location", `${t} this, then ${t.toLowerCase()} anywhere on the map to see nearby service there.`)}
-      ${innerWidth > 640 ? row("<b>3D</b>", "3D view", "Tilts the map with 3D buildings and 3D buses. Click a bus to follow it; click a stop to watch a bus arrive.") : ""}
-      ${row("<b>Map</b>", "Map, Detailed, Satellite", "Changes the background map.")}
-      ${row(ICON_MAX, "Full screen", "Expands the map to fill the screen; the same button returns it to the page.")}
-      ${row(ICON.warn, "Service alerts", "Detours and service changes. Choose an alert to see the routes it affects.")}
-      ${row("<b>Aa</b>", "Routes, Trip planner, Frequency", "Browse routes and stops, plan a trip, or see how often buses run on each street on weekdays.")}
-      ${row(chip({ short_name: "2", color: "#2f4fc7", text_color: "#fff" }), "Route list", "Check a route to show it. Choosing one route shows just that route; choose more to add them.")}
-      ${row("<span class='hb-bus'>▲</span>", "Buses and stops", `${t} a bus for its route and destination, or a stop for its next departures, amenities and more.`)}
-    </ul>`;
-    document.getElementById("map").appendChild(box);
-    box.querySelector(".hb-close").onclick = () => toggleHelp(false);
-    document.addEventListener("pointerdown", (e) => { if (!box.hidden && !box.contains(e.target) && !e.target.closest(".help-btn")) toggleHelp(false); }, true);
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) { toggleHelp(false); btn?.focus(); } });
-  }
-  const open = force ?? box.hidden;
-  box.hidden = !open; btn?.setAttribute("aria-expanded", String(open));
-  if (open) box.querySelector(".hb-close").focus();
+  const on = force ?? !document.querySelector(".fs-hint.persistent");
+  document.querySelectorAll(".fs-hint").forEach((h) => h.remove());
+  btn?.setAttribute("aria-pressed", String(on));
+  if (!on) return;
+  const t = tapOrClick();
+  const labels = [
+    [".mapboxgl-ctrl-zoom-in", "Zoom in"], [".mapboxgl-ctrl-zoom-out", "Zoom out"],
+    [".three-ctrl:not([hidden]) .three-btn", "View in 3D (click a bus to follow it)"],
+    [".mapboxgl-ctrl-geolocate", "See next service near you"],
+    [".spot-btn", `${t} a location on the map to see nearby service`],
+    [".expand-ctrl:not([hidden]) .expand-btn", isFullscreen() ? "Minimize" : "Expand to full screen"],
+  ];
+  for (const [sel, text] of labels) ctrlHint(text, sel, true, true);
 }
 // "Pick a spot": like the location button, but for anywhere -- tap or click the map to see service near that spot.
 let pickingSpot = false;
@@ -1218,20 +1198,30 @@ function setPickingSpot(on) {
     if (isPhone()) setSheet(false); // show the map
   } else if (bar) bar.hidden = true;
 }
-// Hover label on the locate button. Mapbox adds the button a moment after the map starts, so listen on
-// the page rather than the button itself.
+// Hover labels on map buttons (location, choose a location, 3D, full screen). Mapbox adds some buttons a moment
+// after the map starts, so this listens on the page and reads each button's label when hovered.
+const HOVER_LABELS = {
+  ".mapboxgl-ctrl-geolocate": () => `${tapOrClick()} to see next service near you`,
+  ".spot-btn": () => `${tapOrClick()} a location on the map to see nearby service`,
+  ".three-btn": () => (three.on ? "Leave 3D view" : "View in 3D"),
+  ".expand-btn": () => (isFullscreen() || new URLSearchParams(location.search).get("full") === "1" ? "Minimize" : "Expand to full screen"),
+  ".help-btn": () => (document.querySelector(".fs-hint.persistent") ? "Hide helpful hints" : "Helpful hints"),
+};
 {
-  const label = `${matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click"} to see next service near you`;
-  const tipEl = document.createElement("div"); tipEl.className = "ctrl-tip"; tipEl.textContent = label; tipEl.hidden = true;
+  const tipEl = document.createElement("div"); tipEl.className = "ctrl-tip"; tipEl.hidden = true;
   document.getElementById("wrap").appendChild(tipEl);
   document.addEventListener("mouseover", (e) => {
-    const btn = e.target.closest?.(".mapboxgl-ctrl-geolocate");
-    if (!btn) { tipEl.hidden = true; return; }
-    btn.removeAttribute("title"); btn.setAttribute("aria-label", label);
-    const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect();
-    tipEl.hidden = false; tipEl.style.top = (r.top - w.top + r.height / 2) + "px"; tipEl.style.right = (w.right - r.left + 8) + "px";
+    if (matchMedia("(hover: none)").matches) return; // phones and tablets: no hover
+    const sel = Object.keys(HOVER_LABELS).find((k) => e.target.closest?.(k));
+    if (!sel || document.querySelector(".fs-hint")) { tipEl.hidden = true; return; } // the big hints already explain it
+    const btn = e.target.closest(sel), text = HOVER_LABELS[sel]();
+    btn.removeAttribute("title"); btn.setAttribute("aria-label", text);
+    tipEl.textContent = text;
+    const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect(), left = sel === ".help-btn";
+    tipEl.hidden = false; tipEl.style.top = (r.top - w.top + r.height / 2) + "px";
+    if (left) { tipEl.style.left = (r.right - w.left + 8) + "px"; tipEl.style.right = ""; } else { tipEl.style.right = (w.right - r.left + 8) + "px"; tipEl.style.left = ""; }
   });
-  document.addEventListener("click", (e) => { if (e.target.closest?.(".mapboxgl-ctrl-geolocate")) tipEl.hidden = true; });
+  document.addEventListener("click", () => (tipEl.hidden = true));
 }
 geolocate.on("geolocate", (e) => {
   const here = [e.coords.longitude, e.coords.latitude];
@@ -1274,7 +1264,7 @@ async function showNearby(here, title, onlyRoutes) {
   if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
   map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: here } }] });
   if (options.length) {
-    const b = new mapboxgl.LngLatBounds(here, here); options.slice(0, 6).forEach((o) => b.extend(o.st.coords));
+    const b = new mapboxgl.LngLatBounds(here, here); options.slice(0, 2).forEach((o) => b.extend(o.st.coords)); // refined below once times are in
     map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
   }
   const render = async () => {
@@ -1295,6 +1285,14 @@ async function showNearby(here, title, onlyRoutes) {
           <span class="near-next">${list.length ? list.map((a, i) => `<b class="${a.live && i === 0 ? "now" : ""}">${when(a.time)}</b>`).join(" ∙ ") : "No more trips today"}</span></button>`; }).join("")}
     </div>`).join("") + `<p class="src">Walking times are estimates. Tap a stop for full details.</p>`;
     document.querySelectorAll(".near-opt").forEach((btn) => (btn.onclick = () => showStop(btn.dataset.stop, true)));
+    // First time: zoom to the location and the stop of the best option (the soonest bus), and highlight that route.
+    if (!render.zoomed && ordered.length) {
+      render.zoomed = true;
+      const [bestRid, bestOpts] = ordered[0], bestStop = bestOpts[0].st.coords;
+      const bb = new mapboxgl.LngLatBounds(here, here).extend(bestStop);
+      map.fitBounds(bb, { padding: isPhone() ? { top: 80, left: 40, right: 40, bottom: Math.round(document.getElementById("wrap").clientHeight * 0.75) + 20 } : panelPad(), maxZoom: 17, duration: reduceMotion ? 0 : 700 });
+      highlight([bestRid]); setTimeout(() => { if (openStopId?.startsWith("near:")) highlight([]); }, 5000);
+    }
   };
   if (options.length) { await render(); nearbyTimer && clearInterval(nearbyTimer); nearbyTimer = setInterval(() => (openStopId?.startsWith("near:") ? render() : clearInterval(nearbyTimer)), REFRESH_MS); }
 }
@@ -2300,7 +2298,8 @@ function renderAlertBanner() {
   const list = routeParam ? alertsFor({ route: routeParam }) : alertsList;
   el.hidden = !list.length;
   if (!list.length) return;
-  el.querySelector(".ab-btn").innerHTML = `${ICON.warn}<span>${list.length} service alert${list.length === 1 ? "" : "s"}</span>${ICON.chevron}`;
+  el.querySelector(".ab-btn").innerHTML = `${ICON.warn}<span class="ab-text">${list.length} service alert${list.length === 1 ? "" : "s"}</span>${ICON.chevron}`;
+  el.querySelector(".ab-btn").setAttribute("aria-label", `${list.length} service alert${list.length === 1 ? "" : "s"}`);
   el.querySelector(".ab-list").innerHTML = alertsHtml(list);
 }
 // Warning mark next to routes in the legend that have an alert or a detour today.
@@ -2319,15 +2318,23 @@ function markRoutes() {
 // Mapbox Search Box finds places (City Hall, hospitals, schools, businesses) as well as addresses and towns.
 // Results are limited to Vermont: the search covers Vermont's area, and anything outside Vermont is dropped.
 // If Search Box ever fails, it falls back to Mapbox's address search.
-const VT_BBOX = "-73.44,42.72,-71.46,45.02";
-const inVermont = (ctx) => { const r = ctx?.region; return !!r && (r.region_code === "VT" || r.region_code === "US-VT" || /vermont/i.test(r.name || "")); };
+// GMT's service area: Chittenden, Washington and Franklin counties, Vermont. The search covers that area, and
+// results outside those counties are dropped (by the county Mapbox reports, or by location if it doesn't say).
+const VT_BBOX = "-73.45,44.05,-72.2,45.02";
+const SERVICE_COUNTIES = /^(chittenden|washington|franklin)( county)?$/i;
+const inVermont = (ctx, c) => {
+  const r = ctx?.region; if (!(r && (r.region_code === "VT" || r.region_code === "US-VT" || /vermont/i.test(r.name || "")))) return false;
+  const county = ctx?.district?.name;
+  if (county) return SERVICE_COUNTIES.test(county.trim());
+  return !c || (c[0] >= -73.45 && c[0] <= -72.2 && c[1] >= 44.05 && c[1] <= 45.02);
+};
 async function searchPlaces(q, limit = 6) {
   const near = map.getCenter ? map.getCenter().toArray().map((x) => x.toFixed(4)).join(",") : "-73.2,44.48";
   try {
     const url = `https://api.mapbox.com/search/searchbox/v1/forward?q=${encodeURIComponent(q)}&proximity=${near}&bbox=${VT_BBOX}&country=US&language=en`
       + `&types=poi,address,place,street,neighborhood,locality&auto_complete=true&limit=10&access_token=${MAPBOX_TOKEN}`;
     const res = await fetch(url); if (!res.ok) throw new Error(res.status);
-    const out = ((await res.json()).features || []).filter((f) => inVermont(f.properties.context)).map((f) => ({
+    const out = ((await res.json()).features || []).filter((f) => inVermont(f.properties.context, f.geometry.coordinates)).map((f) => ({
       c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address,
       sub: f.properties.feature_type === "poi" ? (f.properties.full_address || f.properties.place_formatted || "") : (f.properties.place_formatted || ""),
       poi: f.properties.feature_type === "poi" }));
@@ -2336,7 +2343,7 @@ async function searchPlaces(q, limit = 6) {
     try { // fallback: address search, also limited to Vermont
       const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}&proximity=${near}&bbox=${VT_BBOX}&country=us&limit=8&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
       const res = await (await fetch(url)).json();
-      return (res.features || []).filter((f) => inVermont(f.properties.context)).slice(0, limit)
+      return (res.features || []).filter((f) => inVermont(f.properties.context, f.geometry.coordinates)).slice(0, limit)
         .map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
     } catch { return []; }
   }
@@ -2350,11 +2357,11 @@ function plannerHtml() {
   return `<div class="scroll planner">
     <div class="pl-fields">
       <div class="pl-field"><span class="pl-dot from" aria-hidden="true"></span><label for="pl-from" class="sr-only">From</label>
-        <input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: place, address or stop in Vermont" value="${v(planState.from)}" autocomplete="off">
+        <input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: place, address or stop" value="${v(planState.from)}" autocomplete="off">
         <button type="button" class="pl-me" id="pl-me" title="Use my location" aria-label="Use my location">${ICON.locate}</button>
         <ul id="pl-from-list" class="pl-list" role="listbox" hidden></ul></div>
       <div class="pl-field"><span class="pl-dot to" aria-hidden="true"></span><label for="pl-to" class="sr-only">To</label>
-        <input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: place, address or stop in Vermont" value="${v(planState.to)}" autocomplete="off">
+        <input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: place, address or stop" value="${v(planState.to)}" autocomplete="off">
         <button type="button" class="pl-me" id="pl-swap" title="Swap From and To" aria-label="Swap From and To">${ICON.swap}</button>
         <ul id="pl-to-list" class="pl-list" role="listbox" hidden></ul></div>
     </div>
@@ -2363,10 +2370,8 @@ function plannerHtml() {
       <select id="pl-day">${planDays().map((d, i) => `<option value="${i}" ${planState.dayOffset === i ? "selected" : ""}>${d}</option>`).join("")}</select>
       <label for="pl-when" class="sr-only">When</label>
       <select id="pl-when">${planState.dayOffset ? "" : `<option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option>`}<option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at</option><option value="by" ${planState.when === "by" ? "selected" : ""}>Arrive by</option></select>
-      <input type="text" id="pl-time" class="pl-time" inputmode="text" autocomplete="off" list="pl-times" placeholder="e.g. 8:30 AM" value="${esc(timeLabel(planState.time))}"
+      <input type="text" id="pl-time" class="pl-time" inputmode="text" autocomplete="off" placeholder="e.g. 8:30 AM" value="${esc(timeLabel(planState.time))}"
         aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" aria-describedby="pl-time-msg" ${planState.when === "now" ? "hidden" : ""}>
-      <datalist id="pl-times">${Array.from({ length: 96 }, (_, i) => `<option value="${timeLabel(`${String(Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}`)}">`).join("")}</datalist>
-      <button type="button" id="pl-go" class="pl-go">Plan trip</button>
       <p id="pl-time-msg" class="pl-time-msg" role="alert" hidden></p>
     </div>
     <div class="pl-prefs" role="group" aria-label="Trip preferences">
@@ -2413,9 +2418,9 @@ function wirePlanner() {
     timeEl.setAttribute("aria-label", planState.when === "by" ? "Arrival time" : "Departure time");
     if (planState.when === "by" && !planState.time) { const d = new Date(Date.now() + 60 * 60000); planState.time = d.toTimeString().slice(0, 5); timeEl.value = timeLabel(planState.time); }
     if (planState.when === "at" && !planState.time) { const d = new Date(Date.now() + 15 * 60000); planState.time = d.toTimeString().slice(0, 5); timeEl.value = timeLabel(planState.time); }
+    if (planState.from && planState.to) planTrip();
   };
 
-  document.getElementById("pl-go").onclick = () => planTrip(true);
   const savePrefs = (pr) => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(pr)); } catch {} };
   document.querySelectorAll(".pl-sort [data-sort]").forEach((b) => (b.onclick = () => {
     const pr = { ...loadPrefs(), sort: b.dataset.sort }; savePrefs(pr);
@@ -2655,16 +2660,9 @@ function costHtml(o) {
         <button type="button" class="pl-why" aria-expanded="false" aria-controls="pl-why-${o.depart}" title="What's this?">?</button></p>
       <p class="pl-cost-sub">Driving ${miles.toFixed(1)} mi ≈ ${money(drive)} ∙ bus fare ${money(fare)}${o.rides > 1 ? ` (${o.rides} rides)` : ""}</p>
       <div class="pl-why-box" id="pl-why-${o.depart}" hidden>
-        <p><strong>What’s this?</strong> An estimate of what this one-way trip would cost in a typical car, compared with the bus fare.</p>
-        <ul>
-          <li><strong>Car:</strong> a ${esc(c.car)}, ${c.mpg} miles per gallon${c.mpg_source ? ` (${esc(c.mpg_source)})` : ""}.</li>
-          <li><strong>Fuel:</strong> ${money(c.gas_price)} a gallon (${esc(c.gas_price_as_of)}), about ${((c.gas_price / c.mpg) * 100).toFixed(1)}¢ a mile.</li>
-          <li><strong>Maintenance, repairs and tires:</strong> ${c.maintenance_cents_per_mile}¢ a mile (${esc(c.maintenance_source)}).</li>
-          <li><strong>Depreciation:</strong> ${c.depreciation_cents_per_mile}¢ a mile (${esc(c.depreciation_source)}).</li>
-          <li><strong>Distance:</strong> the driving route between your start and destination (${miles.toFixed(1)} miles), from Mapbox.</li>
-          <li><strong>Bus fare:</strong> ${esc(c.fare_note)}.</li>
-        </ul>
-        <p>Total: about ${(perMile * 100).toFixed(0)}¢ a mile. Not included: insurance, registration and loan payments (you pay these whether or not you drive this trip), parking, and your time. Many riders pay less with a pass or a discounted fare.</p>
+        <p>An estimate of this one-way trip by car: fuel at ${money(c.gas_price)} a gallon and ${c.mpg} mpg (Vermont’s average), plus typical upkeep and wear,
+          about ${(perMile * 100).toFixed(0)}¢ a mile over the ${miles.toFixed(1)}-mile drive, compared with the bus fare. Insurance, parking and your time aren’t included.
+          ${c.learn_more_url ? `<a href="${esc(c.learn_more_url)}" target="_blank" rel="noopener">How driving costs add up ↗</a>` : ""}</p>
       </div>
     </div>`;
 }
@@ -2756,8 +2754,8 @@ function altCardsHtml(which = "all") {
       ${fastest ? `<span class="pl-fast-tag">Fastest: ${k === "walk" ? "walking" : "biking"} gets you there sooner than the bus</span>` : ""}
       <span class="pl-meta">${mi(info.meters)} mi ∙ ${note}</span></button></li>`;
   };
-  return card("walk", ICON.walk, "Walk the whole way", a.walk, "walking route from Mapbox")
-    + card("bike", ICON.bike, "Bike the whole way", a.bike, "bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available");
+  return card("walk", ICON.walk, "Walk", a.walk, "walking route from Mapbox")
+    + card("bike", ICON.bike, "Bike", a.bike, "bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available");
 }
 function planGeo() {
   const f = [], o = planState.alt ? null : selectedOption();
@@ -2782,7 +2780,8 @@ function drawPlan(fit) {
   if (fit && geo.features.length) {
     const b = new mapboxgl.LngLatBounds();
     geo.features.forEach((ft) => (ft.geometry.type === "Point" ? [ft.geometry.coordinates] : ft.geometry.coordinates).forEach((c) => b.extend(c)));
-    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
+    const pad = isPhone() ? { top: 70, left: 30, right: 30, bottom: (document.querySelector("#panel header")?.offsetHeight || 140) + 30 } : panelPad();
+    map.fitBounds(b, { padding: pad, maxZoom: 16.5, duration: reduceMotion ? 0 : 700 });
   }
 }
 
@@ -2969,7 +2968,7 @@ function searchBox(withRoutes, stopIds) {
   const stopPool = (stopIds ? stopIds.map((id) => stopsById[id]) : Object.values(stopsById)).filter(Boolean);
   const routePool = withRoutes ? Object.values(routes) : [];
   queueMicrotask(() => wireSearch(routePool, stopPool));
-  const ph = withRoutes ? "Search routes and stops" : "Search a stop or an address";
+  const ph = withRoutes ? "Search routes, stops or places" : "Search a stop or an address";
   return `<div class="search">${ICON.search}<label for="q" class="sr-only">${ph}</label>
     <input id="q" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="q-list" placeholder="${ph}" autocomplete="off" spellcheck="false">
     <ul id="q-list" role="listbox" aria-label="Search results" hidden></ul></div>`;
@@ -2978,7 +2977,7 @@ function wireSearch(routePool, stopPool) {
   const input = document.getElementById("q"), list = document.getElementById("q-list");
   if (!input) return;
   let items = [], active = -1, places = [], placeQ = "", placeSeq = 0, placeTimer = null, placePending = false;
-  const findAddresses = !!routeParam; // on route pages, also search addresses (Mapbox geocoder)
+  const findAddresses = true; // also search places and addresses (Chittenden, Washington and Franklin counties), showing the nearest service
   const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]+/g, " ");
   const mark = (text, q) => {
     const i = norm(text).indexOf(q);
@@ -3011,7 +3010,7 @@ function wireSearch(routePool, stopPool) {
     let n = 0;
     const opt = (inner, cls) => `<li role="option" id="q-${n}" class="${cls}" data-i="${n}" aria-selected="${n++ === active}">${inner}</li>`;
     const searching = findAddresses && placePending && raw.length >= 3;
-    list.innerHTML = (!items.length ? `<li class="q-empty" role="presentation">${searching ? "Searching…" : `No ${findAddresses ? "stops or addresses" : "routes or stops"} match “${esc(raw)}”`}</li>` : "") +
+    list.innerHTML = (!items.length ? `<li class="q-empty" role="presentation">${searching ? "Searching…" : `No ${routeParam ? "stops or addresses" : "routes, stops or places"} match “${esc(raw)}”`}</li>` : "") +
       (rs.length ? `<li class="q-head" role="presentation">Routes</li>` + rs.map(({ r }) => opt(`${chip(r)}<span class="q-name">${mark(r.long_name, q)}</span><span class="q-meta">Show on map</span>`, "q-route")).join("") : "") +
       (ss.length ? `<li class="q-head" role="presentation">Stops</li>` + ss.map(({ st }) => {
         const rr = st.routes.map((id) => routes[id]).filter(Boolean);
@@ -3191,6 +3190,45 @@ function draggable(el, handleSel) {
 }
 draggable(document.getElementById("panel"), "header");
 draggable(stopPanel, ".sp-head");
+// Phones: swipe anywhere on a tray, not just its top bar. Down collapses it (once its list is scrolled to the top,
+// so a downward swipe in a scrolled list first scrolls back up); up expands a collapsed tray. Swipes that start
+// in a text box, a list of suggestions or a chart are left alone.
+function swipeAnywhere(el, handleSel, scrollSel) {
+  let t = null;
+  el.addEventListener("touchstart", (e) => {
+    if (!isPhone() || e.touches.length !== 1 || e.target.closest(handleSel)) return; // the top bar has its own drag
+    if (e.target.closest("input, textarea, select, [role=option], .pl-list, .rd-line")) return;
+    t = { x: e.touches[0].clientX, y: e.touches[0].clientY, h: el.offsetHeight, sc: e.target.closest(scrollSel), take: null };
+  }, { passive: true });
+  el.addEventListener("touchmove", (e) => {
+    if (!t) return;
+    const dx = e.touches[0].clientX - t.x, dy = t.y - e.touches[0].clientY; // dy > 0: finger moving up
+    if (t.take === null) {
+      if (Math.abs(dy) < 8) return;
+      if (Math.abs(dx) > Math.abs(dy)) { t = null; return; } // sideways: not a tray swipe
+      const collapsed = el.classList.contains("collapsed") || (el.id === "panel" && sheetState === "collapsed");
+      const listAtTop = !t.sc || t.sc.scrollTop <= 0;
+      t.take = dy < 0 ? listAtTop : collapsed || !t.sc || t.sc.scrollHeight <= t.sc.clientHeight;
+      if (!t.take) { t = null; return; } // let the list scroll instead
+      el.classList.remove("collapsed"); el.classList.add("dragging");
+    }
+    e.preventDefault();
+    const H = document.getElementById("wrap").clientHeight;
+    el.style.height = Math.max(90, Math.min(H - 8, t.h + dy)) + "px";
+  }, { passive: false });
+  const end = () => {
+    if (!t) return;
+    const took = t.take, up = el.offsetHeight > t.h; t = null;
+    el.classList.remove("dragging");
+    if (!took) return;
+    el._dragged = true; setTimeout(() => (el._dragged = false), 50);
+    if (el.id === "stop-panel") return up ? snapSheet(el, "open") : closeStop();
+    snapSheet(el, up ? "open" : "collapsed");
+  };
+  el.addEventListener("touchend", end); el.addEventListener("touchcancel", end);
+}
+swipeAnywhere(document.getElementById("panel"), "header", ".scroll");
+swipeAnywhere(stopPanel, ".sp-head", ".sp-body");
 addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, "open"); });
 // Status line (how many buses are running, when last updated). Live buses are always on.
 const statusRow = () => `<div class="status-row"><p class="status" id="status" aria-live="polite">Loading buses…</p></div>`;
