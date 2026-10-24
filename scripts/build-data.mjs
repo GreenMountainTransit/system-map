@@ -556,10 +556,20 @@ function streetViewFor(sid, routeIds) {
 
 // ---------- stops ----------
 const stopFeatures = [];
+let overriddenStops = 0;
 for (const [sid, rs] of stopRoutes) {
   const s = stopById[sid]; if (!s) continue;
   const ids = [...rs].sort((a, b) => (routeById[a].route_short_name || a).localeCompare(routeById[b].route_short_name || b, undefined, { numeric: true }));
-  const a = amenities.get(sid);
+  let a = amenities.get(sid);
+  // route-info.json "amenity_overrides": e.g. every Downtown Transit Center bay has a shelter, seating, a posted
+  // schedule and an ADA pad, whatever the stop survey says.
+  for (const o of routeInfo.amenity_overrides || []) {
+    if (!o.name_contains || !s.stop_name.toLowerCase().includes(o.name_contains.toLowerCase())) continue;
+    const set = o.set || {}, have = new Set(a?.have || []);
+    for (const [col, v] of Object.entries(set)) if (col !== "ada_pad" && AMENITY_COLUMNS[col]) { if (v === "yes") have.add(col); else have.delete(col); }
+    a = { ...(a || { notes: "" }), have: Object.keys(AMENITY_COLUMNS).filter((c) => have.has(c)), ada_pad: set.ada_pad ?? a?.ada_pad ?? "" };
+    overriddenStops++;
+  }
   stopFeatures.push({
     type: "Feature",
     properties: {
@@ -661,6 +671,7 @@ const routeList = [...tripsByRoute.keys()].map((id) => routeMeta(routeById[id]))
 write("routes.geojson", { type: "FeatureCollection", features: lineFeatures });
 write("frequency.geojson", { type: "FeatureCollection", features: freqFeatures });
 write("stops.geojson", { type: "FeatureCollection", features: stopFeatures });
+if (overriddenStops) console.log(`Amenity overrides applied to ${overriddenStops} stop${overriddenStops === 1 ? "" : "s"} (route-info.json)`);
 write("routes.json", { tripCosts: routeInfo.trip_costs || null, built: todayNY, groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
 write("calendar.json", cal);
 write("headsigns.json", headsigns);
