@@ -206,6 +206,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) and the 3D stop sign | `public/bus3d.js` and `public/gmt-logo.png` | `busTexture`, `drawDriver`, `signTexture` |
 | 3D view: all buses in 3D, and street-level stop view | `public/index.html` | `fleetFrame`, `enterStopView` |
+| Riders boarding a bus waiting 30+ seconds (stop view) | `public/index.html` and `public/bus3d.js` | `boardingFrame`, `dwellingBus`, `buildPerson` |
 | Planner walking paths (Mapbox walking directions) | `public/index.html` | `fetchWalks` |
 | Frequency tiers and colors | `public/index.html` | `const FREQ` and `tierOf` |
 | Frequency time windows | `scripts/build-data.mjs` | `FREQ_WINDOWS` |
