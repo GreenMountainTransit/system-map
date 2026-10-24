@@ -107,13 +107,16 @@ Without this, the Street View section in stop details shows a link that opens Go
 Each suggested trip shows what driving it would cost in a typical car compared with the bus fare, with a **?** that explains the method. The figures are in `route-info.json` under `"trip_costs"`:
 - `gas_price` and `gas_price_as_of`: update every few months (AAA's Vermont average is at gasprices.aaa.com/?state=VT).
 - `bus_fare`, `bus_fare_daily_cap`, `fare_note`: update if GMT's fares change.
-- `mpg`, `maintenance_cents_per_mile`, `depreciation_cents_per_mile` and their sources: update when AAA publishes a new Your Driving Costs study (each September), or if you choose a different typical car.
+- `mpg` (now the Vermont statewide average, 22 mpg, with `mpg_source`), `maintenance_cents_per_mile`, `depreciation_cents_per_mile` and their sources: update when AAA publishes a new Your Driving Costs study (each September), or if you choose a different typical car.
 Commit the file and the map picks up the new figures with the next build. Driving distances come from Mapbox driving directions (one request per trip searched, counted in Mapbox's free directions allowance).
 
 ### Frequency map: checking routes and setting a route's frequency
 - The frequency map always shows GMT's **regular weekday schedule** (the Monday-Friday service in the GTFS calendar), whatever day it's built, ignoring holidays and other one-day exceptions. The **Build data** log says so: "Frequency map uses the regular weekday schedule (… trips …)".
 - After each build, the **Build data** log has a line **"Frequency map by route: …"** listing every local route and how many frequency lines it got. A route with none gets a yellow warning saying why: no weekday trips, no trips during the rush hour / midday / evening windows, or every street it uses is already drawn under other routes (it still appears in those streets' route lists).
 - If a route runs at a steady frequency all day but the timetable-based count makes it look patchy, set it in `route-info.json` under `"frequency_overrides"`, as route number and minutes: `"2": 20` means Route 2 runs every 20 minutes. Wherever that route runs, the map shows at least that often, combined with any other routes on the same street. Remove the line to go back to counting from the timetable.
+
+### Amenities set by stop name
+`route-info.json` → `"amenity_overrides"` sets amenities for every stop whose name contains some text, whatever the stop survey says. It's used so every **Downtown Transit Center** bay shows a shelter, seating, a posted schedule and an ADA pad. The build log says how many stops it applied to.
 
 ### Ridership in stop details
 The **Ridership** section in each stop's details comes from GMT's ArcGIS Online layer `Detail_Ridership_V2` (one record per month, route and stop). Rows where `routes_token` is `|0|` are the layer's all-routes summary rows (for the AGOL dashboard) and are skipped, so boardings aren't double-counted. The build adds the remaining route rows together, so only stop-level totals are published; route-level numbers never reach the site. Ranks compare stop totals, among all stops and among the stops each route serves. The nightly build reads every month in it. Riders can view the last 6 months, year to date, the last 12 months, or all months.
@@ -216,7 +219,9 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Walking limits for "service near you" | `public/index.html` | `const WALK` |
 | Place and address search (Vermont only) | `public/index.html` | `searchPlaces`, `VT_BBOX` |
 | Trip planner recent places and popular stops | `public/index.html` | `RECENT_MAX`, `popularStops` |
-| Trip planner preferences (fastest, least walking, fewest transfers, wheelchair-accessible stops) | `public/planner.js` | `sortByPref`, `acc` |
+| Trip planner preferences (fastest, least walking, fewest transfers, wheelchair-accessible stops, bike to and from the bus) | `public/planner.js` | `sortByPref`, `acc`, `BIKE_ACCESS_M` |
+| Walk / bike the whole way, and listing them first when fastest | `public/index.html` | `fetchAlternatives`, `altFastest` |
+| The ? help guide, and the 6-second hints by the buttons | `public/index.html` | `toggleHelp`, `ctrlHint` |
 | 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) and the 3D stop sign | `public/bus3d.js` and `public/gmt-logo.png` | `busTexture`, `drawDriver`, `signTexture` |
 | 3D view: all buses in 3D, and street-level stop view | `public/index.html` | `fleetFrame`, `enterStopView` |

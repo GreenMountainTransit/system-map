@@ -73,8 +73,8 @@
   },
   "trip_costs": {
     "_help": "Used for 'Save about $X vs. driving' in the trip planner. Update gas_price (and gas_price_as_of) every few months. Per-mile costs are cents per mile.",
-    "car": "2020 Toyota Corolla",
-    "mpg": 33,
+    "car": "typical Vermont car",
+    "mpg": 22,
     "gas_price": 4.2,
     "gas_price_as_of": "July 2026 (Vermont average, AAA)",
     "maintenance_cents_per_mile": 10.23,
@@ -83,10 +83,23 @@
     "depreciation_source": "Estimate of the extra loss in a used compact car's value from added miles",
     "bus_fare": 2.0,
     "bus_fare_daily_cap": 4.0,
-    "fare_note": "$2.00 per ride, no free transfers; $4.00 daily cap with the Genfare Link app (GMT 2024 Urban Fare Plan)"
+    "fare_note": "$2.00 per ride, no free transfers; $4.00 daily cap with the Genfare Link app (GMT 2024 Urban Fare Plan)",
+    "mpg_source": "2021 statewide average fuel economy of Vermont's light-duty vehicles (Vermont energy planning data from VTrans and partners)"
   },
   "frequency_overrides": {
     "_help": "Routes that run at a set frequency all day, in minutes. Wherever such a route runs, the frequency map shows at least that often (combined with other routes on the same street).",
     "2": 20
-  }
+  },
+  "amenity_overrides": [
+    {
+      "_help": "Amenities set for stops whose name contains this text, whatever the stop survey says.",
+      "name_contains": "Downtown Transit Center",
+      "set": {
+        "shelter": "yes",
+        "seating": "yes",
+        "schedule_box": "yes",
+        "ada_pad": "yes"
+      }
+    }
+  ]
 }
