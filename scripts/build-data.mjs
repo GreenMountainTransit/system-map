@@ -239,7 +239,17 @@ const FREQ_WINDOWS = {
   mid: { day: "weekday", hours: [[9, 15]] },
   eve: { day: "weekday", hours: [[19, 22]] },
 };
-const freqDays = { weekday: upcoming.find((u) => u.dow < 5 && servicesOn(u.ymd, u.dow).size) };
+// Measure a TYPICAL weekday: of the weekdays in the next two weeks, the one with the most scheduled trips.
+// (The first weekday with any service can be a holiday running the Sunday schedule, which would leave out
+// routes that don't run Sundays, like Route 8, and make others look less frequent.)
+const tripsOnDay = (u) => { const on = servicesOn(u.ymd, u.dow); let n = 0; for (const sc of schedByRoute.values()) for (const t of sc) if (on.has(t.s)) n++; return n; };
+const weekdayCounts = upcoming.filter((u) => u.dow < 5).map((u) => ({ u, n: tripsOnDay(u) })).filter((x) => x.n > 0);
+const typicalWeekday = weekdayCounts.reduce((best, x) => (!best || x.n > best.n ? x : best), null);
+const freqDays = { weekday: typicalWeekday?.u };
+if (typicalWeekday) {
+  const skipped = weekdayCounts.filter((x) => x.n < typicalWeekday.n * 0.8).map((x) => x.u.ymd);
+  console.log(`Frequency map measures ${typicalWeekday.u.ymd} (${typicalWeekday.n} trips)${skipped.length ? `; skipped reduced-service weekdays ${skipped.join(", ")}` : ""}`);
+}
 const freqFeatures = [];
 {
   const tripShape = Object.fromEntries(trips.map((t) => [t.trip_id, t.shape_id]));
@@ -336,9 +346,14 @@ const freqFeatures = [];
     const times = [...m.values()];
     return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => [w, avgHeadway(times, def)]));
   };
+  // Routes GMT knows run at a set frequency all day (route-info.json "frequency_overrides", e.g. {"2": 20}):
+  // wherever such a route runs, the street shows at least that often, combined with any other routes there.
+  const overrides = Object.fromEntries(Object.entries(routeInfo.frequency_overrides || {}).filter(([k]) => !k.startsWith("_")).map(([k, v]) => [String(k), +v]).filter(([, v]) => v > 0));
+  const shortOf = (rid) => String(routeById[rid]?.route_short_name || rid);
   const candidates = [];
   for (const [idx, d] of directed.entries()) {
     const props = {}, perSample = Object.fromEntries(Object.keys(FREQ_WINDOWS).map((w) => [w, []])), routesHere = new Set(d.routes);
+    const atSample = []; // per sample: { values by window, routes }, so a part of this piece can be described on its own
     for (const sm of samples[idx]) {
       // Nearest sample of every other segment within NEAR meters, split by direction.
       const same = new Map([[idx, sm.frac]]), opp = new Map(), best = new Map();
@@ -351,12 +366,16 @@ const freqFeatures = [];
         (dot > 0 ? same : opp).set(o.idx, o.frac);
       }
       const g = gapsAt(same), go = opp.size ? gapsAt(opp) : null;
-      [...same.keys(), ...opp.keys()].forEach((i) => directed[i].routes.forEach((r) => routesHere.add(r)));
+      const routesAtPoint = new Set();
+      [...same.keys(), ...opp.keys()].forEach((i) => directed[i].routes.forEach((r) => { routesHere.add(r); routesAtPoint.add(r); }));
+      const floor = Math.min(...[...routesAtPoint].map((r) => overrides[shortOf(r)] ?? Infinity));
+      const here = { v: {}, routes: routesAtPoint };
       for (const w of Object.keys(FREQ_WINDOWS)) {
         // No directionality: use whichever direction has more buses at this point.
-        const vals = [g[w], go?.[w]].filter((x) => x != null);
-        if (vals.length) perSample[w].push(Math.min(...vals));
+        const vals = [g[w], go?.[w], isFinite(floor) ? floor : null].filter((x) => x != null);
+        if (vals.length) { perSample[w].push(Math.min(...vals)); here.v[w] = Math.min(...vals); }
       }
+      atSample.push(here);
     }
     // A segment's value is the middle of its sampled points (ignores odd spots where routes join or leave).
     for (const w of Object.keys(FREQ_WINDOWS)) {
@@ -365,25 +384,81 @@ const freqFeatures = [];
     }
     if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
     props.routes = [...routesHere].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
-    candidates.push({ idx, props, coords: d.coords });
+    candidates.push({ idx, props, coords: d.coords, routeIds: [...d.routes], atSample });
   }
   // No directionality on the map: draw each street once. Both directions (and routes sharing a street)
   // are usually separate, slightly offset lines broken at different stops; keep the longest pieces and
   // drop any piece that's mostly already drawn within 20 m, whichever way it runs.
   const len = (c) => c.slice(1).reduce((m, p, i) => m + Math.hypot((p[0] - c[i][0]) * M * kx, (p[1] - c[i][1]) * M), 0);
   candidates.sort((a, b) => len(b.coords) - len(a.coords));
-  const drawn = new Map(), DCELL = 30;
+  const drawn = new Map(), DCELL = 30, drawnByRoute = new Map();
+  // Cut out the stretches of a line whose samples aren't covered (each sample stands for ~25 m of street).
+  // Properties for part of a piece, from just the samples on that part (middle value; routes found there).
+  const describe = (c, from, to) => {
+    const props = { ...c.props }, part = c.atSample.slice(from, to + 1);
+    for (const w of Object.keys(FREQ_WINDOWS)) {
+      const v = part.map((x) => x.v[w]).filter((x) => x != null).sort((a, b) => a - b);
+      props["h_" + w] = v.length ? v[Math.floor((v.length - 1) / 2)] : null;
+    }
+    const rs = new Set(part.flatMap((x) => [...x.routes]));
+    props.routes = [...rs].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ") || c.props.routes;
+    return props;
+  };
+  function uncoveredParts(coords, sm, isCovered) {
+    const pts = coords.map(xy), cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const total = cum[cum.length - 1] || 1, out = [];
+    const at = (dist) => { let i = 1; while (i < cum.length - 1 && cum[i] < dist) i++; const t = (dist - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+      return [coords[i - 1][0] + (coords[i][0] - coords[i - 1][0]) * t, coords[i - 1][1] + (coords[i][1] - coords[i - 1][1]) * t]; };
+    let runStart = null;
+    for (let i = 0; i <= sm.length; i++) {
+      const open = i < sm.length && !isCovered[i];
+      if (open && runStart == null) runStart = i;
+      if (!open && runStart != null) {
+        const d0 = Math.max(0, sm[runStart].frac * total - 13), d1 = Math.min(total, sm[i - 1].frac * total + 13);
+        const mid = coords.filter((_, j) => cum[j] > d0 && cum[j] < d1);
+        out.push({ coords: [at(d0), ...mid, at(d1)].map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]), from: runStart, to: i - 1 });
+        runStart = null;
+      }
+    }
+    return out;
+  }
   for (const c of candidates) {
     const sm = samples[c.idx];
-    const covered = sm.filter((p) => {
+    const isCovered = sm.map((p) => {
       const cx = Math.floor(p.x / DCELL), cy = Math.floor(p.y / DCELL);
       for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++)
         for (const q of drawn.get(`${i}:${j}`) || []) if (Math.hypot(q.x - p.x, q.y - p.y) <= 20) return true;
       return false;
-    }).length;
-    if (sm.length && covered / sm.length >= 0.75) continue;
-    for (const p of sm) { const k = `${Math.floor(p.x / DCELL)}:${Math.floor(p.y / DCELL)}`; if (!drawn.has(k)) drawn.set(k, []); drawn.get(k).push(p); }
-    freqFeatures.push({ type: "Feature", properties: c.props, geometry: { type: "LineString", coordinates: c.coords } });
+    });
+    const covered = isCovered.filter(Boolean).length;
+    if (sm.length && covered === sm.length) continue; // entirely drawn already
+    // Draw only the parts not already drawn (the whole piece if none of it is). Skipping a mostly-covered
+    // piece outright used to leave its uncovered end as a gap in the line.
+    const pieces = covered === 0 || !sm.length ? [{ coords: c.coords, whole: true }] : uncoveredParts(c.coords, sm, isCovered);
+    for (const p of sm.filter((_, i) => !isCovered[i])) { const k = `${Math.floor(p.x / DCELL)}:${Math.floor(p.y / DCELL)}`; if (!drawn.has(k)) drawn.set(k, []); drawn.get(k).push(p); }
+    for (const pc of pieces) if (pc.coords.length >= 2) {
+      const props = pc.whole ? c.props : describe(c, pc.from, pc.to);
+      if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
+      freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: pc.coords } });
+      for (const id of c.routeIds) drawnByRoute.set(id, (drawnByRoute.get(id) || 0) + 1);
+    }
+  }
+  // 3. Report each local route, so a route missing from the frequency map is easy to spot and explain.
+  const day = freqDays.weekday;
+  if (day) {
+    const on = servicesOn(day.ymd, day.dow), report = [];
+    for (const [routeId, sched] of schedByRoute) {
+      const short = shortOf(routeId);
+      if (groupFor(short) !== "local") continue;
+      const weekday = sched.filter((t) => on.has(t.s));
+      const inWindows = weekday.filter((t) => Object.values(FREQ_WINDOWS).some((def) => def.hours.some(([h0, h1]) => t.st[0][1] < h1 * 3600 && t.st[t.st.length - 1][1] >= h0 * 3600)));
+      const drawnN = drawnByRoute.get(routeId) || 0;
+      const why = !weekday.length ? "no weekday trips on " + day.ymd : !inWindows.length ? "no trips during the rush hour, midday or evening windows" : !drawnN ? "every street it uses is already drawn under other routes" : "";
+      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set to every ${overrides[short]} min)` : ""}${why ? " -- " + why : ""}`);
+      if (!drawnN && weekday.length) console.log(`::warning::Frequency map: Route ${short} has no lines of its own (${why || "no frequency found"}).`);
+    }
+    console.log("Frequency map by route: " + report.join("; "));
   }
 }
 
