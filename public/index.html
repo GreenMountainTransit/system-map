@@ -11,13 +11,17 @@
 <script src="planner.js"></script>
 <script src="bus3d.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Overpass: an open-source take on Highway Gothic, the typeface of U.S. road signs, for a wayfinding feel. -->
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
     --ink: #1c2a22; --muted: #56655c; --faint: #8a978f; --panel: #fff; --line: #e1e7e3; --hover: #f1f5f2;
     --gmt: #00703c; --focus: #0b5cad; --live: #0a7d3b; --warn: #a3361b; --chip-bg: #eef3ef;
     --panel-w: 300px; --stop-w: 320px;
-    font-family: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: "Overpass", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-feature-settings: "tnum" 1; /* times and counts line up in columns */
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   }
   html, body { margin: 0; height: 100%; color: var(--ink); }
   #wrap { position: relative; height: 100%; min-height: 460px; overflow: hidden; }
@@ -1196,8 +1200,8 @@ async function showNearby(here, title, onlyRoutes) {
       ${opts.map((o) => { const list = arr[rid]?.[o.st.stop_id]?.[o.dir] || [];
         return `<button type="button" class="near-opt" data-stop="${esc(o.st.stop_id)}">
           <span class="near-dir">${o.loop ? "Loop" : `To ${esc(o.headsign || "")}`}</span>
-          <span class="near-stop">${esc(o.st.name)} · ${walkText(o.m)}</span>
-          <span class="near-next">${list.length ? list.map((a, i) => `<b class="${a.live && i === 0 ? "now" : ""}">${when(a.time)}</b>`).join(" · ") : "No more trips today"}</span></button>`; }).join("")}
+          <span class="near-stop">${esc(o.st.name)} ∙ ${walkText(o.m)}</span>
+          <span class="near-next">${list.length ? list.map((a, i) => `<b class="${a.live && i === 0 ? "now" : ""}">${when(a.time)}</b>`).join(" ∙ ") : "No more trips today"}</span></button>`; }).join("")}
     </div>`).join("") + `<p class="src">Walking times are estimates. Tap a stop for full details.</p>`;
     document.querySelectorAll(".near-opt").forEach((btn) => (btn.onclick = () => showStop(btn.dataset.stop, true)));
   };
@@ -1268,6 +1272,9 @@ function addOverlay() {
   const add = (layer, s) => { if (!map.getLayer(layer.id)) map.addLayer({ ...layer, ...slot(s) }); };
   if (!map.hasImage("route-arrow")) map.addImage("route-arrow", chevronImage(), { sdf: true, pixelRatio: 2 });
   Object.values(routes).forEach((r) => { if (!map.hasImage(`bus-${r.route_id}`)) map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }); });
+  // The badges are drawn with the page font; if it was still loading, redraw them once it arrives.
+  if (!addOverlay.fontsHooked) { addOverlay.fontsHooked = true;
+    document.fonts?.load('800 26px "Overpass"').then(() => Object.values(routes).forEach((r) => { const id = `bus-${r.route_id}`; if (map.hasImage(id)) map.updateImage(id, busBadge(r)); })).catch(() => {}); }
   if (!map.getSource("routes")) map.addSource("routes", { type: "geojson", data: linesData, lineMetrics: true }); // lineMetrics: for the draw-in animation
   if (!map.getSource("stops")) map.addSource("stops", { type: "geojson", data: stopsData });
   if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
@@ -1500,11 +1507,11 @@ map.on("mousemove", (e) => {
     const per = FREQ_PERIODS.find((x) => x.id === freqPeriod);
     showTip(e.point, `<h3><span style="display:inline-block;width:18px;height:5px;border-radius:3px;background:${t.color}"></span>${freqHeadline(h)}</h3>
       <p style="margin:0">${waitText(h)}</p>
-      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${per.note}</p>`);
+      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} ∙ ${per.note}</p>`);
   } else if (f.layer.id === "buses") {
     const r = routes[p.route_id];
     highlight([p.route_id]);
-    showTip(e.point, `<h3>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h3><p class="t-freq" style="margin:0">Bus ${esc(p.label)} · live location</p>`);
+    showTip(e.point, `<h3>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h3><p class="t-freq" style="margin:0">Bus ${esc(p.label)} ∙ live location</p>`);
   } else {
     const r = routes[p.route_id];
     highlight([p.route_id]);
@@ -1553,7 +1560,7 @@ map.on("click", (e) => {
   if (f.layer.id === "buses") {
     const r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
     html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
-      <p class="sub">Bus ${esc(p.label)} · location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`;
+      <p class="sub">Bus ${esc(p.label)} ∙ location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`;
   } else if (f.layer.id === "route-lines") {
     const r = routes[p.route_id];
     highlight([r.route_id]);
@@ -1565,7 +1572,7 @@ map.on("click", (e) => {
     const h = p["h_" + freqPeriod], per = FREQ_PERIODS.find((x) => x.id === freqPeriod), many = String(p.routes).includes(",");
     html = `<div class="pop"><h2>${freqHeadline(h)}</h2>
       <p style="margin:0 0 4px;font-size:.86rem">${waitText(h)}</p>
-      <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} · ${per.note}</p></div>`;
+      <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} ∙ ${per.note}</p></div>`;
   }
   openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "min(330px, 92vw)" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
   openPopup.on("close", () => { if (!openStopId) highlight([]); });
@@ -1605,9 +1612,9 @@ async function refreshBuses() {
     map.getSource("buses")?.setData(data);
     if (followState) followBus();
     const n = visibleRoutes().reduce((sum, id) => sum + (liveCounts[id] || 0), 0);
-    if (status) { status.textContent = `${n} bus${n === 1 ? "" : "es"} running now · updated ${clock(Date.now() / 1000)}`; status.classList.remove("problem"); }
+    if (status) { status.textContent = `${n} bus${n === 1 ? "" : "es"} running now ∙ updated ${clock(Date.now() / 1000)}`; status.classList.remove("problem"); }
     document.querySelectorAll("[data-live]").forEach((el) => {
-      const c = liveCounts[el.dataset.live]; el.innerHTML = c ? ` · <span class="lv">${c} live</span>` : "";
+      const c = liveCounts[el.dataset.live]; el.innerHTML = c ? ` ∙ <span class="lv">${c} live</span>` : "";
     });
   } catch {
     if (status) { status.textContent = "Live bus locations are unavailable right now. Showing scheduled times."; status.classList.add("problem"); }
@@ -1751,7 +1758,7 @@ function buildRoutePanel() {
   const r = routes[routeParam], dirs = Object.keys(routeStops[routeParam] || {});
   activeDir = dirs[0];
   document.documentElement.style.setProperty("--route", r.color);
-  document.title = `Route ${r.short_name} ${r.long_name} · GMT system map`;
+  document.title = `Route ${r.short_name} ${r.long_name} ∙ GMT system map`;
   const ids = [...new Set(dirs.flatMap((d) => routeStops[routeParam][d].stops))];
   panel(`
     <header>${toggleBtn("Stops")}${showBack ? `<a class="back" href="?">${ICON.back} All routes</a>` : ""}
@@ -1798,7 +1805,7 @@ async function refreshRouteArrivals() {
 }
 function summary(list) {
   if (!list || !list.length) return "No more trips today";
-  return list.map((a, i) => (i === 0 && a.live ? `<span class="now">${when(a.time)}</span>` : when(a.time))).join(" · ");
+  return list.map((a, i) => (i === 0 && a.live ? `<span class="now">${when(a.time)}</span>` : when(a.time))).join(" ∙ ");
 }
 
 // ---------- stop details panel ----------
@@ -1955,7 +1962,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
   // Say where the times come from, so riders (and staff) can tell live predictions from the timetable.
   const source = arrivals === null || arrivals === "error" ? ""
     : !liveReady ? `<p class="src-line">Scheduled times. Live predictions aren’t connected yet.</p>`
-    : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions · updated ${clock(Date.now() / 1000)}</p>`
+    : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions ∙ updated ${clock(Date.now() / 1000)}</p>`
     : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
   const closedBy = (detourInfo.closedStops[s.stop_id] || []).filter((r) => !routeParam || r === routeParam);
   const temps = detourInfo.tempStops.filter((t) => closedBy.includes(t.route));
@@ -2090,12 +2097,12 @@ function renderDebug() {
   let el = document.getElementById("debug-box");
   if (!el) { el = document.createElement("pre"); el.id = "debug-box"; document.getElementById("wrap").appendChild(el); }
   el.textContent = [
-    `relay: ${relayReady ? "on" : "off (direct to Swiftly)"}${debugInfo.relayErr ? " · error: " + debugInfo.relayErr : ""}`,
+    `relay: ${relayReady ? "on" : "off (direct to Swiftly)"}${debugInfo.relayErr ? " ∙ error: " + debugInfo.relayErr : ""}`,
     `buses on map: ${lastBuses.features.length}`,
     `today (Vermont): ${ymdToday()}`,
-    `detours from Swiftly: ${debugInfo.detoursIn} · running today: ${debugInfo.detoursToday} · shapes drawn: ${debugInfo.drawn}`,
+    `detours from Swiftly: ${debugInfo.detoursIn} ∙ running today: ${debugInfo.detoursToday} ∙ shapes drawn: ${debugInfo.drawn}`,
     `alerts: ${debugInfo.alerts}`,
-    `screen: ${innerWidth}×${innerHeight} · ${navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 70)}`,
+    `screen: ${innerWidth}×${innerHeight} ∙ ${navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 70)}`,
   ].join("\n");
 }
 async function refreshAlerts(force) {
@@ -2129,7 +2136,7 @@ function alertsHtml(list) {
     return `<li class="alert ${a.routes.length ? "al-click" : ""}" ${a.routes.length ? `tabindex="0" role="button" data-routes="${esc(a.routes.join(","))}" title="Show on the map"` : ""}><p class="al-head">${ICON.warn}<strong>${esc(a.header || EFFECT_TEXT[a.effect] || "Service alert")}</strong></p>
       ${a.routes.length ? `<p class="al-routes">${a.routes.map((r) => chip(routes[r])).join("")}${EFFECT_TEXT[a.effect] ? `<span>${EFFECT_TEXT[a.effect]}</span>` : ""}</p>` : ""}
       ${a.description ? `<p class="al-desc">${esc(a.description)}</p>` : ""}
-      <p class="al-meta">${end ? `Until ${new Date(end * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}` : "Until further notice"}${a.url ? ` · <a href="${esc(a.url)}" target="_blank" rel="noopener">More info ↗</a>` : ""}</p></li>`;
+      <p class="al-meta">${end ? `Until ${new Date(end * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })}` : "Until further notice"}${a.url ? ` ∙ <a href="${esc(a.url)}" target="_blank" rel="noopener">More info ↗</a>` : ""}</p></li>`;
   }).join("")}</ul>`;
 }
 // Click an alert: zoom to its detour on the affected route(s), or to the route(s) if there's no detour.
@@ -2347,7 +2354,7 @@ function liveLine(o, r) {
   const ride = o.legs.find((l) => l.kind === "ride");
   if (r?.live) {
     const late = Math.round(r.delay / 60);
-    return `<span class="dot"></span>Route ${esc(ride.short)} leaves ${esc(ride.fromName)} ${when(r.dep) === "Due" ? "now" : "in " + when(r.dep)}${late >= 2 ? ` · ${late} min late` : late <= -2 ? ` · ${-late} min early` : " · on time"} (live)`;
+    return `<span class="dot"></span>Route ${esc(ride.short)} leaves ${esc(ride.fromName)} ${when(r.dep) === "Due" ? "now" : "in " + when(r.dep)}${late >= 2 ? ` ∙ ${late} min late` : late <= -2 ? ` ∙ ${-late} min early` : " ∙ on time"} (live)`;
   }
   return r ? `Scheduled times${r.feed === false ? " (live predictions unavailable)" : ""}` : "";
 }
@@ -2748,7 +2755,7 @@ function freqText(r) {
   const main = s.weekday || s.saturday || s.sunday;
   if (!main) return days;
   const weekend = main === s.weekday && (s.days[5] || s.days[6]) && s.days.slice(0, 5).filter(Boolean).length > 1;
-  return `${days} · ${weekend ? "weekdays " : ""}${phrase(main)}`;
+  return `${days} ∙ ${weekend ? "weekdays " : ""}${phrase(main)}`;
 }
 function serviceTable(r) {
   const s = r.service; if (!s) return "";
@@ -2883,7 +2890,7 @@ function chevronImage() {
 // Route-colored badge with a bus pictogram and the route number, drawn at 2x for sharp screens.
 function busBadge(r) {
   const k = 2, h = 24 * k, pad = 5 * k, icon = 14 * k, gap = 4 * k, radius = 7 * k, stroke = 2 * k;
-  const font = `700 ${13 * k}px "Public Sans", system-ui, sans-serif`;
+  const font = `800 ${13 * k}px "Overpass", "Helvetica Neue", Arial, sans-serif`;
   const label = String(r.short_name || "");
   const m = document.createElement("canvas").getContext("2d"); m.font = font;
   const w = Math.ceil(pad + icon + (label ? gap + m.measureText(label).width : 0) + pad);
