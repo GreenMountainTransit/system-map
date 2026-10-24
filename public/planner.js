@@ -26,9 +26,21 @@
   const walkSecs = (m) => Math.round((m * DETOUR) / WALK_MPS);
 
   // ---------- network: built once per service day from the data/ files ----------
-  async function network() {
-    const clock = L().localClock();
-    if (net && netDay === clock.ymd) return net;
+  // Midnight in Vermont at the start of a date (YYYYMMDD), as seconds since 1970 (right across daylight-saving changes).
+  function localMidnight(ymd) {
+    const y = +ymd.slice(0, 4), m = +ymd.slice(4, 6) - 1, d = +ymd.slice(6, 8);
+    for (const h of [4, 5, 3, 6]) { // Vermont is UTC-4 (summer) or UTC-5 (winter)
+      const t = Date.UTC(y, m, d, h) / 1000;
+      const hh = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(t * 1000));
+      if (hh === "00:00") return t;
+    }
+    return Date.UTC(y, m, d, 5) / 1000;
+  }
+  // The date (and its midnight) `dayOffset` days from today in Vermont: 0 = today, 1 = tomorrow...
+  function dayAt(dayOffset = 0) { const { ymd, dow } = L().shiftYmd(L().localClock().ymd, dayOffset); return { ymd, dow, midnight: localMidnight(ymd) }; }
+  async function network(dayOffset = 0) {
+    const target = dayAt(dayOffset);
+    if (net && netDay === target.ymd) return net;
     const [meta, cal, stopsGeo] = await Promise.all([L().data("routes.json"), L().data("calendar.json"), L().data("stops.geojson")]);
     // Accessibility: "no" if EITHER source says the stop isn't accessible (GTFS wheelchair boarding, or no ADA boarding
     // pad in GMT's stop survey) -- safest for riders using wheelchairs; "yes" if a source confirms it; "" if not known.
@@ -36,10 +48,10 @@
     const stops = stopsGeo.features.map((f) => ({ id: f.properties.stop_id, name: f.properties.name, c: f.geometry.coordinates, acc: acc(f.properties) }));
     const idx = new Map(stops.map((s, i) => [s.id, i]));
 
-    // Yesterday's late trips, today's, and tomorrow's early ones, as real times (seconds since 1970).
+    // The day before's late trips, the chosen day's, and the next day's early ones, as real times (seconds since 1970).
     const days = [-1, 0, 1].map((o) => {
-      const { ymd, dow } = L().shiftYmd(clock.ymd, o);
-      return { midnight: clock.midnight + o * 86400, on: L().servicesOn(cal, ymd, dow) };
+      const { ymd, dow } = L().shiftYmd(target.ymd, o);
+      return { midnight: localMidnight(ymd), on: L().servicesOn(cal, ymd, dow) };
     });
     const patterns = [], byKey = new Map();
     for (const r of meta.routes) {
@@ -71,7 +83,7 @@
     };
     const footpaths = stops.map((s, i) => near(s.c, TRANSFER_M).filter(([j]) => j !== i).map(([j, m]) => [j, walkSecs(m)]));
     net = { stops, idx, patterns, stopPatterns, footpaths, near, routes: Object.fromEntries(meta.routes.map((r) => [r.route_id, r])) };
-    netDay = clock.ymd;
+    netDay = target.ymd;
     return net;
   }
 
@@ -210,8 +222,8 @@
   // ---------- public: plan a trip ----------
   // Preferences: sort = "fastest" | "walk" (least walking) | "transfers" (fewest); accessible = avoid stops marked
   // not wheelchair accessible. Least-walking also searches with shorter walking limits, for options that walk less.
-  async function plan({ from, to, depart, arriveBy, prefs = {} }) {
-    const n = await network();
+  async function plan({ from, to, depart, arriveBy, prefs = {}, dayOffset = 0 }) {
+    const n = await network(dayOffset);
     const opt = { accessible: !!prefs.accessible };
     const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
     let result;
@@ -290,5 +302,5 @@
     } catch { return { live: false, feed: false }; }
   }
 
-  globalThis.GMTPlanner = { plan, liveFirstBus, settings: { WALK_MPS, ACCESS_M, TRANSFER_M, TRANSFER_BUFFER, MAX_RIDES } };
+  globalThis.GMTPlanner = { plan, liveFirstBus, dayAt, settings: { WALK_MPS, ACCESS_M, TRANSFER_M, TRANSFER_BUFFER, MAX_RIDES } };
 })();

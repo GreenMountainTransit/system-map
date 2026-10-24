@@ -89,10 +89,19 @@
   .pl-sub { display: block; font-size: .72rem; color: var(--muted); }
   .pl-when { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
   .pl-when select, .pl-when input { font: inherit; font-size: .86rem; padding: 7px 8px; border: 1px solid #c9d3cc; border-radius: 4px; background: #fff; color: var(--ink); }
+  .pl-when select { min-width: 0; }
+  .pl-time { width: 7.2em; min-width: 0; }
+  .pl-time[aria-invalid=true] { border-color: #c2410c; }
+  .pl-time-msg { flex-basis: 100%; margin: 0; font-size: .74rem; color: #9a3412; }
+  .pl-time-msg[hidden] { display: none; }
+  .pl-nextday { font-size: .74rem; font-weight: 600; color: #9a3412; }
+  .pl-daynote { margin: 10px 0 0; font-size: .76rem; color: var(--muted); }
   .pl-go { margin-left: auto; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; font-weight: 600; font-size: .88rem; padding: 8px 16px; cursor: pointer; }
   .pl-prefs { margin-top: 10px; display: grid; gap: 8px; }
   .pl-sort { display: flex; border: 1px solid #c9d3cc; border-radius: 4px; overflow: hidden; }
-  .pl-sort button { flex: 1; border: 0; border-left: 1px solid #c9d3cc; background: #fff; padding: 7px 4px; font: inherit; font-size: .78rem; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  /* Wording wraps onto two lines inside each button when the panel is narrow (e.g. a small embed), never overflowing. */
+  .pl-sort button { flex: 1 1 0; min-width: 0; border: 0; border-left: 1px solid #c9d3cc; background: #fff; padding: 6px 4px; font: inherit; font-size: .78rem; font-weight: 600;
+    color: var(--muted); cursor: pointer; white-space: normal; line-height: 1.2; overflow-wrap: normal; display: flex; align-items: center; justify-content: center; text-align: center; min-height: 34px; }
   .pl-sort button:first-child { border-left: 0; }
   .pl-sort button[aria-checked=true] { background: var(--gmt); color: #fff; }
   .pl-acc { display: flex; align-items: center; gap: 7px; font-size: .82rem; cursor: pointer; }
@@ -470,7 +479,7 @@ let tripCosts = null; // driving-cost settings from route-info.json (trip_costs)
 // Trip preferences, remembered on this device: sort = fastest | walk | transfers; accessible = wheelchair-accessible stops.
 const PREFS_KEY = "gmt-plan-prefs";
 const loadPrefs = () => { try { return { sort: "fastest", accessible: false, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; } catch { return { sort: "fastest", accessible: false }; } };
-const planState = { from: null, to: null, when: "now", time: "", result: null, selected: 0, live: {} }; // trip planner
+const planState = { dayOffset: 0 /* 0 = today, 1 = tomorrow ... */, from: null, to: null, when: "now", time: "", result: null, selected: 0, live: {} }; // trip planner
 let ridershipData = null, riderOpen = false, riderRange = "12M"; // ridership section starts collapsed for each stop
 let svOpen = false, svCam = null; // Street View section open?  camera marker on the map
 let picking = false; // false: the legend shows its defaults; true: the rider has picked specific routes
@@ -2212,10 +2221,15 @@ function plannerHtml() {
         <ul id="pl-to-list" class="pl-list" role="listbox" hidden></ul></div>
     </div>
     <div class="pl-when">
+      <label for="pl-day" class="sr-only">Day</label>
+      <select id="pl-day">${planDays().map((d, i) => `<option value="${i}" ${planState.dayOffset === i ? "selected" : ""}>${d}</option>`).join("")}</select>
       <label for="pl-when" class="sr-only">When</label>
-      <select id="pl-when"><option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option><option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at…</option><option value="by" ${planState.when === "by" ? "selected" : ""}>Arrive by…</option></select>
-      <input type="time" id="pl-time" value="${esc(planState.time)}" aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" ${planState.when === "now" ? "hidden" : ""}>
+      <select id="pl-when">${planState.dayOffset ? "" : `<option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option>`}<option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at</option><option value="by" ${planState.when === "by" ? "selected" : ""}>Arrive by</option></select>
+      <input type="text" id="pl-time" class="pl-time" inputmode="text" autocomplete="off" list="pl-times" placeholder="e.g. 8:30 AM" value="${esc(timeLabel(planState.time))}"
+        aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" aria-describedby="pl-time-msg" ${planState.when === "now" ? "hidden" : ""}>
+      <datalist id="pl-times">${Array.from({ length: 96 }, (_, i) => `<option value="${timeLabel(`${String(Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}`)}">`).join("")}</datalist>
       <button type="button" id="pl-go" class="pl-go">Plan trip</button>
+      <p id="pl-time-msg" class="pl-time-msg" role="alert" hidden></p>
     </div>
     <div class="pl-prefs" role="group" aria-label="Trip preferences">
       <div class="pl-sort" role="radiogroup" aria-label="Show trips by">
@@ -2238,15 +2252,30 @@ function wirePlanner() {
       () => { document.getElementById("pl-from").value = ""; document.getElementById("announce").textContent = "Couldn’t get your location."; });
   };
   document.getElementById("pl-swap").onclick = () => { [planState.from, planState.to] = [planState.to, planState.from]; buildSystemPanel(); planTrip(); };
+  document.getElementById("pl-day").onchange = (e) => {
+    planState.dayOffset = +e.target.value;
+    // "Leave now" only applies to today; another day starts at "Leave at 8:00 AM".
+    if (planState.dayOffset && planState.when === "now") { planState.when = "at"; if (!planState.time) planState.time = "08:00"; }
+    buildSystemPanel(); if (planState.from && planState.to) planTrip();
+  };
+  const timeEl = document.getElementById("pl-time"), msg = document.getElementById("pl-time-msg");
+  const readTime = () => {
+    const raw = timeEl.value.trim(); if (!raw) { msg.hidden = true; return false; }
+    const t = parseTime(raw);
+    if (!t) { msg.textContent = "Type a time like 8:30 AM, 5pm or 17:45."; msg.hidden = false; timeEl.setAttribute("aria-invalid", "true"); return false; }
+    msg.hidden = true; timeEl.removeAttribute("aria-invalid");
+    planState.time = t; timeEl.value = timeLabel(t); return true;
+  };
+  timeEl.addEventListener("change", () => { if (readTime() && planState.from && planState.to) planTrip(); });
+  timeEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); if (readTime()) planTrip(true); } });
   document.getElementById("pl-when").onchange = (e) => {
     planState.when = e.target.value;
-    const timeEl = document.getElementById("pl-time");
     timeEl.hidden = planState.when === "now";
     timeEl.setAttribute("aria-label", planState.when === "by" ? "Arrival time" : "Departure time");
-    if (planState.when === "by" && !planState.time) { const d = new Date(Date.now() + 60 * 60000); timeEl.value = planState.time = d.toTimeString().slice(0, 5); }
-    if (planState.when === "at" && !planState.time) { const d = new Date(Date.now() + 15 * 60000); document.getElementById("pl-time").value = planState.time = d.toTimeString().slice(0, 5); }
+    if (planState.when === "by" && !planState.time) { const d = new Date(Date.now() + 60 * 60000); planState.time = d.toTimeString().slice(0, 5); timeEl.value = timeLabel(planState.time); }
+    if (planState.when === "at" && !planState.time) { const d = new Date(Date.now() + 15 * 60000); planState.time = d.toTimeString().slice(0, 5); timeEl.value = timeLabel(planState.time); }
   };
-  document.getElementById("pl-time").onchange = (e) => (planState.time = e.target.value);
+
   document.getElementById("pl-go").onclick = () => planTrip(true);
   const savePrefs = (pr) => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(pr)); } catch {} };
   document.querySelectorAll(".pl-sort [data-sort]").forEach((b) => (b.onclick = () => {
@@ -2342,10 +2371,31 @@ function planCombobox(which) {
     const li = e.target.closest("[role=option]"); if (li) { e.preventDefault(); choose(+li.dataset.i); }
   });
 }
+// Day choices: Today, Tomorrow, then the next five days by name and date.
+function planDays() {
+  return Array.from({ length: 7 }, (_, i) => {
+    if (i === 0) return "Today"; if (i === 1) return "Tomorrow";
+    const { ymd } = GMTPlanner.dayAt(i), d = new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8), 12));
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+  });
+}
+// Typed times: "8:30", "830", "8:30am", "8 pm", "5pm", "17:45", "noon", "midnight" -> "HH:MM" (24-hour), or null.
+function parseTime(raw) {
+  let t = raw.toLowerCase().replace(/\s+/g, "").replace(/\./g, "");
+  if (t === "noon") return "12:00"; if (t === "midnight") return "00:00";
+  const m = t.match(/^(\d{1,2})(?::?(\d{2}))?(a|am|p|pm)?$/); if (!m) return null;
+  let h = +m[1], min = m[2] ? +m[2] : 0; const ap = m[3];
+  if (min > 59 || h > 23 || (ap && (h < 1 || h > 12))) return null;
+  if (ap) { if (ap.startsWith("p") && h < 12) h += 12; if (ap.startsWith("a") && h === 12) h = 0; }
+  else if (!m[2] && h <= 12 && m[1].length <= 2 && raw.indexOf(":") < 0 && h < 7) h += 12; // bare "5" means 5 PM (buses rarely run at 5 AM's "5")
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+const timeLabel = (hhmm) => { if (!hhmm) return ""; const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
 function planDepart() {
-  if (planState.when === "now" || !planState.time) return Math.floor(Date.now() / 1000);
+  const off = planState.dayOffset || 0;
+  if ((planState.when === "now" && !off) || !planState.time) return off ? GMTPlanner.dayAt(off).midnight + 8 * 3600 : Math.floor(Date.now() / 1000);
   const [h, m] = planState.time.split(":").map(Number);
-  return dayEpoch(h * 3600 + m * 60);
+  return GMTPlanner.dayAt(off).midnight + h * 3600 + m * 60;
 }
 async function planTrip(force) {
   const out = () => document.getElementById("pl-results");
@@ -2355,8 +2405,8 @@ async function planTrip(force) {
   try {
     const prefs = loadPrefs();
     planState.result = planState.when === "by" && planState.time
-      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs })
-      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs });
+      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: planState.dayOffset || 0 })
+      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: planState.dayOffset || 0 });
     drivingMiles(planState.from.c, planState.to.c).then(() => { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } });
   } catch (err) { planState.result = { options: [], error: true }; }
   planState.selected = 0; planState.live = {};
@@ -2365,6 +2415,7 @@ async function planTrip(force) {
 }
 // Check the first bus of the shown trips against Swiftly's live predictions (one stop each).
 async function checkLive(selectedOnly) {
+  if (planState.dayOffset) return; // live predictions only matter for trips today
   // First search: check the top 3 trips once. After that, only the trip the rider picked is refreshed,
   // so the planner adds just one Swiftly request every 15 seconds.
   const opts = planState.result?.options || [];
@@ -2397,7 +2448,8 @@ function planResultsHtml() {
       : `<span class="chip" style="background:${esc(l.color)};color:${esc(l.text)}">${esc(l.short)}</span>`).join(`<span class="pl-sep">›</span>`);
     const open = i === planState.selected;
     return `<li class="pl-opt ${open ? "open" : ""}"><button type="button" class="pl-card" data-opt="${i}" aria-expanded="${open}">
-        <span class="pl-times"><strong>${clock(o.depart)} – ${clock(o.arrive)}</strong><span>${dur(o.arrive - o.depart)}</span></span>
+        <span class="pl-times"><strong>${clock(o.depart)} – ${dayTag(o.arrive, o.depart)}${clock(o.arrive)}</strong><span>${dur(o.arrive - o.depart)}</span></span>
+        ${vtDate(o.arrive) !== vtDate(o.depart) ? `<span class="pl-nextday">Continues the next morning: no later connection runs that day.</span>` : ""}
         <span class="pl-chips">${chips}</span>
         <span class="pl-meta">${o.rides === 1 ? "No transfers" : `${o.rides - 1} transfer${o.rides > 2 ? "s" : ""}`} ∙ ${o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : "No walking"}</span>
         ${r.prefs?.accessible ? accessNote(o) : ""}
@@ -2406,7 +2458,8 @@ function planResultsHtml() {
   }).join("");
   const walk = r.walkOnly ? `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span>
       <span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles. It may be quicker than waiting for a bus.</span></div></li>` : "";
-  return `<ul class="pl-opts">${cards}${walk}</ul>
+  const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
+  return `${dayNote}<ul class="pl-opts">${cards}${walk}</ul>
     <p class="src">Trips use GMT’s timetable with walking up to about 10 minutes and at least 2 minutes to transfer. The first bus is checked against live predictions.</p>`;
 }
 // Wheelchair mode: say which boarding/alighting stops aren't confirmed accessible (stops marked inaccessible are avoided).
@@ -2455,13 +2508,16 @@ function costHtml(o) {
       </div>
     </div>`;
 }
+// The Vermont date of a time, and "Mon " in front of a time that falls on a later day than `ref`.
+const vtDate = (e) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).formatToParts(new Date(e * 1000)).map((x) => x.value).join("");
+const dayTag = (e, ref) => (vtDate(e) !== vtDate(ref) ? new Date(e * 1000).toLocaleDateString("en-US", { weekday: "short", timeZone: "America/New_York" }) + " " : "");
 function stepsHtml(o) {
   const last = o.legs.length - 1;
   return o.legs.map((l, i) => l.kind === "walk"
     ? `<li class="st-walk"><span class="st-ico">${ICON.walk}</span><span>Walk ${dur(walkInfo.get(walkKey(l))?.secs ?? l.secs)}${walkInfo.get(walkKey(l)) ? ` (${walkInfo.get(walkKey(l)).meters < 1000 ? Math.round(walkInfo.get(walkKey(l)).meters / 10) * 10 + " m" : (walkInfo.get(walkKey(l)).meters / 1609).toFixed(1) + " mi"})` : ""} to ${esc(i === last ? planState.to.label : l.toName)}</span></li>`
     : `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
-        <span><strong>${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
-        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${clock(l.arr)}</span></span></li>`).join("");
+        <span><strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
+        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span></span></li>`).join("");
 }
 function wirePlanResults() {
   document.querySelectorAll(".pl-why").forEach((b) => (b.onclick = (e) => {
