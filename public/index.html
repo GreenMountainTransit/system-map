@@ -94,6 +94,10 @@
   .pl-time[aria-invalid=true] { border-color: #c2410c; }
   .pl-time-msg { flex-basis: 100%; margin: 0; font-size: .74rem; color: #9a3412; }
   .pl-time-msg[hidden] { display: none; }
+  @media (max-width: 640px) {
+    #wrap #panel.plan-full { max-height: none; border-radius: 0; padding-top: env(safe-area-inset-top, 0px); } /* beats the 92% cap on phone panels */
+    .pl-list { max-height: 45vh; overscroll-behavior: contain; }
+  }
   .pl-nextday { font-size: .74rem; font-weight: 600; color: #9a3412; }
   .pl-daynote { margin: 10px 0 0; font-size: .76rem; color: var(--muted); }
   .pl-go { margin-left: auto; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; font-weight: 600; font-size: .88rem; padding: 8px 16px; cursor: pointer; }
@@ -224,6 +228,12 @@
   #tip .more { color: var(--muted); margin: 6px 0 0; font-size: .76rem; }
 
   /* ---------- popup ---------- */
+  .spot-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); }
+  .spot-btn[aria-pressed=true] { background: var(--gmt) !important; color: #fff; }
+  #spot-bar { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
+    background: var(--ink); color: #fff; border-radius: 4px; padding: 7px 8px 7px 12px; font-size: .82rem; font-weight: 600; box-shadow: 0 1px 3px rgba(20,30,25,.2); }
+  #spot-bar[hidden] { display: none; }
+  #spot-bar button { border: 0; background: #fff; color: var(--ink); border-radius: 3px; padding: 4px 10px; font: inherit; font-size: .78rem; font-weight: 700; cursor: pointer; }
   .ctrl-tip { position: absolute; z-index: 6; transform: translateY(-50%); background: var(--ink); color: #fff; font-size: .78rem; font-weight: 600;
     padding: 6px 10px; border-radius: 3px; white-space: nowrap; pointer-events: none; box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); }
   .ctrl-tip[hidden] { display: none; }
@@ -1096,6 +1106,31 @@ function toast(text) {
 }
 const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
 map.addControl(geolocate, "top-right");
+// "Pick a spot": like the location button, but for anywhere -- tap or click the map to see service near that spot.
+let pickingSpot = false;
+map.addControl({
+  onAdd() {
+    const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group spot-ctrl";
+    const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
+    el.innerHTML = `<button type="button" class="spot-btn" aria-pressed="false" aria-label="Pick a spot on the map to see service near it" title="${verb} here, then ${verb.toLowerCase()} anywhere on the map to see service near it">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6-5.2-6-10.2a6 6 0 0 1 12 0C18 15.8 12 21 12 21z"/><circle cx="12" cy="10.8" r="2.2"/></svg></button>`;
+    el.querySelector("button").onclick = () => setPickingSpot(!pickingSpot);
+    return el;
+  }, onRemove() {},
+}, "top-right");
+function setPickingSpot(on) {
+  pickingSpot = on;
+  document.querySelector(".spot-btn")?.setAttribute("aria-pressed", String(on));
+  map.getCanvas().style.cursor = on ? "crosshair" : "";
+  let bar = document.getElementById("spot-bar");
+  if (on) {
+    if (!bar) { bar = document.createElement("div"); bar.id = "spot-bar"; document.getElementById("map").appendChild(bar); }
+    const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
+    bar.innerHTML = `<span>${verb} a spot on the map to see service near it</span><button type="button" id="spot-cancel">Cancel</button>`;
+    bar.hidden = false; document.getElementById("spot-cancel").onclick = () => setPickingSpot(false);
+    if (isPhone()) setSheet(false); // show the map
+  } else if (bar) bar.hidden = true;
+}
 // Hover label on the locate button. Mapbox adds the button a moment after the map starts, so listen on
 // the page rather than the button itself.
 {
@@ -1508,6 +1543,12 @@ function hideTip() { tip.hidden = true; }
 
 map.on("click", (e) => {
   if (!map.getLayer("route-lines")) return;
+  if (pickingSpot) { // "Pick a spot": nearby service for wherever was tapped
+    const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
+    setPickingSpot(false);
+    showNearby(c, near ? `Near ${near.name}` : "Service near this spot", routeParam ? [routeParam] : null);
+    return;
+  }
   if (Date.now() - followDragged < 400) return; // the end of a look-around drag isn't a click
   if (view === "plan" && !routeParam) { // clicking the map sets From, then To
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
@@ -1694,6 +1735,7 @@ function buildSystemPanel() {
 function setView(v) {
   if (v === view) return;
   view = v;
+  if (isPhone() && sheetState === "open") setTimeout(() => snapSheet(document.getElementById("panel"), "open"), 0); // the planner opens taller
   const u = new URL(location.href); v !== "routes" ? u.searchParams.set("view", v) : u.searchParams.delete("view");
   history.replaceState(null, "", u);
   hideTip(); highlight([]);
@@ -2306,8 +2348,22 @@ function popularStops(n = 5) {
   const ranked = ridershipData ? stops.filter((st) => isFinite(rank(st))).sort((x, y) => rank(x) - rank(y)) : stops.slice().sort((x, y) => y.routes.length - x.routes.length);
   return ranked.slice(0, n).map((st) => ({ c: st.coords, label: st.name, sub: `Bus stop ∙ ${st.routes.length} route${st.routes.length === 1 ? "" : "s"}`, stop: true }));
 }
+// Phones: when a planner box is focused, open the panel fully, scroll the box to the top, and size the suggestion
+// list to the space left above the keyboard (visualViewport shrinks when the keyboard is up).
+function fitAboveKeyboard(input, list) {
+  if (!isPhone()) return;
+  const vv = window.visualViewport, bottom = vv ? vv.offsetTop + vv.height : innerHeight;
+  const top = input.getBoundingClientRect().bottom + 4;
+  list.style.maxHeight = Math.max(120, bottom - top - 10) + "px";
+}
 function planCombobox(which) {
   const input = document.getElementById("pl-" + which), list = document.getElementById(`pl-${which}-list`);
+  input.addEventListener("focus", () => {
+    if (!isPhone()) return;
+    if (sheetState !== "open") setSheet(true);
+    setTimeout(() => { input.scrollIntoView({ block: "start", behavior: "smooth" }); fitAboveKeyboard(input, list); }, 250);
+  });
+  window.visualViewport?.addEventListener("resize", () => { if (document.activeElement === input) fitAboveKeyboard(input, list); });
   let items = [], active = -1, timer = null, seq = 0, pending = false;
   const close = () => { list.hidden = true; list.innerHTML = ""; input.setAttribute("aria-expanded", "false"); items = []; active = -1; };
   const icon = (it) => (it.recent ? ICON.clock : it.stop ? ICON.pin : it.poi ? ICON.landmark : ICON.place);
@@ -2458,8 +2514,9 @@ function planResultsHtml() {
   }).join("");
   const walk = r.walkOnly ? `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span>
       <span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles. It may be quicker than waiting for a bus.</span></div></li>` : "";
+  const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
-  return `${dayNote}<ul class="pl-opts">${cards}${walk}</ul>
+  return `${dayNote}${swipeNote}<ul class="pl-opts">${cards}${walk}</ul>
     <p class="src">Trips use GMT’s timetable with walking up to about 10 minutes and at least 2 minutes to transfer. The first bus is checked against live predictions.</p>`;
 }
 // Wheelchair mode: say which boarding/alighting stops aren't confirmed accessible (stops marked inaccessible are avoided).
@@ -2935,7 +2992,11 @@ function snapSheet(el, state) {
   const H = document.getElementById("wrap").clientHeight;
   if (el.id === "panel") { sheetState = state; sheetOpen = state !== "collapsed"; }
   el.classList.toggle("collapsed", state === "collapsed");
-  el.style.height = state === "open" ? Math.round(H * 0.75) + "px" : ""; // open = bottom three-quarters; the top quarter stays map
+  // open = bottom three-quarters (the top quarter stays map). The trip planner opens to nearly the full screen, so the
+  // From/To boxes sit at the top and their suggestions show above the phone's keyboard instead of under it.
+  const full = el.id === "panel" && view === "plan" && !routeParam;
+  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : "";
+  el.classList.toggle("plan-full", full && state === "open");
   const t = el.querySelector("#toggle"); if (t) t.setAttribute("aria-expanded", String(state !== "collapsed"));
 }
 // Drag the top of a sheet up or down; it settles at the nearest height. Dragging the stop sheet low closes it.
