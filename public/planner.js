@@ -30,7 +30,10 @@
     const clock = L().localClock();
     if (net && netDay === clock.ymd) return net;
     const [meta, cal, stopsGeo] = await Promise.all([L().data("routes.json"), L().data("calendar.json"), L().data("stops.geojson")]);
-    const stops = stopsGeo.features.map((f) => ({ id: f.properties.stop_id, name: f.properties.name, c: f.geometry.coordinates }));
+    // Accessibility: "no" if EITHER source says the stop isn't accessible (GTFS wheelchair boarding, or no ADA boarding
+    // pad in GMT's stop survey) -- safest for riders using wheelchairs; "yes" if a source confirms it; "" if not known.
+    const acc = (p) => (p.wheelchair === "no" || p.ada_pad === "no" ? "no" : p.wheelchair === "yes" || p.ada_pad === "yes" ? "yes" : "");
+    const stops = stopsGeo.features.map((f) => ({ id: f.properties.stop_id, name: f.properties.name, c: f.geometry.coordinates, acc: acc(f.properties) }));
     const idx = new Map(stops.map((s, i) => [s.id, i]));
 
     // Yesterday's late trips, today's, and tomorrow's early ones, as real times (seconds since 1970).
@@ -73,9 +76,10 @@
   }
 
   // ---------- one RAPTOR search ----------
-  function raptor(n, from, to, depart) {
-    const S = n.stops.length, INF = Infinity;
-    const access = n.near(from, ACCESS_M), egress = new Map(n.near(to, ACCESS_M).map(([i, m]) => [i, walkSecs(m)]));
+  function raptor(n, from, to, depart, opt = {}) {
+    const S = n.stops.length, INF = Infinity, accessM = opt.accessM || ACCESS_M, transferM = opt.transferM || TRANSFER_M;
+    const usable = (i) => !opt.accessible || n.stops[i].acc !== "no"; // wheelchair mode: skip stops marked not accessible
+    const access = n.near(from, accessM).filter(([i]) => usable(i)), egress = new Map(n.near(to, accessM).filter(([i]) => usable(i)).map(([i, m]) => [i, walkSecs(m)]));
     const tau = [new Float64Array(S).fill(INF)], label = [new Array(S)], best = new Float64Array(S).fill(INF);
     let marked = new Set();
     for (const [i, m] of access) { tau[0][i] = depart + walkSecs(m); best[i] = tau[0][i]; label[0][i] = { kind: "access", secs: walkSecs(m) }; marked.add(i); }
@@ -91,7 +95,7 @@
         let trip = null, boardPos = -1, boardStop = -1;
         for (let pos = start; pos < p.stops.length; pos++) {
           const s = p.stops[pos]; if (s == null) continue;
-          if (trip) {
+          if (trip && usable(s)) {
             const arr = trip.times[pos];
             if (arr < best[s] && arr < cutoff) {
               tau[k][s] = arr; best[s] = arr; newly.add(s);
@@ -100,7 +104,7 @@
           }
           // Can we catch an earlier bus here than the one we're on?
           const ready = tau[k - 1][s] + (k > 1 && label[k - 1][s]?.kind === "ride" ? TRANSFER_BUFFER : 0);
-          if (ready < INF && pos < p.stops.length - 1 && (!trip || ready <= trip.times[pos])) {
+          if (ready < INF && usable(s) && pos < p.stops.length - 1 && (!trip || ready <= trip.times[pos])) {
             const t = p.trips.find((x) => x.times[pos] >= ready);
             if (t && t !== trip) { trip = t; boardPos = pos; boardStop = s; }
           }
@@ -108,6 +112,7 @@
       }
       // Walk to nearby stops to change buses.
       for (const s of [...newly]) for (const [j, w] of n.footpaths[s]) {
+        if (!usable(j) || w > walkSecs(transferM)) continue;
         const arr = tau[k][s] + w;
         if (arr < best[j]) { tau[k][j] = arr; best[j] = arr; label[k][j] = { kind: "walk", from: s, secs: w }; newly.add(j); }
       }
@@ -123,12 +128,12 @@
       for (const [i, w] of egress) if (tau[k][i] + w < bestArr) { bestArr = tau[k][i] + w; bestStop = i; }
       if (bestStop < 0 || bestArr >= bestSoFar) continue;
       bestSoFar = bestArr;
-      results.push(reconstruct(n, label, k, bestStop, egress.get(bestStop), from, to, depart));
+      results.push(reconstruct(n, label, k, bestStop, egress.get(bestStop), from, to, depart, opt));
     }
     return results;
   }
 
-  function reconstruct(n, label, k, stop, egressSecs, from, to, depart) {
+  function reconstruct(n, label, k, stop, egressSecs, from, to, depart, opt = {}) {
     const legs = [];
     let s = stop;
     while (k >= 0) {
@@ -142,12 +147,12 @@
         fromStop: n.stops[lb.from].id, fromName: n.stops[lb.from].name, toStop: n.stops[s].id, toName: n.stops[s].name,
         dep: lb.trip.times[lb.boardPos], arr: lb.trip.times[lb.alightPos], stopsCount: lb.alightPos - lb.boardPos,
         path: p.stops.slice(lb.boardPos, lb.alightPos + 1).filter((x) => x != null).map((x) => n.stops[x].c),
-        _p: p, _trip: lb.trip, _b: lb.boardPos, _a: lb.alightPos, // for the walking clean-up below
+        _p: p, _trip: lb.trip, _b: lb.boardPos, _a: lb.alightPos, _n: n, // for the walking clean-up below
       });
       s = lb.from; k--;
     }
     legs.push({ kind: "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
-    shortenWalks(n, legs, from, to, depart);
+    shortenWalks(n, legs, from, to, depart, opt);
     // Times: walking legs are placed right before / after the rides they connect.
     const firstRide = legs.find((l) => l.kind === "ride");
     let t = firstRide.dep - (legs[0].kind === "walk" ? legs[0].secs : 0);
@@ -164,7 +169,8 @@
   // Least walking for the same buses: board the first bus at whichever of its stops is the shortest walk from
   // the start (if it still leaves after you could get there), and get off the last bus at whichever of its later
   // stops is the shortest walk to the destination.
-  function shortenWalks(n, legs, from, to, depart) {
+  function shortenWalks(n, legs, from, to, depart, opt = {}) {
+    const ok = (sIdx) => sIdx != null && (!opt.accessible || n.stops[sIdx].acc !== "no"); // wheelchair mode: never move to an inaccessible stop
     const rides = legs.filter((l) => l.kind === "ride");
     const first = rides[0], last = rides[rides.length - 1];
     const set = (l, b, a) => {
@@ -176,7 +182,7 @@
     if (legs[0].kind === "walk" && legs[1] === first) {
       let best = first._b, bestW = legs[0].secs;
       for (let pos = 0; pos < first._a; pos++) {
-        const sIdx = first._p.stops[pos]; if (sIdx == null) continue;
+        const sIdx = first._p.stops[pos]; if (!ok(sIdx)) continue;
         const w = walkSecs(meters(from, n.stops[sIdx].c));
         if (w < bestW && first._trip.times[pos] - w >= depart - 60) { best = pos; bestW = w; }
       }
@@ -186,7 +192,7 @@
     if (lastWalk.kind === "walk" && legs[legs.length - 2] === last) {
       let best = last._a, bestW = lastWalk.secs;
       for (let pos = last._b + 1; pos < last._p.stops.length; pos++) {
-        const sIdx = last._p.stops[pos]; if (sIdx == null) continue;
+        const sIdx = last._p.stops[pos]; if (!ok(sIdx)) continue;
         const w = walkSecs(meters(n.stops[sIdx].c, to));
         if (w < bestW) { best = pos; bestW = w; }
       }
@@ -198,18 +204,36 @@
       if (before.kind === "ride") { legs[i].from = n.stops[before._p.stops[before._a]].c; legs[i].fromName = before.toName; }
       if (after.kind === "ride") { legs[i].to = n.stops[after._p.stops[after._b]].c; legs[i].toName = after.fromName; }
     }
-    for (const l of rides) { delete l._p; delete l._trip; delete l._b; delete l._a; }
+    for (const l of rides) { l.fromAcc = n.stops[l._p.stops[l._b]].acc; l.toAcc = n.stops[l._p.stops[l._a]].acc; delete l._p; delete l._trip; delete l._b; delete l._a; delete l._n; }
   }
 
   // ---------- public: plan a trip ----------
-  async function plan({ from, to, depart, arriveBy }) {
+  // Preferences: sort = "fastest" | "walk" (least walking) | "transfers" (fewest); accessible = avoid stops marked
+  // not wheelchair accessible. Least-walking also searches with shorter walking limits, for options that walk less.
+  async function plan({ from, to, depart, arriveBy, prefs = {} }) {
     const n = await network();
-    if (arriveBy) return planArriveBy(n, from, to, arriveBy);
-    const options = [], seen = new Set();
+    const opt = { accessible: !!prefs.accessible };
+    const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
+    let result;
+    if (arriveBy) result = planArriveBy(n, from, to, arriveBy, runs);
+    else {
+      const options = [], seen = new Set();
+      for (const o of runs) collect(n, from, to, depart, o, options, seen);
+      result = finish(options, from, to);
+    }
+    return { ...result, options: sortByPref(result.options, prefs.sort), prefs };
+  }
+  const walkTotal = (o) => o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
+  function sortByPref(options, sort) {
+    const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides, walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive,
+      transfers: (a, b) => a.rides - b.rides || a.arrive - b.arrive }[sort] || ((a, b) => a.arrive - b.arrive || a.rides - b.rides);
+    return options.slice().sort(by).slice(0, 4).map((o) => ({ ...o, walkSecs: walkTotal(o) }));
+  }
+  function collect(n, from, to, depart, opt, options, seen) {
     // Search from the requested time, then again just after each option's first bus, to offer later choices too.
     let t = depart;
     for (let round = 0; round < 3; round++) {
-      const found = raptor(n, from, to, t);
+      const found = raptor(n, from, to, t, opt);
       if (!found.length) break;
       for (const o of found) {
         const key = o.legs.filter((l) => l.kind === "ride").map((l) => l.trip).join(">");
@@ -217,23 +241,30 @@
       }
       t = Math.min(...found.map((o) => o.legs.find((l) => l.kind === "ride").dep)) + 60;
     }
-    // Drop options another option beats: leaving no earlier, arriving no later, with no more buses.
-    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.arrive <= o.arrive && x.rides <= o.rides &&
-      (x.depart > o.depart || x.arrive < o.arrive || x.rides < o.rides)));
-    options.length = 0; options.push(...keep);
-    options.sort((a, b) => a.arrive - b.arrive || a.rides - b.rides);
+  }
+  function finish(options, from, to) {
+    // Drop options another option beats: leaving no earlier, arriving no later, with no more buses and no more walking.
+    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.arrive <= o.arrive && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) &&
+      (x.depart > o.depart || x.arrive < o.arrive || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
     const direct = meters(from, to);
     const walkOnly = direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null;
-    return { options: options.slice(0, 4), walkOnly };
+    return { options: keep, walkOnly };
   }
 
   // Arrive by: search forward from 3 hours before the target, collecting trips that get there in time,
   // then offer the ones that leave latest (so riders don't wait around).
-  function planArriveBy(n, from, to, arriveBy) {
+  function planArriveBy(n, from, to, arriveBy, runs = [{}]) {
     const options = [], seen = new Set();
+    for (const opt of runs) arriveByRun(n, from, to, arriveBy, opt, options, seen);
+    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
+    keep.sort((a, b) => b.depart - a.depart || a.rides - b.rides);
+    const direct = meters(from, to);
+    return { options: keep, walkOnly: direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null, arriveBy };
+  }
+  function arriveByRun(n, from, to, arriveBy, opt, options, seen) {
     let t = arriveBy - 3 * 3600;
     for (let round = 0; round < 12; round++) {
-      const found = raptor(n, from, to, t);
+      const found = raptor(n, from, to, t, opt);
       if (!found.length) break;
       let anyInTime = false;
       for (const o of found) {
@@ -246,11 +277,6 @@
       if (!anyInTime && Math.min(...found.map((o) => o.arrive)) > arriveBy) break;
       t = nextT;
     }
-    // Keep options not beaten by one that leaves later and still arrives in time with no more buses.
-    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && (x.depart > o.depart || x.rides < o.rides)));
-    keep.sort((a, b) => b.depart - a.depart || a.rides - b.rides);
-    const direct = meters(from, to);
-    return { options: keep.slice(0, 4), walkOnly: direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null, arriveBy };
   }
 
   // Check the first bus of a trip against Swiftly's live predictions for its boarding stop.
