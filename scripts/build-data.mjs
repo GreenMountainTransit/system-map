@@ -239,17 +239,22 @@ const FREQ_WINDOWS = {
   mid: { day: "weekday", hours: [[9, 15]] },
   eve: { day: "weekday", hours: [[19, 22]] },
 };
-// Measure a TYPICAL weekday: of the weekdays in the next two weeks, the one with the most scheduled trips.
-// (The first weekday with any service can be a holiday running the Sunday schedule, which would leave out
-// routes that don't run Sundays, like Route 8, and make others look less frequent.)
-const tripsOnDay = (u) => { const on = servicesOn(u.ymd, u.dow); let n = 0; for (const sc of schedByRoute.values()) for (const t of sc) if (on.has(t.s)) n++; return n; };
-const weekdayCounts = upcoming.filter((u) => u.dow < 5).map((u) => ({ u, n: tripsOnDay(u) })).filter((x) => x.n > 0);
-const typicalWeekday = weekdayCounts.reduce((best, x) => (!best || x.n > best.n ? x : best), null);
-const freqDays = { weekday: typicalWeekday?.u };
-if (typicalWeekday) {
-  const skipped = weekdayCounts.filter((x) => x.n < typicalWeekday.n * 0.8).map((x) => x.u.ymd);
-  console.log(`Frequency map measures ${typicalWeekday.u.ymd} (${typicalWeekday.n} trips)${skipped.length ? `; skipped reduced-service weekdays ${skipped.join(", ")}` : ""}`);
-}
+// The frequency map always shows GMT's REGULAR WEEKDAY schedule, whatever day the map is built: the services
+// the GTFS calendar runs Monday-Friday, ignoring date-specific exceptions (holidays, one-off changes). That way a
+// holiday running the Sunday schedule can't drop routes that don't run Sundays (like Route 8). The date below
+// only picks which schedule period applies (the current one); if a feed has no regular calendar, the busiest
+// upcoming weekday is used instead.
+const regularWeekdayServices = (ymd) => new Set(cal.cal.filter((c) => c.a <= ymd && ymd <= c.b && [0, 1, 2, 3, 4].every((d) => c.d[d])).map((c) => c.s));
+const tripsWith = (on) => { let n = 0; for (const sc of schedByRoute.values()) for (const t of sc) if (on.has(t.s)) n++; return n; };
+const weekdayChoices = upcoming.filter((u) => u.dow < 5).map((u) => {
+  const regular = regularWeekdayServices(u.ymd);
+  const on = regular.size ? regular : servicesOn(u.ymd, u.dow);
+  return { u, on, n: tripsWith(on), regular: regular.size > 0 };
+}).filter((x) => x.n > 0);
+const freqChoice = weekdayChoices.find((x) => x.regular) || weekdayChoices.reduce((best, x) => (!best || x.n > best.n ? x : best), null);
+const freqDays = { weekday: freqChoice?.u };
+const freqServices = freqChoice?.on || new Set();
+if (freqChoice) console.log(`Frequency map uses the ${freqChoice.regular ? "regular weekday schedule" : "busiest upcoming weekday"} (${freqChoice.n} trips; schedule period of ${freqChoice.u.ymd})`);
 const freqFeatures = [];
 {
   const tripShape = Object.fromEntries(trips.map((t) => [t.trip_id, t.shape_id]));
@@ -291,7 +296,7 @@ const freqFeatures = [];
   const windowsFor = Object.fromEntries(Object.keys(freqDays).map((day) => [day, Object.entries(FREQ_WINDOWS).filter(([, w]) => w.day === day)]));
   for (const [day, u] of Object.entries(freqDays)) {
     if (!u) continue;
-    const on = servicesOn(u.ymd, u.dow);
+    const on = freqServices; // regular weekday schedule (see above)
     for (const [routeId, sched] of schedByRoute) {
       const g = groupFor(routeById[routeId].route_short_name || routeId);
       if (g !== "local") continue; // no commuter/express, school or shopping routes
@@ -447,14 +452,14 @@ const freqFeatures = [];
   // 3. Report each local route, so a route missing from the frequency map is easy to spot and explain.
   const day = freqDays.weekday;
   if (day) {
-    const on = servicesOn(day.ymd, day.dow), report = [];
+    const on = freqServices, report = [];
     for (const [routeId, sched] of schedByRoute) {
       const short = shortOf(routeId);
       if (groupFor(short) !== "local") continue;
       const weekday = sched.filter((t) => on.has(t.s));
       const inWindows = weekday.filter((t) => Object.values(FREQ_WINDOWS).some((def) => def.hours.some(([h0, h1]) => t.st[0][1] < h1 * 3600 && t.st[t.st.length - 1][1] >= h0 * 3600)));
       const drawnN = drawnByRoute.get(routeId) || 0;
-      const why = !weekday.length ? "no weekday trips on " + day.ymd : !inWindows.length ? "no trips during the rush hour, midday or evening windows" : !drawnN ? "every street it uses is already drawn under other routes" : "";
+      const why = !weekday.length ? "no trips in the regular weekday schedule" : !inWindows.length ? "no trips during the rush hour, midday or evening windows" : !drawnN ? "every street it uses is already drawn under other routes" : "";
       report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set to every ${overrides[short]} min)` : ""}${why ? " -- " + why : ""}`);
       if (!drawnN && weekday.length) console.log(`::warning::Frequency map: Route ${short} has no lines of its own (${why || "no frequency found"}).`);
     }
@@ -665,5 +670,5 @@ const withAmenities = stopFeatures.filter((f) => amenities.has(f.properties.stop
 console.log(`Built ${routeList.length} routes (${lineFeatures.length} route patterns), ${stopFeatures.length} stops ` +
   `(${stopFeatures.filter((f) => f.properties.timepoint).length} timepoints), ${Object.keys(headsigns).length} trips`);
 console.log(amenitiesFile ? `Amenities: ${withAmenities} of ${stopFeatures.length} stops matched a row in ${path.basename(amenitiesFile)}` : "Amenities: none (no amenities.csv)");
-console.log(`Frequency map: ${freqFeatures.length} street pieces (each street drawn once), local routes on weekday ${freqDays.weekday?.ymd || "(none found)"}`);
+console.log(`Frequency map: ${freqFeatures.length} street pieces (each street drawn once), local routes, regular weekday schedule`);
 console.log(places ? `Nearby places: ${places.length} from OpenStreetMap` : "Nearby places: skipped");
