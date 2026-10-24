@@ -1621,8 +1621,8 @@ function buildSystemPanel() {
       ${statusRow()}
       <div class="viewtoggle" role="group" aria-label="Map view">
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
-        <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
         <button type="button" data-view="plan" aria-pressed="${view === "plan"}">Trip planner</button>
+        <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
       </div>
       ${view === "routes" ? searchBox(true) : ""}</header>
     ${view === "plan" ? plannerHtml() : legend}`, view === "routes");
