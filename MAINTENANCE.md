@@ -111,6 +111,7 @@ Each suggested trip shows what driving it would cost in a typical car compared w
 Commit the file and the map picks up the new figures with the next build. Driving distances come from Mapbox driving directions (one request per trip searched, counted in Mapbox's free directions allowance).
 
 ### Frequency map: checking routes and setting a route's frequency
+- The frequency map always shows GMT's **regular weekday schedule** (the Monday-Friday service in the GTFS calendar), whatever day it's built, ignoring holidays and other one-day exceptions. The **Build data** log says so: "Frequency map uses the regular weekday schedule (… trips …)".
 - After each build, the **Build data** log has a line **"Frequency map by route: …"** listing every local route and how many frequency lines it got. A route with none gets a yellow warning saying why: no weekday trips, no trips during the rush hour / midday / evening windows, or every street it uses is already drawn under other routes (it still appears in those streets' route lists).
 - If a route runs at a steady frequency all day but the timetable-based count makes it look patchy, set it in `route-info.json` under `"frequency_overrides"`, as route number and minutes: `"2": 20` means Route 2 runs every 20 minutes. Wherever that route runs, the map shows at least that often, combined with any other routes on the same street. Remove the line to go back to counting from the timetable.
 
