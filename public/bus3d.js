@@ -237,5 +237,28 @@
       [{ ...textured, alphaMode: "MASK", alphaCutoff: 0.5, doubleSided: false }, { ...textured }]);
   }
 
-  globalThis.GMTBus3D = { build, buildStopSign, LENGTH_M: L };
+  // ---------- a rider (for boarding in stop view): legs, shirt, arms and head, about 1.75 m tall ----------
+  // Faces +X (like the bus), so the same rotation rule turns them the way they're walking.
+  async function buildPerson({ shirt = "#3b6fb6", pants = "#2d3540", skin = "#f1c48f" } = {}) {
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const g = c.getContext("2d");
+    [[0, shirt], [16, pants], [32, skin], [48, "#1c2228"]].forEach(([x, col]) => { g.fillStyle = col; g.fillRect(x, 0, 16, 64); });
+    const at = (i) => [(i * 16 + 8) / 64, 0.5]; // 0 shirt, 1 pants, 2 skin, 3 shoes
+    const m = mesh();
+    const box = (cx, cy, cz, sx, sy, sz, uvAt) => { // an axis-aligned box centered at (cx, cy, cz)
+      const x0 = cx - sx / 2, x1 = cx + sx / 2, y0 = cy - sy / 2, y1 = cy + sy / 2, z0 = cz - sz / 2, z1 = cz + sz / 2, u = [uvAt[0], uvAt[1], uvAt[0], uvAt[1]];
+      m.quad([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], [0, 0, 1], u); m.quad([[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]], [0, 0, -1], u);
+      m.quad([[x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1]], [1, 0, 0], u); m.quad([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], [-1, 0, 0], u);
+      m.quad([[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]], [0, 1, 0], u); m.quad([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], [0, -1, 0], u);
+    };
+    box(0.02, 0.05, -0.11, 0.26, 0.1, 0.12, at(3)); box(0.02, 0.05, 0.11, 0.26, 0.1, 0.12, at(3)); // shoes
+    box(0, 0.5, -0.1, 0.16, 0.8, 0.15, at(1)); box(0, 0.5, 0.1, 0.16, 0.8, 0.15, at(1));             // legs
+    box(0, 1.17, 0, 0.26, 0.6, 0.46, at(0));                                                           // shirt
+    box(0, 1.15, -0.29, 0.12, 0.55, 0.1, at(0)); box(0, 1.15, 0.29, 0.12, 0.55, 0.1, at(0));          // arms
+    box(0, 1.6, 0, 0.22, 0.26, 0.2, at(2));                                                            // head
+    box(0.02, 1.75, 0, 0.26, 0.06, 0.24, at(3));                                                       // hair/hat
+    return packGLB(c, [{ m, material: 0 }], [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.8 } }]);
+  }
+
+  globalThis.GMTBus3D = { build, buildStopSign, buildPerson, LENGTH_M: L };
 })();
