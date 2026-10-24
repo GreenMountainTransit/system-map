@@ -98,6 +98,9 @@
     #wrap #panel.plan-full { max-height: none; border-radius: 0; padding-top: env(safe-area-inset-top, 0px); } /* beats the 92% cap on phone panels */
     .pl-list { max-height: 45vh; overscroll-behavior: contain; }
   }
+  .pl-fastest { border-color: var(--live) !important; }
+  .pl-fast-tag { font-size: .74rem; font-weight: 700; color: var(--live); }
+  .pl-alt-ico { display: inline-flex; vertical-align: -3px; margin-right: 5px; color: var(--gmt); } .pl-alt-ico svg { width: 16px; height: 16px; }
   .pl-nextday { font-size: .74rem; font-weight: 600; color: #9a3412; }
   .pl-daynote { margin: 10px 0 0; font-size: .76rem; color: var(--muted); }
   .pl-go { margin-left: auto; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; font-weight: 600; font-size: .88rem; padding: 8px 16px; cursor: pointer; }
@@ -228,6 +231,22 @@
   #tip .more { color: var(--muted); margin: 6px 0 0; font-size: .76rem; }
 
   /* ---------- popup ---------- */
+  .help-btn { width: 29px; height: 29px; font: 800 1rem/1 inherit; color: var(--ink); }
+  .help-btn[aria-expanded=true] { background: var(--ink) !important; color: #fff; }
+  #help-box { position: absolute; left: 10px; top: 48px; z-index: 6; width: min(340px, calc(100% - 20px)); max-height: calc(100% - 70px); overflow-y: auto;
+    background: #fff; border-radius: 4px; box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); font-size: .82rem; }
+  #help-box[hidden] { display: none; }
+  .hb-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .hb-head h2 { margin: 0; font-size: .95rem; }
+  .hb-close { border: 0; background: none; font-size: 1.3rem; line-height: 1; cursor: pointer; color: var(--muted); }
+  #help-box ul { list-style: none; margin: 0; padding: 6px 12px 10px; }
+  #help-box li { display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: start; padding: 7px 0; border-top: 1px solid #eef1ef; line-height: 1.4; }
+  #help-box li:first-child { border-top: 0; }
+  #help-box li strong { display: block; }
+  .hb-ico { display: flex; gap: 2px; justify-content: center; align-items: center; min-height: 26px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); font-size: .78rem; }
+  .hb-ico svg { width: 16px; height: 16px; } .hb-ico .chip { min-width: 0; }
+  .hb-bus { color: var(--gmt); }
+  @media (max-width: 640px) { #map #alert-banner { left: 50px; max-width: calc(100% - 265px); } } /* room for ? on phones */
   .spot-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); }
   .spot-btn[aria-pressed=true] { background: var(--gmt) !important; color: #fff; }
   #spot-bar { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
@@ -631,46 +650,77 @@ map.addControl({
     };
     btn.onclick = async () => {
       if (isFullscreen()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
-      if (fullPageMode) { // go back to the page with the embedded map
-        if (history.length > 1) history.back(); else location.href = document.referrer || "https://ridegmt.com/";
+      if (fullPageMode) { // close this full-page tab: the original page is still open, exactly as it was
+        window.close();
+        setTimeout(() => { if (history.length > 1) history.back(); else location.href = document.referrer || "https://ridegmt.com/"; }, 300); // if it couldn't close
         return;
       }
       if (canFullscreen) {
         try { await (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen).call(document.documentElement); return; } catch {}
       }
-      const u = new URL(location.href); u.searchParams.set("full", "1");
-      try { window.top.location.href = u.toString(); } catch { window.open(u.toString(), "_blank", "noopener"); }
+      // No full-screen mode here (e.g. iPhone): open the map as its own page in a NEW TAB, carrying the current view,
+      // so the original page stays exactly where it was. Minimize closes the tab.
+      const u = new URL(location.href); u.searchParams.set("full", "1"); u.searchParams.set("s", saveViewState());
+      if (!window.open(u.toString(), "_blank")) { try { window.top.location.href = u.toString(); } catch { location.href = u.toString(); } }
     };
-    ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => { update(); setTimeout(() => map.resize(), 50); }));
+    ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => {
+      update(); setTimeout(() => map.resize(), 50);
+      // Back from full screen: bring the map back into view on the page (some browsers jump the page when leaving full screen).
+      if (!isFullscreen()) setTimeout(() => document.getElementById("wrap").scrollIntoView({ block: "nearest", inline: "nearest" }), 200);
+    }));
     update();
     return el;
   },
   onRemove() {},
 }, "bottom-right");
 
-// A short hint beside the Expand / Minimize button, fading after 5 seconds: on load ("Expand to full screen"),
-// and after going full screen ("Minimize").
-function ctrlHint(text) {
-  const btn = document.querySelector(".expand-ctrl:not([hidden]) .expand-btn");
-  if (!btn) return;
-  document.querySelectorAll(".fs-hint").forEach((h) => h.remove());
+// The current view (camera, tab, legend selection, open stop), packed into a short string for the full-page tab.
+function saveViewState() {
+  const c = map.getCenter();
+  const st = { c: [+c.lng.toFixed(5), +c.lat.toFixed(5)], z: +map.getZoom().toFixed(2), b: Math.round(map.getBearing()), p: Math.round(map.getPitch()),
+    v: view, h: [...hidden], o: openStopId && !openStopId.includes(":") ? openStopId : null };
+  return btoa(unescape(encodeURIComponent(JSON.stringify(st))));
+}
+function restoreViewState() {
+  const raw = new URLSearchParams(location.search).get("s"); if (!raw) return;
+  try {
+    const st = JSON.parse(decodeURIComponent(escape(atob(raw))));
+    if (st.v && st.v !== view && !routeParam) setView(st.v);
+    if (Array.isArray(st.h) && !routeParam) { hidden = new Set(st.h.filter((id) => routes[id])); picking = hidden.size > 0; buildSystemPanel.sync?.(); applyFilters(); }
+    if (st.p) map.setMaxPitch(Math.max(map.getMaxPitch(), st.p));
+    map.jumpTo({ center: st.c, zoom: st.z, bearing: st.b || 0, pitch: st.p || 0 });
+    if (st.o && stopsById[st.o]) showStop(st.o, false);
+  } catch {}
+}
+
+// Short hints beside map buttons, fading after 6 seconds.
+function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", keepOthers) {
+  const btn = document.querySelector(selector);
+  if (!btn || !btn.offsetParent) return;
+  if (!keepOthers) document.querySelectorAll(".fs-hint").forEach((h) => h.remove());
   const hint = document.createElement("div"); hint.className = "fs-hint"; hint.setAttribute("role", "status"); hint.textContent = text;
   document.getElementById("wrap").appendChild(hint);
   const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect();
   hint.style.right = (w.right - r.left + 10) + "px"; hint.style.top = (r.top - w.top + r.height / 2) + "px";
   btn.classList.add("pulse");
-  setTimeout(() => { hint.classList.add("out"); btn.classList.remove("pulse"); }, 5000);
-  setTimeout(() => hint.remove(), 5600);
+  setTimeout(() => { hint.classList.add("out"); btn.classList.remove("pulse"); }, 6000);
+  setTimeout(() => hint.remove(), 6600);
 }
 // Show it once the rider can use the map: right away when there's no activation shade, otherwise only after
 // they've tapped or clicked "activate" (so the hint isn't hidden under the shade). Only the first time.
 {
   let hinted = false;
+  // Three at once, for 6 seconds: the location button, the pick-a-location button and the full-screen button.
   const hintOnce = () => { if (hinted) return; hinted = true;
-    setTimeout(() => ctrlHint(isFullscreen() || new URLSearchParams(location.search).get("full") === "1" ? "Minimize" : "Expand to full screen"), 500); };
+    setTimeout(() => {
+      ctrlHint("See service near your current location", ".mapboxgl-ctrl-geolocate", true);
+      ctrlHint(`${tapOrClick()} a location on the map to see nearby service`, ".spot-btn", true);
+      ctrlHint(isFullscreen() || new URLSearchParams(location.search).get("full") === "1" ? "Minimize" : "Expand to full screen", ".expand-ctrl:not([hidden]) .expand-btn", true);
+    }, 500); };
   map.once("load", () => { if (activation.active) setTimeout(hintOnce, 300); else addEventListener("gmt-map-activated", hintOnce, { once: true }); });
 }
 ["fullscreenchange", "webkitfullscreenchange"].forEach((ev) => document.addEventListener(ev, () => { if (isFullscreen()) setTimeout(() => ctrlHint("Minimize"), 400); }));
+const tapOrClick = () => (matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click");
 // ---------- 3D mode (desktop only): tilted map with 3D buildings; click a bus to ride along behind it ----------
 const three = { on: false, follow: null, misses: 0 };
 const canThreeD = () => !matchMedia("(hover: none) and (pointer: coarse)").matches && innerWidth > 640;
@@ -1106,13 +1156,50 @@ function toast(text) {
 }
 const geolocate = new mapboxgl.GeolocateControl({ showUserHeading: true, fitBoundsOptions: { maxZoom: 15 } });
 map.addControl(geolocate, "top-right");
+// "?" in the top-left corner: a short guide to every button and control on the map.
+map.addControl({
+  onAdd() {
+    const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group help-ctrl";
+    el.innerHTML = `<button type="button" class="help-btn" aria-expanded="false" aria-controls="help-box" aria-label="Help: what the buttons do" title="What the buttons do">?</button>`;
+    el.querySelector("button").onclick = (e) => { e.stopPropagation(); toggleHelp(); };
+    return el;
+  }, onRemove() {},
+}, "top-left");
+function toggleHelp(force) {
+  let box = document.getElementById("help-box");
+  const btn = document.querySelector(".help-btn");
+  if (!box) {
+    box = document.createElement("div"); box.id = "help-box"; box.setAttribute("role", "dialog"); box.setAttribute("aria-label", "What the buttons do"); box.hidden = true;
+    const t = tapOrClick();
+    const row = (icon, title, text) => `<li><span class="hb-ico">${icon}</span><span><strong>${title}</strong>${text}</span></li>`;
+    box.innerHTML = `<div class="hb-head"><h2>What the buttons do</h2><button type="button" class="hb-close" aria-label="Close">×</button></div><ul>
+      ${row("<b>+</b><b>−</b>", "Zoom", "Zoom in and out. You can also pinch or scroll.")}
+      ${row(ICON.locate, "Your location", "Shows the next service near where you are: the closest stop each way, the walk, and the next buses.")}
+      ${row(ICON.place, "Choose a location", `${t} this, then ${t.toLowerCase()} anywhere on the map to see nearby service there.`)}
+      ${innerWidth > 640 ? row("<b>3D</b>", "3D view", "Tilts the map with 3D buildings and 3D buses. Click a bus to follow it; click a stop to watch a bus arrive.") : ""}
+      ${row("<b>Map</b>", "Map, Detailed, Satellite", "Changes the background map.")}
+      ${row(ICON_MAX, "Full screen", "Expands the map to fill the screen; the same button returns it to the page.")}
+      ${row(ICON.warn, "Service alerts", "Detours and service changes. Choose an alert to see the routes it affects.")}
+      ${row("<b>Aa</b>", "Routes, Trip planner, Frequency", "Browse routes and stops, plan a trip, or see how often buses run on each street on weekdays.")}
+      ${row(chip({ short_name: "2", color: "#2f4fc7", text_color: "#fff" }), "Route list", "Check a route to show it. Choosing one route shows just that route; choose more to add them.")}
+      ${row("<span class='hb-bus'>▲</span>", "Buses and stops", `${t} a bus for its route and destination, or a stop for its next departures, amenities and more.`)}
+    </ul>`;
+    document.getElementById("map").appendChild(box);
+    box.querySelector(".hb-close").onclick = () => toggleHelp(false);
+    document.addEventListener("pointerdown", (e) => { if (!box.hidden && !box.contains(e.target) && !e.target.closest(".help-btn")) toggleHelp(false); }, true);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !box.hidden) { toggleHelp(false); btn?.focus(); } });
+  }
+  const open = force ?? box.hidden;
+  box.hidden = !open; btn?.setAttribute("aria-expanded", String(open));
+  if (open) box.querySelector(".hb-close").focus();
+}
 // "Pick a spot": like the location button, but for anywhere -- tap or click the map to see service near that spot.
 let pickingSpot = false;
 map.addControl({
   onAdd() {
     const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group spot-ctrl";
     const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
-    el.innerHTML = `<button type="button" class="spot-btn" aria-pressed="false" aria-label="Pick a spot on the map to see service near it" title="${verb} here, then ${verb.toLowerCase()} anywhere on the map to see service near it">
+    el.innerHTML = `<button type="button" class="spot-btn" aria-pressed="false" aria-label="Choose a location on the map to see nearby service" title="Choose a location on the map to see nearby service">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6-5.2-6-10.2a6 6 0 0 1 12 0C18 15.8 12 21 12 21z"/><circle cx="12" cy="10.8" r="2.2"/></svg></button>`;
     el.querySelector("button").onclick = () => setPickingSpot(!pickingSpot);
     return el;
@@ -1126,7 +1213,7 @@ function setPickingSpot(on) {
   if (on) {
     if (!bar) { bar = document.createElement("div"); bar.id = "spot-bar"; document.getElementById("map").appendChild(bar); }
     const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
-    bar.innerHTML = `<span>${verb} a spot on the map to see service near it</span><button type="button" id="spot-cancel">Cancel</button>`;
+    bar.innerHTML = `<span>${verb} a location on the map to see nearby service</span><button type="button" id="spot-cancel">Cancel</button>`;
     bar.hidden = false; document.getElementById("spot-cancel").onclick = () => setPickingSpot(false);
     if (isPhone()) setSheet(false); // show the map
   } else if (bar) bar.hidden = true;
@@ -1194,7 +1281,12 @@ async function showNearby(here, title, onlyRoutes) {
     const arr = {};
     await Promise.all(Object.keys(byRoute).map(async (rid) => { try { arr[rid] = (await GMTLive.arrivals({ route: rid })).arrivals; } catch { arr[rid] = {}; } }));
     if (openStopId !== "near:" + here.join(",")) return;
-    document.getElementById("near-list").innerHTML = Object.entries(byRoute).map(([rid, opts]) => `<div class="near-route">
+    // Next service first: each route's directions by their next departure, and routes by their soonest one.
+    // Routes with nothing more today go last.
+    const nextOf = (rid, o) => (arr[rid]?.[o.st.stop_id]?.[o.dir] || [])[0]?.time ?? Infinity;
+    const ordered = Object.entries(byRoute).map(([rid, opts]) => [rid, opts.slice().sort((a, b) => nextOf(rid, a) - nextOf(rid, b))])
+      .sort(([ra, oa], [rb, ob]) => nextOf(ra, oa[0]) - nextOf(rb, ob[0]) || oa[0].m - ob[0].m);
+    document.getElementById("near-list").innerHTML = ordered.map(([rid, opts]) => `<div class="near-route">
       <p class="near-head">${chip(routes[rid])}<strong>${esc(routes[rid].long_name)}</strong></p>
       ${opts.map((o) => { const list = arr[rid]?.[o.st.stop_id]?.[o.dir] || [];
         return `<button type="button" class="near-opt" data-stop="${esc(o.st.stop_id)}">
@@ -1242,6 +1334,8 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
       if (g && (g.default === "off" || (g.default === "sundays" && !isSunday))) hidden.add(r.route_id);
     }
   });
+dataReady.then(() => map.once("idle", restoreViewState)); // full-page tab: open where the embedded map was
+
 
 dataReady.then(() => {
   if (missingRoute) {
@@ -1370,6 +1464,8 @@ function addOverlay() {
     paint: { "line-color": "#fff", "line-width": width(7, 13) } }, "top");
   add({ id: "plan-ride", type: "line", source: "plan", filter: ["==", ["get", "kind"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
     paint: { "line-color": ["get", "color"], "line-width": width(4, 8) } }, "top");
+  add({ id: "plan-bike", type: "line", source: "plan", filter: ["==", ["get", "kind"], "bike"], layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#0a7d3b", "line-width": width(3, 5), "line-dasharray": [1.5, 1.2] } }, "top");
   add({ id: "plan-walk", type: "line", source: "plan", filter: ["==", ["get", "kind"], "walk"], layout: { "line-cap": "round" },
     paint: { "line-color": "#46524b", "line-width": width(2.5, 4), "line-dasharray": [0.1, 2] } }, "top");
   add({ id: "plan-stops", type: "circle", source: "plan", filter: ["==", ["get", "kind"], "stop"],
@@ -1546,7 +1642,7 @@ map.on("click", (e) => {
   if (pickingSpot) { // "Pick a spot": nearby service for wherever was tapped
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
     setPickingSpot(false);
-    showNearby(c, near ? `Near ${near.name}` : "Service near this spot", routeParam ? [routeParam] : null);
+    showNearby(c, near ? `Near ${near.name}` : "Service near this location", routeParam ? [routeParam] : null);
     return;
   }
   if (Date.now() - followDragged < 400) return; // the end of a look-around drag isn't a click
@@ -2247,7 +2343,7 @@ async function searchPlaces(q, limit = 6) {
 }
 
 // ---------- trip planner ----------
-const PLAN_LAYERS = ["plan-casing", "plan-ride", "plan-walk", "plan-stops", "plan-ends", "plan-ends-letter", "plan-ends-label"];
+const PLAN_LAYERS = ["plan-casing", "plan-ride", "plan-bike", "plan-walk", "plan-stops", "plan-ends", "plan-ends-letter", "plan-ends-label"];
 const selectedOption = () => planState.result?.options?.[planState.selected] || null;
 function plannerHtml() {
   const v = (p) => esc(p?.label || "");
@@ -2279,6 +2375,7 @@ function plannerHtml() {
           `<button type="button" role="radio" data-sort="${k}" aria-checked="${loadPrefs().sort === k}">${t}</button>`).join("")}
       </div>
       <label class="pl-acc"><input type="checkbox" id="pl-acc" ${loadPrefs().accessible ? "checked" : ""}>${ICON.wheelchair}Wheelchair-accessible stops</label>
+      <label class="pl-acc"><input type="checkbox" id="pl-bike" ${loadPrefs().bike ? "checked" : ""}>${ICON.bike}Bike to and from the bus (bike-friendly routes)</label>
     </div>
     <p class="legend-hint">Or click the map to set where you’re starting, then where you’re going.</p>
     <div id="pl-results" aria-live="polite">${planResultsHtml()}</div>
@@ -2326,6 +2423,7 @@ function wirePlanner() {
     if (planState.from && planState.to) planTrip();
   }));
   document.getElementById("pl-acc").onchange = (e) => { savePrefs({ ...loadPrefs(), accessible: e.target.checked }); if (planState.from && planState.to) planTrip(); };
+  document.getElementById("pl-bike").onchange = (e) => { savePrefs({ ...loadPrefs(), bike: e.target.checked }); if (planState.from && planState.to) planTrip(); };
   wirePlanResults();
 }
 // Address search: GMT stops (instant) plus places and addresses from Mapbox's geocoder.
@@ -2463,6 +2561,7 @@ async function planTrip(force) {
     planState.result = planState.when === "by" && planState.time
       ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: planState.dayOffset || 0 })
       : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: planState.dayOffset || 0 });
+    planState.alt = null; fetchAlternatives();
     drivingMiles(planState.from.c, planState.to.c).then(() => { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } });
   } catch (err) { planState.result = { options: [], error: true }; }
   planState.selected = 0; planState.live = {};
@@ -2496,27 +2595,31 @@ const dur = (secs) => { const m = Math.round(secs / 60); return m < 60 ? `${m} m
 function planResultsHtml() {
   const r = planState.result;
   if (!r) return "";
-  if (!r.options.length && !r.walkOnly) return `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again."
+  if (!r.options.length && !r.walkOnly && !altCardsHtml()) return `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again."
     : r.prefs?.accessible ? "No trips found using wheelchair-accessible stops within about a 10-minute walk at that time. Try another time, or turn off the accessible-stops option to see all trips."
     : "No bus trips found for that time. Try a later time, or a starting point closer to a GMT route."}</p>`;
   const cards = r.options.map((o, i) => {
-    const chips = o.legs.map((l) => l.kind === "walk" ? `<span class="pl-walk">${ICON.walk}${Math.max(1, Math.round(l.secs / 60))}</span>`
+    const chips = o.legs.map((l) => l.kind !== "ride" ? `<span class="pl-walk">${l.kind === "bike" ? ICON.bike : ICON.walk}${Math.max(1, Math.round(l.secs / 60))}</span>`
       : `<span class="chip" style="background:${esc(l.color)};color:${esc(l.text)}">${esc(l.short)}</span>`).join(`<span class="pl-sep">›</span>`);
     const open = i === planState.selected;
     return `<li class="pl-opt ${open ? "open" : ""}"><button type="button" class="pl-card" data-opt="${i}" aria-expanded="${open}">
         <span class="pl-times"><strong>${clock(o.depart)} – ${dayTag(o.arrive, o.depart)}${clock(o.arrive)}</strong><span>${dur(o.arrive - o.depart)}</span></span>
         ${vtDate(o.arrive) !== vtDate(o.depart) ? `<span class="pl-nextday">Continues the next morning: no later connection runs that day.</span>` : ""}
         <span class="pl-chips">${chips}</span>
-        <span class="pl-meta">${o.rides === 1 ? "No transfers" : `${o.rides - 1} transfer${o.rides > 2 ? "s" : ""}`} ∙ ${o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : "No walking"}</span>
+        <span class="pl-meta">${o.rides === 1 ? "No transfers" : `${o.rides - 1} transfer${o.rides > 2 ? "s" : ""}`} ∙ ${o.bikeSecs ? `${Math.max(1, Math.round(o.bikeSecs / 60))} min biking ∙ ` : ""}${o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : o.bikeSecs ? "" : "No walking"}</span>
         ${r.prefs?.accessible ? accessNote(o) : ""}
         <span class="pl-live src-line ${planState.live[i]?.live ? "live" : ""}" data-live-for="${i}">${liveLine(o, planState.live[i])}</span>
       </button>${open ? `<ol class="pl-steps">${stepsHtml(o)}</ol>${costHtml(o)}` : ""}</li>`;
   }).join("");
-  const walk = r.walkOnly ? `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span>
-      <span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles. It may be quicker than waiting for a bus.</span></div></li>` : "";
+  // Walking and cycling the whole way (Mapbox directions); until they arrive, the straight-line walking estimate.
+  const walk = altCardsHtml("rest") || (altCardsHtml("fastest") ? "" : r.walkOnly ? `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span>
+      <span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles. It may be quicker than waiting for a bus.</span></div></li>` : "");
   const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
-  return `${dayNote}${swipeNote}<ul class="pl-opts">${cards}${walk}</ul>
+  // Fastest sort: walking/biking the whole way goes first when it beats the bus.
+  const top = (loadPrefs().sort || "fastest") === "fastest" ? altCardsHtml("fastest") : "";
+  const bottom = top ? walk : walk + ((loadPrefs().sort || "fastest") === "fastest" ? "" : altCardsHtml("fastest"));
+  return `${dayNote}${swipeNote}<ul class="pl-opts">${top}${cards}${bottom}</ul>
     <p class="src">Trips use GMT’s timetable with walking up to about 10 minutes and at least 2 minutes to transfer. The first bus is checked against live predictions.</p>`;
 }
 // Wheelchair mode: say which boarding/alighting stops aren't confirmed accessible (stops marked inaccessible are avoided).
@@ -2554,7 +2657,7 @@ function costHtml(o) {
       <div class="pl-why-box" id="pl-why-${o.depart}" hidden>
         <p><strong>What’s this?</strong> An estimate of what this one-way trip would cost in a typical car, compared with the bus fare.</p>
         <ul>
-          <li><strong>Car:</strong> a ${esc(c.car)}, ${c.mpg} miles per gallon.</li>
+          <li><strong>Car:</strong> a ${esc(c.car)}, ${c.mpg} miles per gallon${c.mpg_source ? ` (${esc(c.mpg_source)})` : ""}.</li>
           <li><strong>Fuel:</strong> ${money(c.gas_price)} a gallon (${esc(c.gas_price_as_of)}), about ${((c.gas_price / c.mpg) * 100).toFixed(1)}¢ a mile.</li>
           <li><strong>Maintenance, repairs and tires:</strong> ${c.maintenance_cents_per_mile}¢ a mile (${esc(c.maintenance_source)}).</li>
           <li><strong>Depreciation:</strong> ${c.depreciation_cents_per_mile}¢ a mile (${esc(c.depreciation_source)}).</li>
@@ -2570,20 +2673,30 @@ const vtDate = (e) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_
 const dayTag = (e, ref) => (vtDate(e) !== vtDate(ref) ? new Date(e * 1000).toLocaleDateString("en-US", { weekday: "short", timeZone: "America/New_York" }) + " " : "");
 function stepsHtml(o) {
   const last = o.legs.length - 1;
-  return o.legs.map((l, i) => l.kind === "walk"
-    ? `<li class="st-walk"><span class="st-ico">${ICON.walk}</span><span>Walk ${dur(walkInfo.get(walkKey(l))?.secs ?? l.secs)}${walkInfo.get(walkKey(l)) ? ` (${walkInfo.get(walkKey(l)).meters < 1000 ? Math.round(walkInfo.get(walkKey(l)).meters / 10) * 10 + " m" : (walkInfo.get(walkKey(l)).meters / 1609).toFixed(1) + " mi"})` : ""} to ${esc(i === last ? planState.to.label : l.toName)}</span></li>`
-    : `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
+  const dist = (m) => (m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1609).toFixed(1) + " mi");
+  return o.legs.map((l, i) => {
+    if (l.kind === "walk" || l.kind === "bike") {
+      const info = walkInfo.get(walkKey(l)), bike = l.kind === "bike";
+      const where = i === last ? planState.to.label : l.toName;
+      return `<li class="st-walk"><span class="st-ico">${bike ? ICON.bike : ICON.walk}</span><span>${bike ? "Bike" : "Walk"} ${dur(info?.secs ?? l.secs)}${info ? ` (${dist(info.meters)})` : ""} to ${esc(where)}${bike ? `<span class="st-sub">Bike-friendly route: bike paths, bike lanes and quieter streets where available${i === 0 ? ". GMT buses have front bike racks." : ""}</span>` : ""}</span></li>`;
+    }
+    return `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
         <span><strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
-        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span></span></li>`).join("");
+        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span></span></li>`;
+  }).join("");
 }
 function wirePlanResults() {
+  document.querySelectorAll("[data-alt]").forEach((b) => (b.onclick = () => {
+    planState.alt = planState.alt === b.dataset.alt ? null : b.dataset.alt;
+    document.getElementById("pl-results").innerHTML = planResultsHtml(); wirePlanResults(); drawPlan(true);
+  }));
   document.querySelectorAll(".pl-why").forEach((b) => (b.onclick = (e) => {
     e.stopPropagation();
     const box = document.getElementById(b.getAttribute("aria-controls")); if (!box) return;
     box.hidden = !box.hidden; b.setAttribute("aria-expanded", String(!box.hidden));
   }));
   document.querySelectorAll("[data-opt]").forEach((b) => b.onclick = () => {
-    planState.selected = +b.dataset.opt;
+    planState.selected = +b.dataset.opt; planState.alt = null;
     document.getElementById("pl-results").innerHTML = planResultsHtml(); wirePlanResults();
     drawPlan(true); applyFilters(); fetchWalks(selectedOption());
   });
@@ -2593,21 +2706,65 @@ const walkInfo = new Map(); // "lon,lat|lon,lat" -> { coords, meters, secs }
 const walkKey = (l) => `${l.from.map((x) => x.toFixed(5))}|${l.to.map((x) => x.toFixed(5))}`;
 async function fetchWalks(o) {
   if (!o) return;
-  const todo = o.legs.filter((l) => l.kind === "walk" && !walkInfo.has(walkKey(l)));
+  const todo = o.legs.filter((l) => (l.kind === "walk" || l.kind === "bike") && !walkInfo.has(walkKey(l)));
   if (!todo.length) return;
   await Promise.all(todo.map(async (l) => {
     try {
-      const url = `https://api.mapbox.com/directions/v5/mapbox/walking/${l.from.join(",")};${l.to.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/${l.kind === "bike" ? "cycling" : "walking"}/${l.from.join(",")};${l.to.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
       const r = (await (await fetch(url)).json()).routes?.[0];
       if (r?.geometry?.coordinates?.length > 1) walkInfo.set(walkKey(l), { coords: [l.from, ...r.geometry.coordinates, l.to], meters: r.distance, secs: r.duration });
     } catch {}
   }));
   if (selectedOption() === o) { drawPlan(false); const el = document.querySelector(".pl-opt.open .pl-steps"); if (el) el.innerHTML = stepsHtml(o); }
 }
+// "Walk the whole way" / "Bike the whole way": Mapbox walking and cycling directions for the whole trip.
+const altInfo = new Map(); // "from|to" -> { walk: {coords, meters, secs}, bike: {...} }
+const altKey = () => `${planState.from.c.map((x) => x.toFixed(4))}|${planState.to.c.map((x) => x.toFixed(4))}`;
+async function fetchAlternatives() {
+  if (!planState.from || !planState.to) return;
+  const key = altKey(); if (altInfo.has(key)) return;
+  const out = {}; altInfo.set(key, out);
+  await Promise.all([["walk", "walking"], ["bike", "cycling"]].map(async ([k, profile]) => {
+    try {
+      const r = (await (await fetch(`https://api.mapbox.com/directions/v5/mapbox/${profile}/${planState.from.c.join(",")};${planState.to.c.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`)).json()).routes?.[0];
+      if (r?.geometry?.coordinates?.length > 1) out[k] = { coords: r.geometry.coordinates, meters: r.distance, secs: r.duration };
+    } catch {}
+  }));
+  if (altKey() === key) { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } }
+}
+// Walking (and, with the bike option on, cycling) beats every bus trip when it gets you there sooner, counting
+// the wait for the bus: then it's listed first, marked Fastest.
+function altFastest(k) {
+  const a = planState.from && planState.to ? altInfo.get(altKey()) : null, info = a?.[k], r = planState.result;
+  if (!info || !r) return false;
+  if (k === "bike" && !loadPrefs().bike) return false;
+  if (!r.options.length) return true;
+  const start = planDepart();
+  const busBest = r.arriveBy ? Math.min(...r.options.map((o) => o.arrive - o.depart)) : Math.min(...r.options.map((o) => o.arrive - Math.min(start, o.depart)));
+  return info.secs < busBest;
+}
+function altCardsHtml(which = "all") {
+  if (!planState.from || !planState.to) return "";
+  const a = altInfo.get(altKey()); if (!a) return "";
+  const mi = (m) => (m / 1609).toFixed(1);
+  const card = (k, icon, title, info, note) => {
+    if (!info || info.secs > 2.5 * 3600) return "";
+    const fastest = altFastest(k);
+    if ((which === "fastest" && !fastest) || (which === "rest" && fastest)) return "";
+    return `<li class="pl-opt ${planState.alt === k ? "open" : ""} ${fastest ? "pl-fastest" : ""}"><button type="button" class="pl-card" data-alt="${k}" aria-expanded="${planState.alt === k}">
+      <span class="pl-times"><strong><span class="pl-alt-ico">${icon}</span>${title}</strong><span>${dur(info.secs)}</span></span>
+      ${fastest ? `<span class="pl-fast-tag">Fastest: ${k === "walk" ? "walking" : "biking"} gets you there sooner than the bus</span>` : ""}
+      <span class="pl-meta">${mi(info.meters)} mi ∙ ${note}</span></button></li>`;
+  };
+  return card("walk", ICON.walk, "Walk the whole way", a.walk, "walking route from Mapbox")
+    + card("bike", ICON.bike, "Bike the whole way", a.bike, "bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available");
+}
 function planGeo() {
-  const f = [], o = selectedOption();
+  const f = [], o = planState.alt ? null : selectedOption();
+  const alt = planState.alt && planState.from && planState.to ? altInfo.get(altKey())?.[planState.alt] : null;
+  if (alt) f.push({ type: "Feature", properties: { kind: planState.alt }, geometry: { type: "LineString", coordinates: alt.coords } });
   if (o) for (const l of o.legs) {
-    if (l.kind === "walk") f.push({ type: "Feature", properties: { kind: "walk" }, geometry: { type: "LineString", coordinates: walkInfo.get(walkKey(l))?.coords || [l.from, l.to] } });
+    if (l.kind === "walk" || l.kind === "bike") f.push({ type: "Feature", properties: { kind: l.kind }, geometry: { type: "LineString", coordinates: walkInfo.get(walkKey(l))?.coords || [l.from, l.to] } });
     else {
       // Follow the route's actual shape between the boarding and alighting stops (straight lines if it can't be matched).
       const along = routeBetween(l.route, l.path[0], l.path[l.path.length - 1]);
@@ -3067,6 +3224,7 @@ const ICON = {
   locate: svg('<circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7.5"/>'),
   swap: svg('<path d="M8 4v14M8 4L4.5 7.5M8 4l3.5 3.5M16 20V6M16 20l-3.5-3.5M16 20l3.5-3.5"/>'),
   walk: svg('<circle cx="13" cy="4" r="1.8" fill="currentColor" stroke="none"/><path d="M10 21l2-6 2.5 2.5V21M8 12l2.5-4h3l2 3.5 2.5 1M12.5 8l-1 5"/>'),
+  bike: svg('<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-7h5l3 7M10 9l-1.5-3H6M15 9l-2 7"/>'),
   wheelchair: svg('<circle cx="11" cy="4.5" r="1.8" fill="currentColor" stroke="none"/><path d="M11 7.5v6h5l2.5 5"/><path d="M8 10.5a6 6 0 1 0 7.5 7.5"/>'),
   clock: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   landmark: svg('<path d="M3 21h18M5 21V10M19 21V10M9 21v-6h6v6M3 10l9-6 9 6z"/>'),

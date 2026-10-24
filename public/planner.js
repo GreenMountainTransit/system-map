@@ -15,6 +15,8 @@
   const TRANSFER_BUFFER = 120;    // at least 2 minutes to change buses
   const MAX_RIDES = 3;            // at most 3 buses (2 transfers)
   const DIRECT_WALK_M = 1600;     // also offer "just walk" if it's under about 20 minutes
+  const BIKE_MPS = 4.2;           // cycling speed, about 9.5 mph
+  const BIKE_ACCESS_M = 3200;     // bike-friendly mode: cycle up to ~2 miles to the first stop / from the last stop
 
   const L = () => globalThis.GMTLive;
   let net = null, netDay = null;
@@ -24,6 +26,7 @@
     return Math.hypot((lo2 - lo1) * k, la2 - la1) * 111320;
   };
   const walkSecs = (m) => Math.round((m * DETOUR) / WALK_MPS);
+  const bikeSecs = (m) => Math.round((m * DETOUR) / BIKE_MPS) + 60; // + a minute to lock or load the bike
 
   // ---------- network: built once per service day from the data/ files ----------
   // Midnight in Vermont at the start of a date (YYYYMMDD), as seconds since 1970 (right across daylight-saving changes).
@@ -89,12 +92,13 @@
 
   // ---------- one RAPTOR search ----------
   function raptor(n, from, to, depart, opt = {}) {
-    const S = n.stops.length, INF = Infinity, accessM = opt.accessM || ACCESS_M, transferM = opt.transferM || TRANSFER_M;
+    const S = n.stops.length, INF = Infinity, accessM = opt.bike ? BIKE_ACCESS_M : opt.accessM || ACCESS_M, transferM = opt.transferM || TRANSFER_M;
+    const endSecs = opt.bike ? bikeSecs : walkSecs; // getting to the first stop and from the last stop
     const usable = (i) => !opt.accessible || n.stops[i].acc !== "no"; // wheelchair mode: skip stops marked not accessible
-    const access = n.near(from, accessM).filter(([i]) => usable(i)), egress = new Map(n.near(to, accessM).filter(([i]) => usable(i)).map(([i, m]) => [i, walkSecs(m)]));
+    const access = n.near(from, accessM).filter(([i]) => usable(i)), egress = new Map(n.near(to, accessM).filter(([i]) => usable(i)).map(([i, m]) => [i, endSecs(m)]));
     const tau = [new Float64Array(S).fill(INF)], label = [new Array(S)], best = new Float64Array(S).fill(INF);
     let marked = new Set();
-    for (const [i, m] of access) { tau[0][i] = depart + walkSecs(m); best[i] = tau[0][i]; label[0][i] = { kind: "access", secs: walkSecs(m) }; marked.add(i); }
+    for (const [i, m] of access) { tau[0][i] = depart + endSecs(m); best[i] = tau[0][i]; label[0][i] = { kind: "access", secs: endSecs(m) }; marked.add(i); }
     const targetBest = () => { let b = INF; for (const [i, w] of egress) if (best[i] + w < b) b = best[i] + w; return b; };
 
     for (let k = 1; k <= MAX_RIDES && marked.size; k++) {
@@ -151,7 +155,7 @@
     while (k >= 0) {
       const lb = label[k][s];
       if (!lb) break;
-      if (lb.kind === "access") { legs.unshift({ kind: "walk", from, to: n.stops[s].c, toName: n.stops[s].name, secs: lb.secs }); break; }
+      if (lb.kind === "access") { legs.unshift({ kind: opt.bike ? "bike" : "walk", from, to: n.stops[s].c, toName: n.stops[s].name, secs: lb.secs }); break; }
       if (lb.kind === "walk") { legs.unshift({ kind: "walk", from: n.stops[lb.from].c, to: n.stops[s].c, fromName: n.stops[lb.from].name, toName: n.stops[s].name, secs: lb.secs }); s = lb.from; continue; }
       const p = n.patterns[lb.pattern], r = n.routes[p.route];
       legs.unshift({
@@ -163,18 +167,18 @@
       });
       s = lb.from; k--;
     }
-    legs.push({ kind: "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
+    legs.push({ kind: opt.bike ? "bike" : "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
     shortenWalks(n, legs, from, to, depart, opt);
     // Times: walking legs are placed right before / after the rides they connect.
     const firstRide = legs.find((l) => l.kind === "ride");
-    let t = firstRide.dep - (legs[0].kind === "walk" ? legs[0].secs : 0);
+    let t = firstRide.dep - (legs[0].kind !== "ride" ? legs[0].secs : 0);
     const start = Math.max(depart, t);
     for (const l of legs) {
       if (l.kind === "ride") { t = l.arr; continue; }
       l.start = l === legs[0] ? firstRide.dep - l.secs : t; l.end = l.start + l.secs; t = l.end;
     }
     const arrive = legs[legs.length - 1].end;
-    return { legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind === "walk" ? legs[0].start : firstRide.dep, arrive,
+    return { legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind !== "ride" ? legs[0].start : firstRide.dep, arrive,
       rides: legs.filter((l) => l.kind === "ride").length, leaveBy: start };
   }
 
@@ -191,21 +195,22 @@
       l.toStop = n.stops[l._p.stops[a]].id; l.toName = n.stops[l._p.stops[a]].name; l.arr = l._trip.times[a];
       l.stopsCount = a - b; l.path = l._p.stops.slice(b, a + 1).filter((x) => x != null).map((x) => n.stops[x].c);
     };
-    if (legs[0].kind === "walk" && legs[1] === first) {
+    const endSecs = (l) => (l.kind === "bike" ? bikeSecs : walkSecs);
+    if (legs[0].kind !== "ride" && legs[1] === first) {
       let best = first._b, bestW = legs[0].secs;
       for (let pos = 0; pos < first._a; pos++) {
         const sIdx = first._p.stops[pos]; if (!ok(sIdx)) continue;
-        const w = walkSecs(meters(from, n.stops[sIdx].c));
+        const w = endSecs(legs[0])(meters(from, n.stops[sIdx].c));
         if (w < bestW && first._trip.times[pos] - w >= depart - 60) { best = pos; bestW = w; }
       }
       if (best !== first._b) { set(first, best, first._a); legs[0].to = n.stops[first._p.stops[best]].c; legs[0].toName = first.fromName; legs[0].secs = bestW; }
     }
     const lastWalk = legs[legs.length - 1];
-    if (lastWalk.kind === "walk" && legs[legs.length - 2] === last) {
+    if (lastWalk.kind !== "ride" && legs[legs.length - 2] === last) {
       let best = last._a, bestW = lastWalk.secs;
       for (let pos = last._b + 1; pos < last._p.stops.length; pos++) {
         const sIdx = last._p.stops[pos]; if (!ok(sIdx)) continue;
-        const w = walkSecs(meters(n.stops[sIdx].c, to));
+        const w = endSecs(lastWalk)(meters(n.stops[sIdx].c, to));
         if (w < bestW) { best = pos; bestW = w; }
       }
       if (best !== last._a) { set(last, last._b, best); lastWalk.from = n.stops[last._p.stops[best]].c; lastWalk.fromName = last.toName; lastWalk.secs = bestW; }
@@ -224,7 +229,7 @@
   // not wheelchair accessible. Least-walking also searches with shorter walking limits, for options that walk less.
   async function plan({ from, to, depart, arriveBy, prefs = {}, dayOffset = 0 }) {
     const n = await network(dayOffset);
-    const opt = { accessible: !!prefs.accessible };
+    const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike };
     const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
     let result;
     if (arriveBy) result = planArriveBy(n, from, to, arriveBy, runs);
@@ -236,10 +241,11 @@
     return { ...result, options: sortByPref(result.options, prefs.sort), prefs };
   }
   const walkTotal = (o) => o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
+  const bikeTotal = (o) => o.legs.filter((l) => l.kind === "bike").reduce((a, l) => a + l.secs, 0);
   function sortByPref(options, sort) {
     const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides, walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive,
       transfers: (a, b) => a.rides - b.rides || a.arrive - b.arrive }[sort] || ((a, b) => a.arrive - b.arrive || a.rides - b.rides);
-    return options.slice().sort(by).slice(0, 4).map((o) => ({ ...o, walkSecs: walkTotal(o) }));
+    return options.slice().sort(by).slice(0, 4).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
   }
   function collect(n, from, to, depart, opt, options, seen) {
     // Search from the requested time, then again just after each option's first bus, to offer later choices too.
