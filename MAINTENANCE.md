@@ -217,11 +217,12 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Click-to-activate shade (embeds) | `public/index.html` | `Click to activate` |
 | Route draw-in animation on first load | `public/index.html` | `animateBuild` |
 | Walking limits for "service near you" | `public/index.html` | `const WALK` |
-| Place and address search (Vermont only) | `public/index.html` | `searchPlaces`, `VT_BBOX` |
+| Place and address search | `public/index.html` | `searchPlaces` |
 | Trip planner recent places and popular stops | `public/index.html` | `RECENT_MAX`, `popularStops` |
 | Trip planner preferences (fastest, least walking, fewest transfers, wheelchair-accessible stops, bike to and from the bus) | `public/planner.js` | `sortByPref`, `acc`, `BIKE_ACCESS_M` |
 | Walk / bike the whole way, and listing them first when fastest | `public/index.html` | `fetchAlternatives`, `altFastest` |
-| The ? help guide, and the 6-second hints by the buttons | `public/index.html` | `toggleHelp`, `ctrlHint` |
+| The ? Helpful hints, the first-visit hints, and hover labels on map buttons | `public/index.html` | `toggleHelp`, `ctrlHint`, `HOVER_LABELS` |
+| Place and address search area (Chittenden, Washington and Franklin counties) | `public/index.html` | `SERVICE_COUNTIES`, `VT_BBOX` |
 | 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) and the 3D stop sign | `public/bus3d.js` and `public/gmt-logo.png` | `busTexture`, `drawDriver`, `signTexture` |
 | 3D view: all buses in 3D, and street-level stop view | `public/index.html` | `fleetFrame`, `enterStopView` |

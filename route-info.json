@@ -84,7 +84,8 @@
     "bus_fare": 2.0,
     "bus_fare_daily_cap": 4.0,
     "fare_note": "$2.00 per ride, no free transfers; $4.00 daily cap with the Genfare Link app (GMT 2024 Urban Fare Plan)",
-    "mpg_source": "2021 statewide average fuel economy of Vermont's light-duty vehicles (Vermont energy planning data from VTrans and partners)"
+    "mpg_source": "2021 statewide average fuel economy of Vermont's light-duty vehicles (Vermont energy planning data from VTrans and partners)",
+    "learn_more_url": "https://exchange.aaa.com/automotive/aaas-your-driving-costs/"
   },
   "frequency_overrides": {
     "_help": "Routes that run at a set frequency all day, in minutes. Wherever such a route runs, the frequency map shows at least that often (combined with other routes on the same street).",
