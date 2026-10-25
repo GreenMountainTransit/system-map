@@ -83,9 +83,12 @@
     "depreciation_source": "Estimate of the extra loss in a used compact car's value from added miles",
     "bus_fare": 2.0,
     "bus_fare_daily_cap": 4.0,
-    "fare_note": "$2.00 per ride, no free transfers; $4.00 daily cap with the Genfare Link app (GMT 2024 Urban Fare Plan)",
+    "fare_note": "$2 a ride; with the Ride Ready by GMT app or smart card, fares stop at $4 a day and $50 a month (25 rides). Discounted fare $1. Shopping Specials are free.",
     "mpg_source": "2021 statewide average fuel economy of Vermont's light-duty vehicles (Vermont energy planning data from VTrans and partners)",
-    "learn_more_url": "https://exchange.aaa.com/automotive/aaas-your-driving-costs/"
+    "learn_more_url": "https://exchange.aaa.com/automotive/aaas-your-driving-costs/",
+    "bus_fare_discounted": 1.0,
+    "bus_fare_monthly_cap": 50.0,
+    "fare_url": "https://www.ridegmt.com/166/Fare-Chart"
   },
   "frequency_overrides": {
     "_help": "Routes that run at a set frequency all day, in minutes. Wherever such a route runs, the frequency map shows at least that often (combined with other routes on the same street).",

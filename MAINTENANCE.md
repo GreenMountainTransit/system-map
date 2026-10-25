@@ -106,7 +106,7 @@ Without this, the Street View section in stop details shows a link that opens Go
 ### Trip planner: driving-cost comparison
 Each suggested trip shows what driving it would cost in a typical car compared with the bus fare, with a **?** that explains the method. The figures are in `route-info.json` under `"trip_costs"`:
 - `gas_price` and `gas_price_as_of`: update every few months (AAA's Vermont average is at gasprices.aaa.com/?state=VT).
-- `bus_fare`, `bus_fare_daily_cap`, `fare_note`: update if GMT's fares change.
+- `bus_fare`, `bus_fare_discounted`, `bus_fare_daily_cap`, `bus_fare_monthly_cap`, `fare_url`: update if GMT's fares change (see ridegmt.com/166/Fare-Chart). The planner shows the regular fare, a "frequent riders pay about $1 a ride" line based on the monthly cap, the discounted fare, and a link to the fare chart. Shopping Specials count as free.
 - `mpg` (now the Vermont statewide average, 22 mpg, with `mpg_source`), `maintenance_cents_per_mile`, `depreciation_cents_per_mile` and their sources: update when AAA publishes a new Your Driving Costs study (each September), or if you choose a different typical car.
 Commit the file and the map picks up the new figures with the next build. Driving distances come from Mapbox driving directions (one request per trip searched, counted in Mapbox's free directions allowance).
 
@@ -220,9 +220,11 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Place and address search | `public/index.html` | `searchPlaces` |
 | Trip planner recent places and popular stops | `public/index.html` | `RECENT_MAX`, `popularStops` |
 | Trip planner preferences (fastest, least walking, fewest transfers, wheelchair-accessible stops, bike to and from the bus) | `public/planner.js` | `sortByPref`, `acc`, `BIKE_ACCESS_M` |
-| Walk / bike the whole way, and listing them first when fastest | `public/index.html` | `fetchAlternatives`, `altFastest` |
+| Walk / bike options and how trip options are sorted (one list, badge on top) | `public/index.html` | `fetchAlternatives`, `altCard`, `planResultsHtml` |
+| Climbing avoided on bike-and-bus trips (Mapbox elevation tiles) | `public/index.html` | `climb`, `bikeClimbHtml` |
+| Directions from a searched place (Google Maps style) | `public/index.html` | `goDirections` |
 | The ? Helpful hints, the first-visit hints, and hover labels on map buttons | `public/index.html` | `toggleHelp`, `ctrlHint`, `HOVER_LABELS` |
-| Place and address search area (Chittenden, Washington and Franklin counties) | `public/index.html` | `SERVICE_COUNTIES`, `VT_BBOX` |
+| Place and address search area (Chittenden, Washington and Franklin counties; Chittenden listed first) | `public/index.html` | `SERVICE_COUNTIES`, `VT_BBOX`, `chittendenFirst` |
 | 3D view and following a bus (desktop) | `public/index.html` | `setThreeD`, `startFollow` (size: `BUS_LEN`; how far behind live it replays: `FOLLOW_DELAY_MS`) |
 | The detailed 3D bus (livery, logo, driver, signs) and the 3D stop sign | `public/bus3d.js` and `public/gmt-logo.png` | `busTexture`, `drawDriver`, `signTexture` |
 | 3D view: all buses in 3D, and street-level stop view | `public/index.html` | `fleetFrame`, `enterStopView` |
