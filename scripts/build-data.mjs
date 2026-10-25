@@ -244,7 +244,14 @@ const FREQ_WINDOWS = {
 // holiday running the Sunday schedule can't drop routes that don't run Sundays (like Route 8). The date below
 // only picks which schedule period applies (the current one); if a feed has no regular calendar, the busiest
 // upcoming weekday is used instead.
-const regularWeekdayServices = (ymd) => new Set(cal.cal.filter((c) => c.a <= ymd && ymd <= c.b && [0, 1, 2, 3, 4].every((d) => c.d[d])).map((c) => c.s));
+// A service counts as regular weekday service if it runs on most weekdays in the next two weeks, reading both
+// calendar.txt and calendar_dates.txt (some feeds define services only by date). A holiday or one-off change is a
+// single day, so it can't flip that, and routes defined only by date (like Route 8 may be) are still included.
+const weekdaysAhead = upcoming.filter((u) => u.dow < 5);
+const serviceDays = new Map();
+for (const u of weekdaysAhead) for (const sid of servicesOn(u.ymd, u.dow)) serviceDays.set(sid, (serviceDays.get(sid) || 0) + 1);
+const regularSet = new Set([...serviceDays].filter(([, n]) => n >= Math.ceil(weekdaysAhead.length * 0.6)).map(([sid]) => sid));
+const regularWeekdayServices = () => regularSet;
 const tripsWith = (on) => { let n = 0; for (const sc of schedByRoute.values()) for (const t of sc) if (on.has(t.s)) n++; return n; };
 const weekdayChoices = upcoming.filter((u) => u.dow < 5).map((u) => {
   const regular = regularWeekdayServices(u.ymd);
@@ -259,6 +266,8 @@ const freqFeatures = [];
 {
   const tripShape = Object.fromEntries(trips.map((t) => [t.trip_id, t.shape_id]));
   const segs = new Map(); // "a>b" -> { coords, n: {peak, mid, ...}, routes:Set }
+  // Inbound = the trip ends at the Downtown Transit Center.
+  const isInbound = (trip) => /downtown transit center/i.test(stopById[trip.st[trip.st.length - 1][0]]?.stop_name || "");
   const sliceCache = new Map();
   // Cut a shape into pieces between consecutive stops by projecting each stop onto it in order.
   function hops(shapeId, stopIds) {
@@ -307,9 +316,10 @@ const freqFeatures = [];
         for (let i = 0; i < ids.length - 1; i++) {
           if (ids[i] === ids[i + 1]) continue;
           const key = ids[i] + ">" + ids[i + 1];
-          if (!segs.has(key)) segs.set(key, { coords: pieces[i], trips: new Map(), routes: new Set() });
+          if (!segs.has(key)) segs.set(key, { coords: pieces[i], trips: new Map(), routes: new Set(), inbound: new Set() });
           const sg = segs.get(key);
           sg.routes.add(routeId); sg.trips.set(trip.t, [trip.st[i][1], trip.st[i + 1][1]]); // leaves stop i, reaches stop i+1
+          if (isInbound(trip)) sg.inbound.add(routeId);
         }
       }
     }
@@ -353,7 +363,15 @@ const freqFeatures = [];
   };
   // Routes GMT knows run at a set frequency all day (route-info.json "frequency_overrides", e.g. {"2": 20}):
   // wherever such a route runs, the street shows at least that often, combined with any other routes there.
-  const overrides = Object.fromEntries(Object.entries(routeInfo.frequency_overrides || {}).filter(([k]) => !k.startsWith("_")).map(([k, v]) => [String(k), +v]).filter(([, v]) => v > 0));
+  // Each override is minutes for every time period ("8": 30), or per period, optionally for inbound trips only
+  // (toward the Downtown Transit Center): "2": { "peak": 20, "mid": 20 }, "9": { "mid": 30, "inbound_only": true }.
+  const overrides = {};
+  for (const [k, v] of Object.entries(routeInfo.frequency_overrides || {})) {
+    if (k.startsWith("_")) continue;
+    if (typeof v === "number" && v > 0) overrides[String(k)] = { peak: v, mid: v, eve: v };
+    else if (v && typeof v === "object") overrides[String(k)] = { ...Object.fromEntries(Object.keys(FREQ_WINDOWS).filter((w) => +v[w] > 0).map((w) => [w, +v[w]])), inbound_only: !!v.inbound_only };
+  }
+  const overrideText = (o) => (o ? Object.keys(FREQ_WINDOWS).filter((w) => o[w]).map((w) => `${w} every ${o[w]} min`).join(", ") + (o.inbound_only ? " (inbound)" : "") : "");
   const shortOf = (rid) => String(routeById[rid]?.route_short_name || rid);
   const candidates = [];
   for (const [idx, d] of directed.entries()) {
@@ -371,12 +389,15 @@ const freqFeatures = [];
         (dot > 0 ? same : opp).set(o.idx, o.frac);
       }
       const g = gapsAt(same), go = opp.size ? gapsAt(opp) : null;
-      const routesAtPoint = new Set();
-      [...same.keys(), ...opp.keys()].forEach((i) => directed[i].routes.forEach((r) => { routesHere.add(r); routesAtPoint.add(r); }));
-      const floor = Math.min(...[...routesAtPoint].map((r) => overrides[shortOf(r)] ?? Infinity));
+      const routesAtPoint = new Set(), inboundAtPoint = new Set();
+      [...same.keys(), ...opp.keys()].forEach((i) => { directed[i].routes.forEach((r) => { routesHere.add(r); routesAtPoint.add(r); }); directed[i].inbound?.forEach((r) => inboundAtPoint.add(r)); });
+      // The override that applies here in a time period: the route runs here (inbound, if the override says so).
+      const floorFor = (w) => Math.min(...[...routesAtPoint].map((r) => { const o = overrides[shortOf(r)];
+        return o && o[w] && (!o.inbound_only || inboundAtPoint.has(r)) ? o[w] : Infinity; }));
       const here = { v: {}, routes: routesAtPoint };
       for (const w of Object.keys(FREQ_WINDOWS)) {
         // No directionality: use whichever direction has more buses at this point.
+        const floor = floorFor(w);
         const vals = [g[w], go?.[w], isFinite(floor) ? floor : null].filter((x) => x != null);
         if (vals.length) { perSample[w].push(Math.min(...vals)); here.v[w] = Math.min(...vals); }
       }
@@ -460,7 +481,7 @@ const freqFeatures = [];
       const inWindows = weekday.filter((t) => Object.values(FREQ_WINDOWS).some((def) => def.hours.some(([h0, h1]) => t.st[0][1] < h1 * 3600 && t.st[t.st.length - 1][1] >= h0 * 3600)));
       const drawnN = drawnByRoute.get(routeId) || 0;
       const why = !weekday.length ? "no trips in the regular weekday schedule" : !inWindows.length ? "no trips during the rush hour, midday or evening windows" : !drawnN ? "every street it uses is already drawn under other routes" : "";
-      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set to every ${overrides[short]} min)` : ""}${why ? " -- " + why : ""}`);
+      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set: ${overrideText(overrides[short])})` : ""}${why ? " -- " + why : ""}`);
       if (!drawnN && weekday.length) console.log(`::warning::Frequency map: Route ${short} has no lines of its own (${why || "no frequency found"}).`);
     }
     console.log("Frequency map by route: " + report.join("; "));
@@ -672,6 +693,19 @@ write("routes.geojson", { type: "FeatureCollection", features: lineFeatures });
 write("frequency.geojson", { type: "FeatureCollection", features: freqFeatures });
 write("stops.geojson", { type: "FeatureCollection", features: stopFeatures });
 if (overriddenStops) console.log(`Amenity overrides applied to ${overriddenStops} stop${overriddenStops === 1 ? "" : "s"} (route-info.json)`);
+// Each route's last regular-weekday departure from the Downtown Transit Center (shown in the frequency map's evening view).
+{
+  const dtc = new Set(stops.filter((st) => /downtown transit center/i.test(st.stop_name || "")).map((st) => st.stop_id));
+  const fmt = (sec) => { const h = Math.floor(sec / 3600) % 24, m = Math.floor((sec % 3600) / 60); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
+  for (const r of routeList) {
+    let last = -1;
+    for (const t of schedByRoute.get(r.route_id) || []) {
+      if (!freqServices.has(t.s)) continue;
+      for (let i = 0; i < t.st.length - 1; i++) if (dtc.has(t.st[i][0]) && t.st[i][1] > last) last = t.st[i][1]; // departures only (not the last stop)
+    }
+    if (last >= 0) r.last_from_dtc = fmt(last);
+  }
+}
 write("routes.json", { tripCosts: routeInfo.trip_costs || null, built: todayNY, groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
 write("calendar.json", cal);
 write("headsigns.json", headsigns);
