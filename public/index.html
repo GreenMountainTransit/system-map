@@ -99,6 +99,8 @@
     .pl-list { max-height: 45vh; overscroll-behavior: contain; }
   }
   .pl-fastest { border-color: var(--live) !important; }
+  .pl-climb { display: flex; gap: 6px; align-items: flex-start; margin: 0 12px 8px; font-size: .78rem; color: var(--live); font-weight: 600; } .pl-climb svg { width: 16px; height: 16px; flex: none; }
+  .pl-sortnote { margin: 10px 0 0; font-size: .76rem; font-weight: 600; color: var(--ink); }
   .pl-fast-tag { font-size: .74rem; font-weight: 700; color: var(--live); }
   .pl-alt-ico { display: inline-flex; vertical-align: -3px; margin-right: 5px; color: var(--gmt); } .pl-alt-ico svg { width: 16px; height: 16px; }
   .pl-nextday { font-size: .74rem; font-weight: 600; color: #9a3412; }
@@ -117,6 +119,7 @@
   .pl-accnote svg { width: 14px; height: 14px; flex: none; }
   .pl-cost { margin: 0 12px 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: #f7f9f8; font-size: .82rem; }
   .pl-cost p { margin: 0; } .pl-cost strong { color: var(--live); }
+  .pl-frequent { margin-top: 5px !important; padding-top: 5px; border-top: 1px dashed var(--line); } .pl-frequent a { color: var(--gmt); font-weight: 600; }
   .pl-cost-sub { margin-top: 2px !important; font-size: .74rem; color: var(--muted); }
   .pl-why { margin-left: 6px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #9aa7a0; background: #fff; color: var(--muted); font: 700 .7rem/1 inherit; cursor: pointer; vertical-align: 1px; padding: 0; }
   .pl-why[aria-expanded=true] { background: var(--ink); color: #fff; border-color: var(--ink); }
@@ -297,6 +300,9 @@
   .closed-tag { color: #c2410c; font-weight: 700; }
   #debug-box { position: absolute; left: 8px; bottom: 8px; z-index: 30; margin: 0; max-width: calc(100% - 16px); white-space: pre-wrap; font: 11px/1.4 ui-monospace, Menlo, monospace;
     background: rgba(0,0,0,.78); color: #b9f6ca; padding: 8px 10px; border-radius: 4px; pointer-events: none; }
+  .near-actions { padding: 10px 16px 0; }
+  .dir-btn { display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; padding: 8px 14px; font: inherit; font-size: .86rem; font-weight: 700; cursor: pointer; }
+  .dir-btn svg { width: 17px; height: 17px; }
   .near-route { border-top: 1px solid var(--line); padding: 8px 0 4px; } .near-route:first-child { border-top: 0; padding-top: 0; }
   .near-head { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: .86rem; }
   .near-opt { display: grid; gap: 1px; width: 100%; text-align: left; background: none; border: 0; border-radius: 4px; padding: 7px 8px; cursor: pointer; font: inherit; }
@@ -1236,7 +1242,10 @@ const WALK = { mps: 1.25, detour: 1.3, maxM: 8000 }; // show the nearest stops u
 const walkText = (m) => m < 1600 ? `${walkMin(m)} min walk (${Math.round(m / 10) * 10} m)` : `${(m / 1609).toFixed(1)} mi away (about ${walkMin(m)} min walk)`;
 const walkMin = (m) => Math.max(1, Math.round((m * WALK.detour) / WALK.mps / 60));
 const meters = (a, b) => { const k = Math.cos((a[1] * Math.PI) / 180); return Math.hypot((b[0] - a[0]) * k, b[1] - a[1]) * 111320; };
-async function showNearby(here, title, onlyRoutes) {
+// place: { label } for a searched or picked place: labeled on the map, with Directions to it (and it becomes the
+// trip planner's destination, like Google Maps).
+async function showNearby(here, title, onlyRoutes, place) {
+  if (place?.label && !routeParam) planState.to = { c: here, label: place.label };
   closeStop();
   const near = Object.values(stopsById).map((s) => [s, meters(here, s.coords)]).filter(([, m]) => m <= WALK.maxM);
   let routeIds = onlyRoutes || [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r] && visibleRoutes().includes(r));
@@ -1258,11 +1267,13 @@ async function showNearby(here, title, onlyRoutes) {
   openStopId = "near:" + here.join(",");
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span><h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
       <button type="button" class="sp-close" aria-label="Close">×</button></div>
-    <div class="sp-body"><div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
+    <div class="sp-body">${place?.label ? `<div class="near-actions"><button type="button" class="dir-btn" id="near-dir">${ICON.directions}Directions</button></div>` : ""}
+      <div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
   stopPanel.hidden = false; document.getElementById("wrap").classList.add("stop-open"); map.resize();
   stopPanel.querySelector(".sp-close").onclick = () => { closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
   if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
-  map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: here } }] });
+  map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: { name: place?.label || "" }, geometry: { type: "Point", coordinates: here } }] });
+  document.getElementById("near-dir")?.addEventListener("click", () => goDirections({ c: here, label: place.label }));
   if (options.length) {
     const b = new mapboxgl.LngLatBounds(here, here); options.slice(0, 2).forEach((o) => b.extend(o.st.coords)); // refined below once times are in
     map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
@@ -1455,6 +1466,9 @@ function addOverlay() {
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
   // "Near you" / searched address marker
   if (!map.getSource("near")) map.addSource("near", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  add({ id: "near-label", type: "symbol", source: "near", layout: { "text-field": ["get", "name"], "text-size": 13, "text-anchor": "bottom", "text-offset": [0, -1.1],
+      "text-max-width": 14, "text-allow-overlap": true, "text-ignore-placement": true },
+    paint: { "text-color": sat ? "#fff" : "#0b3d6e", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 2 } }, "top");
   add({ id: "near-pt", type: "circle", source: "near", paint: { "circle-radius": 8, "circle-color": "#0b5cad", "circle-stroke-color": "#fff", "circle-stroke-width": 3 } }, "top");
   // Trip planner: the chosen trip's rides (route colors), walks (dashed) and start/end points.
   if (!map.getSource("plan")) map.addSource("plan", { type: "geojson", data: planGeo() });
@@ -2328,6 +2342,10 @@ const inVermont = (ctx, c) => {
   if (county) return SERVICE_COUNTIES.test(county.trim());
   return !c || (c[0] >= -73.45 && c[0] <= -72.2 && c[1] >= 44.05 && c[1] <= 45.02);
 };
+// Chittenden County results first (GMT's core service area), then Washington and Franklin, keeping Mapbox's order otherwise.
+const inChittenden = (ctx, c) => { const county = ctx?.district?.name; if (county) return /^chittenden/i.test(county.trim());
+  return !!c && c[0] >= -73.45 && c[0] <= -72.85 && c[1] >= 44.25 && c[1] <= 44.70; };
+const chittendenFirst = (list) => list.map((x, i) => [x, i]).sort((a, b) => (b[0]._ch - a[0]._ch) || (a[1] - b[1])).map(([x]) => { delete x._ch; return x; });
 async function searchPlaces(q, limit = 6) {
   const near = map.getCenter ? map.getCenter().toArray().map((x) => x.toFixed(4)).join(",") : "-73.2,44.48";
   try {
@@ -2337,16 +2355,43 @@ async function searchPlaces(q, limit = 6) {
     const out = ((await res.json()).features || []).filter((f) => inVermont(f.properties.context, f.geometry.coordinates)).map((f) => ({
       c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address,
       sub: f.properties.feature_type === "poi" ? (f.properties.full_address || f.properties.place_formatted || "") : (f.properties.place_formatted || ""),
-      poi: f.properties.feature_type === "poi" }));
-    return out.slice(0, limit);
+      poi: f.properties.feature_type === "poi", _ch: inChittenden(f.properties.context, f.geometry.coordinates) ? 1 : 0 }));
+    return chittendenFirst(out).slice(0, limit);
   } catch {
     try { // fallback: address search, also limited to Vermont
       const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(q)}&proximity=${near}&bbox=${VT_BBOX}&country=us&limit=8&autocomplete=true&access_token=${MAPBOX_TOKEN}`;
       const res = await (await fetch(url)).json();
-      return (res.features || []).filter((f) => inVermont(f.properties.context, f.geometry.coordinates)).slice(0, limit)
-        .map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "" }));
+      return chittendenFirst((res.features || []).filter((f) => inVermont(f.properties.context, f.geometry.coordinates))
+        .map((f) => ({ c: f.geometry.coordinates, label: f.properties.name || f.properties.full_address, sub: f.properties.place_formatted || "", _ch: inChittenden(f.properties.context, f.geometry.coordinates) ? 1 : 0 }))).slice(0, limit);
     } catch { return []; }
   }
+}
+
+// "Directions" to a place: it becomes the destination; the start is your location if this browser already allows
+// location access (as in Google Maps), otherwise the From box is ready for typing. On a route page, this opens the
+// full trip planner.
+async function goDirections(place) {
+  if (routeParam) {
+    const u = new URL(location.href); u.search = ""; u.searchParams.set("view", "plan");
+    u.searchParams.set("to", place.c.map((x) => x.toFixed(5)).join(",")); u.searchParams.set("toLabel", place.label);
+    location.href = u.toString(); return;
+  }
+  planState.to = place; planState.alt = null;
+  closeStop();
+  setView("plan"); buildSystemPanel();
+  if (isPhone() && sheetState !== "open") setSheet(true);
+  let allowed = false;
+  try { allowed = (await navigator.permissions?.query({ name: "geolocation" }))?.state === "granted"; } catch {}
+  if (!planState.from && allowed && navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition((p) => { planState.from = { c: [p.coords.longitude, p.coords.latitude], label: "My location" }; buildSystemPanel(); planTrip(); },
+      () => document.getElementById("pl-from")?.focus(), { timeout: 8000 });
+  } else if (!planState.from) document.getElementById("pl-from")?.focus();
+  else planTrip();
+}
+// A link from a route page: ?view=plan&to=lon,lat&toLabel=...
+{
+  const q = new URLSearchParams(location.search), to = q.get("to");
+  if (to && /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(to)) planState.to = { c: to.split(",").map(Number), label: q.get("toLabel") || "Destination" };
 }
 
 // ---------- trip planner ----------
@@ -2600,31 +2645,50 @@ const dur = (secs) => { const m = Math.round(secs / 60); return m < 60 ? `${m} m
 function planResultsHtml() {
   const r = planState.result;
   if (!r) return "";
-  if (!r.options.length && !r.walkOnly && !altCardsHtml()) return `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again."
+  if (!r.options.length && !r.walkOnly && !altCardsHtml().replace(/@@BADGE@@/g, "")) return `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again."
     : r.prefs?.accessible ? "No trips found using wheelchair-accessible stops within about a 10-minute walk at that time. Try another time, or turn off the accessible-stops option to see all trips."
     : "No bus trips found for that time. Try a later time, or a starting point closer to a GMT route."}</p>`;
-  const cards = r.options.map((o, i) => {
+  const sort = loadPrefs().sort || "fastest", start = planDepart();
+  const entries = r.options.map((o, i) => {
     const chips = o.legs.map((l) => l.kind !== "ride" ? `<span class="pl-walk">${l.kind === "bike" ? ICON.bike : ICON.walk}${Math.max(1, Math.round(l.secs / 60))}</span>`
       : `<span class="chip" style="background:${esc(l.color)};color:${esc(l.text)}">${esc(l.short)}</span>`).join(`<span class="pl-sep">›</span>`);
-    const open = i === planState.selected;
-    return `<li class="pl-opt ${open ? "open" : ""}"><button type="button" class="pl-card" data-opt="${i}" aria-expanded="${open}">
+    const open = !planState.alt && i === planState.selected;
+    const html = `<li class="pl-opt ${open ? "open" : ""}"><button type="button" class="pl-card" data-opt="${i}" aria-expanded="${open}">
         <span class="pl-times"><strong>${clock(o.depart)} – ${dayTag(o.arrive, o.depart)}${clock(o.arrive)}</strong><span>${dur(o.arrive - o.depart)}</span></span>
         ${vtDate(o.arrive) !== vtDate(o.depart) ? `<span class="pl-nextday">Continues the next morning: no later connection runs that day.</span>` : ""}
         <span class="pl-chips">${chips}</span>
-        <span class="pl-meta">${o.rides === 1 ? "No transfers" : `${o.rides - 1} transfer${o.rides > 2 ? "s" : ""}`} ∙ ${o.bikeSecs ? `${Math.max(1, Math.round(o.bikeSecs / 60))} min biking ∙ ` : ""}${o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : o.bikeSecs ? "" : "No walking"}</span>
+        <span class="pl-meta">${[o.rides === 1 ? "No transfers" : `${o.rides - 1} transfer${o.rides > 2 ? "s" : ""}`,
+          o.bikeSecs ? `${Math.max(1, Math.round(o.bikeSecs / 60))} min biking` : "",
+          o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : o.bikeSecs ? "" : "No walking"].filter(Boolean).join(" ∙ ")}</span>
         ${r.prefs?.accessible ? accessNote(o) : ""}
         <span class="pl-live src-line ${planState.live[i]?.live ? "live" : ""}" data-live-for="${i}">${liveLine(o, planState.live[i])}</span>
-      </button>${open ? `<ol class="pl-steps">${stepsHtml(o)}</ol>${costHtml(o)}` : ""}</li>`;
-  }).join("");
-  // Walking and cycling the whole way (Mapbox directions); until they arrive, the straight-line walking estimate.
-  const walk = altCardsHtml("rest") || (altCardsHtml("fastest") ? "" : r.walkOnly ? `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span>
-      <span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles. It may be quicker than waiting for a bus.</span></div></li>` : "");
+        @@BADGE@@</button>${open ? `<ol class="pl-steps">${stepsHtml(o)}</ol>${bikeClimbHtml(o)}${costHtml(o)}` : ""}</li>`;
+    return { bus: true, arrive: o.arrive, depart: o.depart, walk: o.walkSecs || 0, rides: o.rides, html };
+  });
+  // Walk / Bike the whole way: arriving at start + travel time (or, for "Arrive by", leaving that long before).
+  for (const k of ["walk", "bike"]) {
+    const html = altCard(k); if (!html) continue;
+    const secs = altInfo.get(altKey())[k].secs;
+    // Biking competes for the top spot only when the rider has said they're biking; otherwise it's listed after.
+    entries.push({ bus: false, extra: k === "bike" && !loadPrefs().bike, arrive: r.arriveBy ? r.arriveBy : start + secs, depart: r.arriveBy ? r.arriveBy - secs : start, walk: k === "walk" ? secs : 0, rides: 0, html });
+  }
+  if (!entries.length && r.walkOnly) entries.push({ bus: false, arrive: start + r.walkOnly.secs, depart: start, walk: r.walkOnly.secs, rides: 0,
+    html: `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span><span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles.</span>@@BADGE@@</div></li>` });
+  // Fastest: everything together by arrival (Arrive by: latest departure). Least walking / Fewest transfers: bus trips
+  // by that measure, then walking and biking.
+  const byArrival = (x, y) => (r.arriveBy ? y.depart - x.depart : x.arrive - y.arrive);
+  const order = {
+    fastest: byArrival,
+    walk: (x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : x.walk - y.walk || byArrival(x, y)),
+    transfers: (x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : x.rides - y.rides || byArrival(x, y)),
+  }[sort] || byArrival;
+  entries.sort((x, y) => (!!x.extra - !!y.extra) || order(x, y));
+  const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
+  const cards = entries.map((e, i) => e.html.replace("@@BADGE@@", i === 0 ? `<span class="pl-fast-tag">${badge}</span>` : "")).join("");
+  const sortNote = `<p class="pl-sortnote">${{ fastest: r.arriveBy ? "Fastest first: leaving latest while still arriving on time" : "Fastest first: soonest arrival, including walking and biking", walk: "Least walking first, then walking and biking options", transfers: "Fewest transfers first, then walking and biking options" }[sort]}</p>`;
   const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
-  // Fastest sort: walking/biking the whole way goes first when it beats the bus.
-  const top = (loadPrefs().sort || "fastest") === "fastest" ? altCardsHtml("fastest") : "";
-  const bottom = top ? walk : walk + ((loadPrefs().sort || "fastest") === "fastest" ? "" : altCardsHtml("fastest"));
-  return `${dayNote}${swipeNote}<ul class="pl-opts">${top}${cards}${bottom}</ul>
+  return `${dayNote}${swipeNote}${sortNote}<ul class="pl-opts">${cards}</ul>
     <p class="src">Trips use GMT’s timetable with walking up to about 10 minutes and at least 2 minutes to transfer. The first bus is checked against live predictions.</p>`;
 }
 // Wheelchair mode: say which boarding/alighting stops aren't confirmed accessible (stops marked inaccessible are avoided).
@@ -2653,12 +2717,16 @@ function costHtml(o) {
   const key = `${planState.from.c.map((x) => x.toFixed(4))}|${planState.to.c.map((x) => x.toFixed(4))}`, miles = driveCache.get(key);
   if (miles == null) return `<p class="pl-cost">Working out the cost of driving…</p>`;
   const perMile = c.gas_price / c.mpg + (c.maintenance_cents_per_mile + c.depreciation_cents_per_mile) / 100;
-  const drive = miles * perMile, fare = Math.min(o.rides * c.bus_fare, c.bus_fare_daily_cap || Infinity), save = drive - fare;
+  // Shopping Specials are fare-free; other rides are $2 each, up to the $4 daily cap (Ride Ready app or card).
+  const paidRides = o.legs.filter((l) => l.kind === "ride" && routes[l.route]?.group !== "shopping").length;
+  const drive = miles * perMile, fare = Math.min(paidRides * c.bus_fare, c.bus_fare_daily_cap || Infinity), save = drive - fare;
   const money = (x) => `$${x.toFixed(2)}`;
   return `<div class="pl-cost">
       <p>${save >= 0.25 ? `<strong>Save about ${money(save)}</strong> compared with driving` : `Driving costs about <strong>${money(drive)}</strong>; the bus fare is ${money(fare)}`}
         <button type="button" class="pl-why" aria-expanded="false" aria-controls="pl-why-${o.depart}" title="What's this?">?</button></p>
-      <p class="pl-cost-sub">Driving ${miles.toFixed(1)} mi ≈ ${money(drive)} ∙ bus fare ${money(fare)}${o.rides > 1 ? ` (${o.rides} rides)` : ""}</p>
+      <p class="pl-cost-sub">Driving ${miles.toFixed(1)} mi ≈ ${money(drive)} ∙ bus fare ${fare ? money(fare) : "free"}${paidRides > 1 ? ` (${paidRides} rides)` : ""}</p>
+      ${fare && c.bus_fare_monthly_cap ? `<p class="pl-cost-sub pl-frequent">Frequent riders pay about $${(c.bus_fare_monthly_cap / (2 * Math.round(c.bus_fare_monthly_cap / c.bus_fare))).toFixed(0)} a ride: with the Ride Ready by GMT app or card, fares stop at ${money(c.bus_fare_daily_cap)} a day and ${money(c.bus_fare_monthly_cap)} a month (${Math.round(c.bus_fare_monthly_cap / c.bus_fare)} rides). Discounted fare ${money(c.bus_fare_discounted || 1)}.
+        ${c.fare_url ? `<a href="${esc(c.fare_url)}" target="_blank" rel="noopener">Fare details ↗</a>` : ""}</p>` : ""}
       <div class="pl-why-box" id="pl-why-${o.depart}" hidden>
         <p>An estimate of this one-way trip by car: fuel at ${money(c.gas_price)} a gallon and ${c.mpg} mpg (Vermont’s average), plus typical upkeep and wear,
           about ${(perMile * 100).toFixed(0)}¢ a mile over the ${miles.toFixed(1)}-mile drive, compared with the bus fare. Insurance, parking and your time aren’t included.
@@ -2741,22 +2809,64 @@ function altFastest(k) {
   const busBest = r.arriveBy ? Math.min(...r.options.map((o) => o.arrive - o.depart)) : Math.min(...r.options.map((o) => o.arrive - Math.min(start, o.depart)));
   return info.secs < busBest;
 }
-function altCardsHtml(which = "all") {
-  if (!planState.from || !planState.to) return "";
-  const a = altInfo.get(altKey()); if (!a) return "";
-  const mi = (m) => (m / 1609).toFixed(1);
-  const card = (k, icon, title, info, note) => {
-    if (!info || info.secs > 2.5 * 3600) return "";
-    const fastest = altFastest(k);
-    if ((which === "fastest" && !fastest) || (which === "rest" && fastest)) return "";
-    return `<li class="pl-opt ${planState.alt === k ? "open" : ""} ${fastest ? "pl-fastest" : ""}"><button type="button" class="pl-card" data-alt="${k}" aria-expanded="${planState.alt === k}">
-      <span class="pl-times"><strong><span class="pl-alt-ico">${icon}</span>${title}</strong><span>${dur(info.secs)}</span></span>
-      ${fastest ? `<span class="pl-fast-tag">Fastest: ${k === "walk" ? "walking" : "biking"} gets you there sooner than the bus</span>` : ""}
-      <span class="pl-meta">${mi(info.meters)} mi ∙ ${note}</span></button></li>`;
-  };
-  return card("walk", ICON.walk, "Walk", a.walk, "walking route from Mapbox")
-    + card("bike", ICON.bike, "Bike", a.bike, "bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available");
+// ---------- climbing on bike routes (Mapbox elevation tiles) ----------
+// Elevation comes from Mapbox's Terrain-RGB tiles (zoom 14, about 10 m per pixel), decoded in the browser.
+const demTiles = new Map();
+function demTile(x, y, z = 14) {
+  const key = `${z}/${x}/${y}`;
+  if (!demTiles.has(key)) demTiles.set(key, new Promise((res) => {
+    const im = new Image(); im.crossOrigin = "anonymous";
+    im.onload = () => { const c = document.createElement("canvas"); c.width = c.height = 256; const g = c.getContext("2d"); g.drawImage(im, 0, 0); res(g.getImageData(0, 0, 256, 256).data); };
+    im.onerror = () => res(null);
+    im.src = `https://api.mapbox.com/v4/mapbox.terrain-rgb/${z}/${x}/${y}.pngraw?access_token=${MAPBOX_TOKEN}`;
+  }));
+  return demTiles.get(key);
 }
+async function elevationAt([lon, lat]) {
+  const z = 14, n = 2 ** z, xf = ((lon + 180) / 360) * n, yf = ((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * n;
+  const d = await demTile(Math.floor(xf), Math.floor(yf)); if (!d) return null;
+  const i = (Math.min(255, Math.floor((yf % 1) * 256)) * 256 + Math.min(255, Math.floor((xf % 1) * 256))) * 4;
+  return -10000 + (d[i] * 65536 + d[i + 1] * 256 + d[i + 2]) * 0.1;
+}
+// Total climbing (meters) along a line, sampled every ~40 m; rises under 2 m are ignored as noise.
+async function climb(coords) {
+  const pts = [];
+  for (let i = 0; i < coords.length; i++) {
+    if (i) { const a = coords[i - 1], b = coords[i], n = Math.max(1, Math.round(meters(a, b) / 40)); for (let j = 1; j < n; j++) pts.push([a[0] + (b[0] - a[0]) * j / n, a[1] + (b[1] - a[1]) * j / n]); }
+    pts.push(coords[i]);
+  }
+  const el = (await Promise.all(pts.map(elevationAt))).filter((v) => v != null);
+  let up = 0, base = el[0];
+  for (const v of el) { if (v > base + 2) { up += v - base; base = v; } else if (v < base - 2) base = v; }
+  return el.length ? up : null;
+}
+const climbCache = new Map();
+function bikeClimbHtml(o) {
+  const bikeLegs = o.legs.filter((l) => l.kind === "bike"), whole = planState.from && planState.to ? altInfo.get(altKey())?.bike : null;
+  if (!bikeLegs.length || !whole) return "";
+  const key = altKey() + "|" + bikeLegs.map(walkKey).join(";");
+  const got = climbCache.get(key);
+  if (!got) {
+    climbCache.set(key, "pending");
+    Promise.all([climb(whole.coords), ...bikeLegs.map((l) => climb(walkInfo.get(walkKey(l))?.coords || [l.from, l.to]))]).then(([all, ...parts]) => {
+      climbCache.set(key, all == null || parts.some((x) => x == null) ? "none" : { all, combo: parts.reduce((a, b) => a + b, 0) });
+      const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); }
+    });
+    return "";
+  }
+  if (got === "pending" || got === "none") return "";
+  const ft = (m) => Math.round((m * 3.281) / 10) * 10, saved = got.all - got.combo;
+  return ft(saved) >= 30 ? `<p class="pl-climb">${ICON.mountain}Avoids about ${ft(saved)} ft of climbing compared with biking the whole way (${ft(got.combo)} ft vs. ${ft(got.all)} ft uphill).</p>` : "";
+}
+function altCard(k) { // "Walk" / "Bike" for the whole trip, or "" if not available
+  const a = planState.from && planState.to ? altInfo.get(altKey()) : null, info = a?.[k];
+  if (!info || info.secs > 2.5 * 3600) return "";
+  const note = k === "walk" ? "walking route from Mapbox" : "bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available";
+  return `<li class="pl-opt ${planState.alt === k ? "open" : ""}"><button type="button" class="pl-card" data-alt="${k}" aria-expanded="${planState.alt === k}">
+      <span class="pl-times"><strong><span class="pl-alt-ico">${k === "walk" ? ICON.walk : ICON.bike}</span>${k === "walk" ? "Walk" : "Bike"}</strong><span>${dur(info.secs)}</span></span>
+      <span class="pl-meta">${(info.meters / 1609).toFixed(1)} mi ∙ ${note}</span>@@BADGE@@</button></li>`;
+}
+function altCardsHtml() { return altCard("walk") + altCard("bike"); }
 function planGeo() {
   const f = [], o = planState.alt ? null : selectedOption();
   const alt = planState.alt && planState.from && planState.to ? altInfo.get(altKey())?.[planState.alt] : null;
@@ -3029,7 +3139,7 @@ function wireSearch(routePool, stopPool) {
   function choose(i) {
     const it = items[i]; if (!it) return;
     input.value = ""; close(); input.blur();
-    if (it.type === "place") { showNearby(it.c, `Near ${it.label}`, routeParam ? [routeParam] : null); return; }
+    if (it.type === "place") { showNearby(it.c, `Near ${it.label}`, routeParam ? [routeParam] : null, { label: it.label }); return; }
     if (it.type === "stop") {
       const st = stopsById[it.id];
       if (!routeParam) {
@@ -3263,6 +3373,8 @@ const ICON = {
   swap: svg('<path d="M8 4v14M8 4L4.5 7.5M8 4l3.5 3.5M16 20V6M16 20l-3.5-3.5M16 20l3.5-3.5"/>'),
   walk: svg('<circle cx="13" cy="4" r="1.8" fill="currentColor" stroke="none"/><path d="M10 21l2-6 2.5 2.5V21M8 12l2.5-4h3l2 3.5 2.5 1M12.5 8l-1 5"/>'),
   bike: svg('<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-7h5l3 7M10 9l-1.5-3H6M15 9l-2 7"/>'),
+  mountain: svg('<path d="M2.5 19.5l6-10 3.5 5.5 2.5-3.5 7 8z"/>'),
+  directions: svg('<path d="M12 2.5l9.5 9.5-9.5 9.5L2.5 12z"/><path d="M9 13v-2.5h5.5M12.5 8l2.5 2.5-2.5 2.5"/>'),
   wheelchair: svg('<circle cx="11" cy="4.5" r="1.8" fill="currentColor" stroke="none"/><path d="M11 7.5v6h5l2.5 5"/><path d="M8 10.5a6 6 0 1 0 7.5 7.5"/>'),
   clock: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   landmark: svg('<path d="M3 21h18M5 21V10M19 21V10M9 21v-6h6v6M3 10l9-6 9 6z"/>'),

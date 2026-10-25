@@ -169,6 +169,7 @@
     }
     legs.push({ kind: opt.bike ? "bike" : "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
     shortenWalks(n, legs, from, to, depart, opt);
+    mergeEndLegs(legs);
     // Times: walking legs are placed right before / after the rides they connect.
     const firstRide = legs.find((l) => l.kind === "ride");
     let t = firstRide.dep - (legs[0].kind !== "ride" ? legs[0].secs : 0);
@@ -222,6 +223,18 @@
       if (after.kind === "ride") { legs[i].to = n.stops[after._p.stops[after._b]].c; legs[i].toName = after.fromName; }
     }
     for (const l of rides) { l.fromAcc = n.stops[l._p.stops[l._b]].acc; l.toAcc = n.stops[l._p.stops[l._a]].acc; delete l._p; delete l._trip; delete l._b; delete l._a; delete l._n; }
+  }
+
+  // Back-to-back walking (or walking then biking) becomes one leg, straight from the first start to the last end:
+  // e.g. a transfer walk to a stop followed by a walk from that stop to the destination.
+  function mergeEndLegs(legs) {
+    for (let i = legs.length - 1; i > 0; i--) {
+      const a = legs[i - 1], b = legs[i];
+      if (a.kind === "ride" || b.kind === "ride") continue;
+      const bike = a.kind === "bike" || b.kind === "bike", m = meters(a.from, b.to);
+      legs.splice(i - 1, 2, { kind: bike ? "bike" : "walk", from: a.from, to: b.to, fromName: a.fromName, toName: b.toName,
+        secs: Math.min(a.secs + b.secs, bike ? bikeSecs(m) : walkSecs(m)) });
+    }
   }
 
   // ---------- public: plan a trip ----------
