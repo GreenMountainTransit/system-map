@@ -90,7 +90,12 @@
   .pl-when { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
   .pl-when select, .pl-when input { font: inherit; font-size: .86rem; padding: 7px 8px; border: 1px solid #c9d3cc; border-radius: 4px; background: #fff; color: var(--ink); }
   .pl-when select { min-width: 0; }
-  .pl-time { width: 7.2em; min-width: 0; }
+  .pl-timesel { display: inline-flex; align-items: center; gap: 3px; }
+  .pl-timesel select { padding-left: 6px; padding-right: 4px; }
+  .pl-timesel[hidden] { display: none; }
+  .pl-inwrap { position: relative; flex: 1; min-width: 0; display: flex; } .pl-inwrap input { flex: 1; min-width: 0; padding-right: 30px !important; }
+  .pl-x { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border: 0; border-radius: 50%; background: #e7ebe9; color: var(--ink);
+    font-size: 1rem; line-height: 1; cursor: pointer; padding: 0; } .pl-x:hover { background: #d7ddda; } .pl-x[hidden] { display: none; }
   .pl-time[aria-invalid=true] { border-color: #c2410c; }
   .pl-time-msg { flex-basis: 100%; margin: 0; font-size: .74rem; color: #9a3412; }
   .pl-time-msg[hidden] { display: none; }
@@ -99,6 +104,7 @@
     .pl-list { max-height: 45vh; overscroll-behavior: contain; }
   }
   .pl-fastest { border-color: var(--live) !important; }
+  .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .pl-climb { display: flex; gap: 6px; align-items: flex-start; margin: 0 12px 8px; font-size: .78rem; color: var(--live); font-weight: 600; } .pl-climb svg { width: 16px; height: 16px; flex: none; }
   .pl-sortnote { margin: 10px 0 0; font-size: .76rem; font-weight: 600; color: var(--ink); }
   .pl-fast-tag { font-size: .74rem; font-weight: 700; color: var(--live); }
@@ -119,6 +125,9 @@
   .pl-accnote svg { width: 14px; height: 14px; flex: none; }
   .pl-cost { margin: 0 12px 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: #f7f9f8; font-size: .82rem; }
   .pl-cost p { margin: 0; } .pl-cost strong { color: var(--live); }
+  .pl-two-weeks { margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--line); font-size: .8rem; }
+  .pl-two-weeks p { margin: 0; } .pl-two-weeks strong { color: var(--live); }
+  .pl-tw-sub { margin-top: 2px !important; font-size: .72rem; color: var(--muted); } .pl-tw-sub strong { color: var(--ink); }
   .pl-frequent { margin-top: 5px !important; padding-top: 5px; border-top: 1px dashed var(--line); } .pl-frequent a { color: var(--gmt); font-weight: 600; }
   .pl-cost-sub { margin-top: 2px !important; font-size: .74rem; color: var(--muted); }
   .pl-why { margin-left: 6px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #9aa7a0; background: #fff; color: var(--muted); font: 700 .7rem/1 inherit; cursor: pointer; vertical-align: 1px; padding: 0; }
@@ -1200,7 +1209,8 @@ function setPickingSpot(on) {
     if (!bar) { bar = document.createElement("div"); bar.id = "spot-bar"; document.getElementById("map").appendChild(bar); }
     const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
     bar.innerHTML = `<span>${verb} a location on the map to see nearby service</span><button type="button" id="spot-cancel">Cancel</button>`;
-    bar.hidden = false; document.getElementById("spot-cancel").onclick = () => setPickingSpot(false);
+    bar.hidden = false;
+    document.getElementById("spot-cancel").onclick = () => { setPickingSpot(false); if (openStopId?.startsWith("near:")) closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
     if (isPhone()) setSheet(false); // show the map
   } else if (bar) bar.hidden = true;
 }
@@ -1377,7 +1387,12 @@ function addOverlay() {
   Object.values(routes).forEach((r) => { if (!map.hasImage(`bus-${r.route_id}`)) map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }); });
   // The badges are drawn with the page font; if it was still loading, redraw them once it arrives.
   if (!addOverlay.fontsHooked) { addOverlay.fontsHooked = true;
-    document.fonts?.load('800 26px "Overpass"').then(() => Object.values(routes).forEach((r) => { const id = `bus-${r.route_id}`; if (map.hasImage(id)) map.updateImage(id, busBadge(r)); })).catch(() => {}); }
+    // Replace (not update) each badge: Mapbox only allows updating an image at the same size, and the new font can
+    // make a badge a few pixels wider or narrower. A failed update can stall every layer that uses images.
+    document.fonts?.load('800 26px "Overpass"').then(() => Object.values(routes).forEach((r) => {
+      const id = `bus-${r.route_id}`;
+      try { if (map.hasImage(id)) { map.removeImage(id); map.addImage(id, busBadge(r), { pixelRatio: 2 }); } } catch {}
+    })).catch(() => {}); }
   if (!map.getSource("routes")) map.addSource("routes", { type: "geojson", data: linesData, lineMetrics: true }); // lineMetrics: for the draw-in animation
   if (!map.getSource("stops")) map.addSource("stops", { type: "geojson", data: stopsData });
   if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
@@ -1482,15 +1497,15 @@ function addOverlay() {
     paint: { "line-color": "#46524b", "line-width": width(2.5, 4), "line-dasharray": [0.1, 2] } }, "top");
   add({ id: "plan-stops", type: "circle", source: "plan", filter: ["==", ["get", "kind"], "stop"],
     paint: { "circle-radius": width(4, 7), "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": ["get", "color"] } }, "top");
-  add({ id: "plan-ends", type: "circle", source: "plan", filter: ["==", ["get", "kind"], "end"],
-    paint: { "circle-radius": width(9, 12), "circle-color": ["get", "color"], "circle-stroke-width": 3, "circle-stroke-color": "#fff" } }, "top");
-  // Start and end pins: "A" / "B" inside, and "From" / "To" with the place's name above.
-  add({ id: "plan-ends-letter", type: "symbol", source: "plan", filter: ["==", ["get", "kind"], "end"],
-    layout: { "text-field": ["get", "letter"], "text-size": 12, "text-allow-overlap": true, "text-ignore-placement": true },
-    paint: { "text-color": "#fff" } }, "top");
+  // Start and finish pins (green START, red FINISH), with the place's name beside them.
+  if (!map.hasImage("pin-start")) map.addImage("pin-start", pinImage("START", "#2ea84a"), { pixelRatio: 2 });
+  if (!map.hasImage("pin-finish")) map.addImage("pin-finish", pinImage("FINISH", "#e5242b"), { pixelRatio: 2 });
+  add({ id: "plan-ends", type: "symbol", source: "plan", filter: ["==", ["get", "kind"], "end"],
+    layout: { "icon-image": ["case", ["==", ["get", "letter"], "A"], "pin-start", "pin-finish"], "icon-anchor": "bottom", "icon-size": ["interpolate", ["linear"], ["zoom"], 10, 0.95, 15, 1.2],
+      "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
+  add({ id: "plan-ends-letter", type: "symbol", source: "plan", filter: ["==", ["get", "kind"], "none"], layout: {} }, "top"); // (kept for layer order)
   add({ id: "plan-ends-label", type: "symbol", source: "plan", filter: ["==", ["get", "kind"], "end"],
-    layout: { "text-field": ["format", ["upcase", ["get", "role"]], { "font-scale": 0.78 }, "\n", {}, ["get", "name"], { "font-scale": 1 }],
-      "text-size": 13, "text-anchor": "bottom", "text-offset": [0, -1.35], "text-max-width": 14, "text-allow-overlap": true, "text-ignore-placement": true },
+    layout: { "text-field": ["get", "name"], "text-size": 12.5, "text-anchor": "left", "text-offset": [1.6, -1.6], "text-max-width": 12, "text-allow-overlap": true, "text-ignore-placement": true },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.85)" : "#fff", "text-halo-width": 2 } }, "top");
   // Street View camera marker: where the street photo is taken from, pointing at the stop.
   if (!map.hasImage("sv-cone")) map.addImage("sv-cone", coneImage(), { pixelRatio: 2 });
@@ -1517,6 +1532,11 @@ const FREQ = [
 // h is the average time between buses on the street (all local routes combined, busier direction).
 const tierOf = (h) => (h == null ? 0 : h <= 20 ? 1 : h <= 30 ? 2 : h <= 60 ? 3 : 4);
 const freqHeadline = (h) => FREQ[tierOf(h) - 1].label;
+// Evening view: when each route on this street last leaves the Downtown Transit Center on weekdays.
+function lastTripsHtml(shortNames) {
+  const rows = String(shortNames).split(",").map((x) => x.trim()).map((sn) => Object.values(routes).find((r) => r.short_name === sn)).filter((r) => r?.last_from_dtc);
+  return rows.length ? `<p class="t-last">Last weekday departure from Downtown Transit Center: ${rows.map((r) => `Route ${esc(r.short_name)} ${esc(r.last_from_dtc)}`).join(" ∙ ")}</p>` : "";
+}
 const waitText = (h) => (h >= 120 ? `About every ${Math.round(h / 60)} hours` : `About every ${h} min on average`);
 const tierExpr = () => { const h = ["get", "h_" + freqPeriod];
   return ["case", ["==", h, null], 0, ["<=", h, 20], 1, ["<=", h, 30], 2, ["<=", h, 60], 3, 4]; };
@@ -1624,7 +1644,8 @@ map.on("mousemove", (e) => {
     const per = FREQ_PERIODS.find((x) => x.id === freqPeriod);
     showTip(e.point, `<h3><span style="display:inline-block;width:18px;height:5px;border-radius:3px;background:${t.color}"></span>${freqHeadline(h)}</h3>
       <p style="margin:0">${waitText(h)}</p>
-      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} ∙ ${per.note}</p>`);
+      <p class="t-freq" style="margin:2px 0 0">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} ∙ ${per.note}</p>
+      ${freqPeriod === "eve" ? lastTripsHtml(p.routes) : ""}`);
   } else if (f.layer.id === "buses") {
     const r = routes[p.route_id];
     highlight([p.route_id]);
@@ -1651,9 +1672,9 @@ function hideTip() { tip.hidden = true; }
 
 map.on("click", (e) => {
   if (!map.getLayer("route-lines")) return;
-  if (pickingSpot) { // "Pick a spot": nearby service for wherever was tapped
+  if (pickingSpot) { // Choose a location: nearby service for wherever was tapped; tap again to move it (Cancel to stop)
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
-    setPickingSpot(false);
+    const bar = document.querySelector("#spot-bar span"); if (bar) bar.textContent = `${tapOrClick()} anywhere else to move the location`;
     showNearby(c, near ? `Near ${near.name}` : "Service near this location", routeParam ? [routeParam] : null);
     return;
   }
@@ -1661,8 +1682,12 @@ map.on("click", (e) => {
   if (view === "plan" && !routeParam) { // clicking the map sets From, then To
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
     const place = { c, label: near ? `Near ${near.name}` : "Point on map" };
-    if (!planState.from || (planState.from && planState.to)) { planState.from = place; if (planState.to && planState.from === place) planState.to = null; }
+    const first = !planState.from || (planState.from && planState.to);
+    if (first) { planState.from = place; planState.to = null; planState.result = null; }
     else planState.to = place;
+    // Show the pin right away (before any trip is found), and zoom in a little toward it -- not far.
+    map.getSource("plan")?.setData(planGeo());
+    if (first) map.easeTo({ center: c, zoom: Math.min(map.getZoom() + 1.5, 15), duration: reduceMotion ? 0 : 500 });
     buildSystemPanel(); planTrip();
     return;
   }
@@ -2402,11 +2427,13 @@ function plannerHtml() {
   return `<div class="scroll planner">
     <div class="pl-fields">
       <div class="pl-field"><span class="pl-dot from" aria-hidden="true"></span><label for="pl-from" class="sr-only">From</label>
-        <input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: place, address or stop" value="${v(planState.from)}" autocomplete="off">
+        <span class="pl-inwrap"><input id="pl-from" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-from-list" placeholder="From: place, address or stop" value="${v(planState.from)}" autocomplete="off">
+          <button type="button" class="pl-x" data-clear="from" aria-label="Clear starting point" ${planState.from ? "" : "hidden"}>×</button></span>
         <button type="button" class="pl-me" id="pl-me" title="Use my location" aria-label="Use my location">${ICON.locate}</button>
         <ul id="pl-from-list" class="pl-list" role="listbox" hidden></ul></div>
       <div class="pl-field"><span class="pl-dot to" aria-hidden="true"></span><label for="pl-to" class="sr-only">To</label>
-        <input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: place, address or stop" value="${v(planState.to)}" autocomplete="off">
+        <span class="pl-inwrap"><input id="pl-to" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pl-to-list" placeholder="To: place, address or stop" value="${v(planState.to)}" autocomplete="off">
+          <button type="button" class="pl-x" data-clear="to" aria-label="Clear destination" ${planState.to ? "" : "hidden"}>×</button></span>
         <button type="button" class="pl-me" id="pl-swap" title="Swap From and To" aria-label="Swap From and To">${ICON.swap}</button>
         <ul id="pl-to-list" class="pl-list" role="listbox" hidden></ul></div>
     </div>
@@ -2415,9 +2442,7 @@ function plannerHtml() {
       <select id="pl-day">${planDays().map((d, i) => `<option value="${i}" ${planState.dayOffset === i ? "selected" : ""}>${d}</option>`).join("")}</select>
       <label for="pl-when" class="sr-only">When</label>
       <select id="pl-when">${planState.dayOffset ? "" : `<option value="now" ${planState.when === "now" ? "selected" : ""}>Leave now</option>`}<option value="at" ${planState.when === "at" ? "selected" : ""}>Leave at</option><option value="by" ${planState.when === "by" ? "selected" : ""}>Arrive by</option></select>
-      <input type="text" id="pl-time" class="pl-time" inputmode="text" autocomplete="off" placeholder="e.g. 8:30 AM" value="${esc(timeLabel(planState.time))}"
-        aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" aria-describedby="pl-time-msg" ${planState.when === "now" ? "hidden" : ""}>
-      <p id="pl-time-msg" class="pl-time-msg" role="alert" hidden></p>
+      <span class="pl-timesel" id="pl-timesel" role="group" aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" ${planState.when === "now" ? "hidden" : ""}>${timeSelects(planState.time)}</span>
     </div>
     <div class="pl-prefs" role="group" aria-label="Trip preferences">
       <div class="pl-sort" role="radiogroup" aria-label="Show trips by">
@@ -2447,22 +2472,24 @@ function wirePlanner() {
     if (planState.dayOffset && planState.when === "now") { planState.when = "at"; if (!planState.time) planState.time = "08:00"; }
     buildSystemPanel(); if (planState.from && planState.to) planTrip();
   };
-  const timeEl = document.getElementById("pl-time"), msg = document.getElementById("pl-time-msg");
-  const readTime = () => {
-    const raw = timeEl.value.trim(); if (!raw) { msg.hidden = true; return false; }
-    const t = parseTime(raw);
-    if (!t) { msg.textContent = "Type a time like 8:30 AM, 5pm or 17:45."; msg.hidden = false; timeEl.setAttribute("aria-invalid", "true"); return false; }
-    msg.hidden = true; timeEl.removeAttribute("aria-invalid");
-    planState.time = t; timeEl.value = timeLabel(t); return true;
-  };
-  timeEl.addEventListener("change", () => { if (readTime() && planState.from && planState.to) planTrip(); });
-  timeEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); if (readTime()) planTrip(true); } });
+  const timeEl = document.getElementById("pl-timesel");
+  const readTime = () => { const t = readTimeSelects(timeEl); if (t) planState.time = t; return !!t; };
+  timeEl.querySelectorAll("select").forEach((sel) => (sel.onchange = () => { if (readTime() && planState.from && planState.to) planTrip(); }));
+  document.querySelectorAll(".pl-x").forEach((x) => (x.onclick = () => {
+    const which = x.dataset.clear, input = document.getElementById("pl-" + which);
+    planState[which] = null; planState.result = null; planState.alt = null;
+    input.value = ""; x.hidden = true;
+    map.getSource("plan")?.setData(planGeo());
+    const res = document.getElementById("pl-results"); if (res) res.innerHTML = "";
+    input.focus();
+  }));
+  ["from", "to"].forEach((w) => document.getElementById("pl-" + w).addEventListener("input", (e) => { document.querySelector(`.pl-x[data-clear="${w}"]`).hidden = !e.target.value; }));
   document.getElementById("pl-when").onchange = (e) => {
     planState.when = e.target.value;
     timeEl.hidden = planState.when === "now";
     timeEl.setAttribute("aria-label", planState.when === "by" ? "Arrival time" : "Departure time");
-    if (planState.when === "by" && !planState.time) { const d = new Date(Date.now() + 60 * 60000); planState.time = d.toTimeString().slice(0, 5); timeEl.value = timeLabel(planState.time); }
-    if (planState.when === "at" && !planState.time) { const d = new Date(Date.now() + 15 * 60000); planState.time = d.toTimeString().slice(0, 5); timeEl.value = timeLabel(planState.time); }
+    if (planState.when === "by" && !planState.time) { planState.time = roundTime(new Date(Date.now() + 60 * 60000)); timeEl.innerHTML = timeSelects(planState.time); buildSystemPanel(); }
+    if (planState.when === "at" && !planState.time) { planState.time = roundTime(new Date(Date.now() + 15 * 60000)); timeEl.innerHTML = timeSelects(planState.time); buildSystemPanel(); }
     if (planState.from && planState.to) planTrip();
   };
 
@@ -2575,6 +2602,21 @@ function planCombobox(which) {
     const li = e.target.closest("[role=option]"); if (li) { e.preventDefault(); choose(+li.dataset.i); }
   });
 }
+// Time as three menus: hour (1-12), minute (5-minute steps) and AM/PM. Phones show them as scroll wheels.
+const roundTime = (d) => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d).map((x) => [x.type, x.value]));
+  let h = +p.hour, m = Math.ceil(+p.minute / 5) * 5; if (m === 60) { m = 0; h = (h + 1) % 24; } return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`; };
+function timeSelects(hhmm) {
+  const [H, M] = (hhmm || roundTime(new Date())).split(":").map(Number), h12 = H % 12 || 12, m5 = Math.round(M / 5) * 5 % 60;
+  const opt = (v, t, on) => `<option value="${v}" ${on ? "selected" : ""}>${t}</option>`;
+  return `<label class="sr-only" for="pl-hh">Hour</label><select id="pl-hh">${Array.from({ length: 12 }, (_, i) => opt(i + 1, i + 1, i + 1 === h12)).join("")}</select>
+    <span aria-hidden="true">:</span><label class="sr-only" for="pl-mm">Minute</label><select id="pl-mm">${Array.from({ length: 12 }, (_, i) => opt(i * 5, String(i * 5).padStart(2, "0"), i * 5 === m5)).join("")}</select>
+    <label class="sr-only" for="pl-ap">AM or PM</label><select id="pl-ap">${opt("AM", "AM", H < 12)}${opt("PM", "PM", H >= 12)}</select>`;
+}
+function readTimeSelects(el) {
+  const h = +el.querySelector("#pl-hh")?.value, m = +el.querySelector("#pl-mm")?.value, ap = el.querySelector("#pl-ap")?.value;
+  if (!h) return null; const H = (h % 12) + (ap === "PM" ? 12 : 0);
+  return `${String(H).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
 // Day choices: Today, Tomorrow, then the next five days by name and date.
 function planDays() {
   return Array.from({ length: 7 }, (_, i) => {
@@ -2674,18 +2716,18 @@ function planResultsHtml() {
   }
   if (!entries.length && r.walkOnly) entries.push({ bus: false, arrive: start + r.walkOnly.secs, depart: start, walk: r.walkOnly.secs, rides: 0,
     html: `<li class="pl-opt"><div class="pl-card static"><span class="pl-times"><strong>Walk</strong><span>${dur(r.walkOnly.secs)}</span></span><span class="pl-meta">About ${(r.walkOnly.meters / 1609).toFixed(1)} miles.</span>@@BADGE@@</div></li>` });
-  // Fastest: everything together by arrival (Arrive by: latest departure). Least walking / Fewest transfers: bus trips
-  // by that measure, then walking and biking.
+  // Bus trips always come first, ordered by the chosen preference; then walking and biking. If walking (or biking,
+  // when the rider is biking) gets there sooner than every bus trip, it's marked "Faster than the bus".
   const byArrival = (x, y) => (r.arriveBy ? y.depart - x.depart : x.arrive - y.arrive);
-  const order = {
-    fastest: byArrival,
-    walk: (x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : x.walk - y.walk || byArrival(x, y)),
-    transfers: (x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : x.rides - y.rides || byArrival(x, y)),
-  }[sort] || byArrival;
-  entries.sort((x, y) => (!!x.extra - !!y.extra) || order(x, y));
+  const byPref = { fastest: byArrival, walk: (x, y) => x.walk - y.walk || byArrival(x, y), transfers: (x, y) => x.rides - y.rides || byArrival(x, y) }[sort] || byArrival;
+  entries.sort((x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : (!!x.extra - !!y.extra) || (x.bus ? byPref(x, y) : byArrival(x, y))));
+  const busEntries = entries.filter((e) => e.bus), bestBus = busEntries.length ? busEntries.reduce((a, b) => (byArrival(a, b) <= 0 ? a : b)) : null;
   const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
-  const cards = entries.map((e, i) => e.html.replace("@@BADGE@@", i === 0 ? `<span class="pl-fast-tag">${badge}</span>` : "")).join("");
-  const sortNote = `<p class="pl-sortnote">${{ fastest: r.arriveBy ? "Fastest first: leaving latest while still arriving on time" : "Fastest first: soonest arrival, including walking and biking", walk: "Least walking first, then walking and biking options", transfers: "Fewest transfers first, then walking and biking options" }[sort]}</p>`;
+  const cards = entries.map((e, i) => {
+    const tag = e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
+    return e.html.replace("@@BADGE@@", tag ? `<span class="pl-fast-tag">${tag}</span>` : "");
+  }).join("");
+  const sortNote = `<p class="pl-sortnote">${{ fastest: r.arriveBy ? "Bus trips first, leaving latest while still arriving on time" : "Bus trips first, soonest arrival first", walk: "Bus trips first, least walking first", transfers: "Bus trips first, fewest transfers first" }[sort]}; then walking and biking.</p>`;
   const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
   return `${dayNote}${swipeNote}${sortNote}<ul class="pl-opts">${cards}</ul>
@@ -2712,6 +2754,23 @@ async function drivingMiles(a, b) {
   if (miles == null) miles = (meters(a, b) * 1.3) / 1609.34; // fallback: straight line x 1.3
   driveCache.set(key, miles); return miles;
 }
+// "Twice a day for two weeks" (28 one-way trips over 14 days), following GMT's fare caps:
+//  - Ride Ready app or card: fares stop at $4 a day, so a transfer costs nothing extra once you ride twice in a day,
+//    and at $50 for 30 days, so two weeks of this trip costs at most $50 and the rest of the month is free.
+//  - Cash or contactless card: not capped, so every bus is $2, every time.
+function twoWeekHtml(o, paidRides, driveOne, c) {
+  if (!paidRides) return ""; // Shopping Specials are free
+  const days = 14, trips = 2 * days;
+  const perDay = Math.min(2 * paidRides * c.bus_fare, c.bus_fare_daily_cap || Infinity);
+  const capped = Math.min(perDay * days, c.bus_fare_monthly_cap || Infinity), uncapped = trips * paidRides * c.bus_fare;
+  const drive = trips * driveOne, save = drive - capped;
+  const money = (x) => `$${Math.round(x).toLocaleString("en-US")}`;
+  const why = `fares stop at ${money(c.bus_fare_daily_cap)} a day${paidRides > 1 ? ", transfers included," : ""} and ${money(c.bus_fare_monthly_cap)} for 30 days${capped >= c.bus_fare_monthly_cap ? ", so the rest of the month is free" : ""}`;
+  return `<div class="pl-two-weeks">
+      <p>${save >= 5 ? `Twice a day for two weeks, you’d save about <strong>${money(save)}</strong> compared with driving.` : `Twice a day for two weeks:`}</p>
+      <p class="pl-tw-sub">Driving ${money(drive)} vs. <strong>${money(capped)}</strong> with the Ride Ready app or card (${why}). Paying cash or by credit card: ${money(uncapped)}.</p>
+    </div>`;
+}
 function costHtml(o) {
   const c = tripCosts; if (!c || !planState.from || !planState.to) return "";
   const key = `${planState.from.c.map((x) => x.toFixed(4))}|${planState.to.c.map((x) => x.toFixed(4))}`, miles = driveCache.get(key);
@@ -2725,6 +2784,7 @@ function costHtml(o) {
       <p>${save >= 0.25 ? `<strong>Save about ${money(save)}</strong> compared with driving` : `Driving costs about <strong>${money(drive)}</strong>; the bus fare is ${money(fare)}`}
         <button type="button" class="pl-why" aria-expanded="false" aria-controls="pl-why-${o.depart}" title="What's this?">?</button></p>
       <p class="pl-cost-sub">Driving ${miles.toFixed(1)} mi ≈ ${money(drive)} ∙ bus fare ${fare ? money(fare) : "free"}${paidRides > 1 ? ` (${paidRides} rides)` : ""}</p>
+      ${twoWeekHtml(o, paidRides, miles * perMile, c)}
       ${fare && c.bus_fare_monthly_cap ? `<p class="pl-cost-sub pl-frequent">Frequent riders pay about $${(c.bus_fare_monthly_cap / (2 * Math.round(c.bus_fare_monthly_cap / c.bus_fare))).toFixed(0)} a ride: with the Ride Ready by GMT app or card, fares stop at ${money(c.bus_fare_daily_cap)} a day and ${money(c.bus_fare_monthly_cap)} a month (${Math.round(c.bus_fare_monthly_cap / c.bus_fare)} rides). Discounted fare ${money(c.bus_fare_discounted || 1)}.
         ${c.fare_url ? `<a href="${esc(c.fare_url)}" target="_blank" rel="noopener">Fare details ↗</a>` : ""}</p>` : ""}
       <div class="pl-why-box" id="pl-why-${o.depart}" hidden>
@@ -2890,7 +2950,9 @@ function drawPlan(fit) {
   if (fit && geo.features.length) {
     const b = new mapboxgl.LngLatBounds();
     geo.features.forEach((ft) => (ft.geometry.type === "Point" ? [ft.geometry.coordinates] : ft.geometry.coordinates).forEach((c) => b.extend(c)));
-    const pad = isPhone() ? { top: 70, left: 30, right: 30, bottom: (document.querySelector("#panel header")?.offsetHeight || 140) + 30 } : panelPad();
+    // Extra room at the top: the START/FINISH pins stand about 55 px above their points.
+    const base = isPhone() ? { top: 70, left: 30, right: 30, bottom: (document.querySelector("#panel header")?.offsetHeight || 140) + 30 } : panelPad();
+    const pad = { ...base, top: (base.top || 0) + 60, left: (base.left || 0) + 20, right: (base.right || 0) + 20 };
     map.fitBounds(b, { padding: pad, maxZoom: 16.5, duration: reduceMotion ? 0 : 700 });
   }
 }
@@ -3064,6 +3126,24 @@ function wireStreetView(root, s) {
   if (box.open) { fill(); setCamera(s.sv); }
 }
 // Camera marker: a small wedge pointing the way the Street View photo looks, with a dot at the camera.
+// A map pin: a teardrop in the given color with a white circle and a word (START / FINISH), drawn at 2x.
+function pinImage(word, color) {
+  const W = 76, H = 96, c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d"), cx = W / 2, cy = 36, R = 33;
+  g.fillStyle = color; g.beginPath();
+  g.moveTo(cx, H - 2);
+  g.bezierCurveTo(cx - 8, H - 26, cx - R, cy + 22, cx - R, cy);
+  g.arc(cx, cy, R, Math.PI, 0);
+  g.bezierCurveTo(cx + R, cy + 22, cx + 8, H - 26, cx, H - 2);
+  g.closePath(); g.fill();
+  g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,.95)"; g.stroke();
+  g.fillStyle = "#fff"; g.beginPath(); g.arc(cx, cy, R - 8, 0, Math.PI * 2); g.fill();
+  g.fillStyle = color; g.textAlign = "center"; g.textBaseline = "middle";
+  let size = 15; g.font = `800 ${size}px Overpass, Arial, sans-serif`;
+  while (g.measureText(word).width > (R - 10) * 2 && size > 8) { size--; g.font = `800 ${size}px Overpass, Arial, sans-serif`; }
+  g.fillText(word, cx, cy + 1);
+  return g.getImageData(0, 0, W, H);
+}
 function coneImage() {
   const S = 72, c = document.createElement("canvas"); c.width = c.height = S;
   const g = c.getContext("2d"), cx = S / 2, cy = S / 2;
