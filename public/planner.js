@@ -71,6 +71,28 @@
         patterns[byKey.get(key)].trips.push({ id: trip.t, headsign: trip.h, times: sched.slice(), sched, src: trip, midnight: day.midnight, ymd: day.ymd, live: false });
       }
     }
+    // Stay on board: when a trip ends where the next trip on the same block (same bus) and route begins, within
+    // 30 minutes, riders can stay on (e.g. Route 96 turning around at the St. Albans Park and Ride, from "toward
+    // St. Albans" to "toward Burlington"). Each such pair becomes a through trip, so the search sees one ride.
+    {
+      const byBlock = new Map();
+      patterns.forEach((p) => p.trips.forEach((t) => { if (t.src.b) { const k = `${p.route}|${t.ymd}|${t.src.b}`; (byBlock.get(k) || byBlock.set(k, []).get(k)).push({ p, t }); } }));
+      for (const list of byBlock.values()) {
+        list.sort((a, b) => a.t.sched[0] - b.t.sched[0]);
+        for (let i = 0; i + 1 < list.length; i++) {
+          const A = list[i], B = list[i + 1], aEnd = A.t.sched.length - 1;
+          const gap = B.t.sched[0] - A.t.sched[aEnd];
+          if (A.t.src.st[aEnd][0] !== B.t.src.st[0][0] || gap < 0 || gap > 30 * 60) continue;
+          const stopsThru = [...A.p.stops, ...B.p.stops.slice(1)];
+          const key = A.p.route + "|thru|" + [...A.t.src.st.map((x) => x[0]), ...B.t.src.st.slice(1).map((x) => x[0])].join(",");
+          if (!byKey.has(key)) { byKey.set(key, patterns.length); patterns.push({ route: A.p.route, stops: stopsThru, trips: [] }); }
+          // At the turnaround stop, the time is when the bus leaves again (boarding there means waiting for that).
+          const sched = [...A.t.sched.slice(0, aEnd), ...B.t.sched];
+          patterns[byKey.get(key)].trips.push({ id: `${A.t.id}+${B.t.id}`, headsign: B.t.headsign, times: sched.slice(), sched, live: false, ymd: A.t.ymd,
+            parts: [{ t: A.t, n: aEnd }, { t: B.t, n: B.t.sched.length }], stayAt: aEnd, firstHeadsign: A.t.headsign });
+        }
+      }
+    }
     for (const p of patterns) p.trips.sort((a, b) => a.times[0] - b.times[0]);
     const stopPatterns = stops.map(() => []);
     patterns.forEach((p, pi) => p.stops.forEach((s, pos) => s != null && stopPatterns[s].push([pi, pos])));
@@ -162,11 +184,15 @@
       if (lb.kind === "walk") { legs.unshift({ kind: "walk", from: n.stops[lb.from].c, to: n.stops[s].c, fromName: n.stops[lb.from].name, toName: n.stops[s].name, secs: lb.secs }); s = lb.from; continue; }
       const p = n.patterns[lb.pattern], r = n.routes[p.route];
       legs.unshift({
-        kind: "ride", route: p.route, short: r.short_name, color: r.color, text: r.text_color, headsign: lb.trip.headsign, trip: lb.trip.id,
+        kind: "ride", route: p.route, short: r.short_name, color: r.color, text: r.text_color, trip: lb.trip.id,
+        headsign: lb.trip.stayAt != null && lb.alightPos <= lb.trip.stayAt ? lb.trip.firstHeadsign : lb.trip.headsign,
         fromStop: n.stops[lb.from].id, fromName: n.stops[lb.from].name, toStop: n.stops[s].id, toName: n.stops[s].name,
         dep: lb.trip.times[lb.boardPos], arr: lb.trip.times[lb.alightPos], stopsCount: lb.alightPos - lb.boardPos,
         path: p.stops.slice(lb.boardPos, lb.alightPos + 1).filter((x) => x != null).map((x) => n.stops[x].c),
         live: !!lb.trip.live, depDelay: lb.trip.times[lb.boardPos] - lb.trip.sched[lb.boardPos], arrDelay: lb.trip.times[lb.alightPos] - lb.trip.sched[lb.alightPos],
+        // Riding through a turnaround on the same bus: where to stay on, and which way it's headed before that.
+        ...(lb.trip.stayAt != null && lb.boardPos < lb.trip.stayAt && lb.alightPos > lb.trip.stayAt
+          ? { stayOn: { name: n.stops[p.stops[lb.trip.stayAt]]?.name || "", firstHeadsign: lb.trip.firstHeadsign } } : {}),
         _p: p, _trip: lb.trip, _b: lb.boardPos, _a: lb.alightPos, _n: n, // for the walking clean-up below
       });
       s = lb.from; k--;
@@ -201,22 +227,28 @@
       l.stopsCount = a - b; l.path = l._p.stops.slice(b, a + 1).filter((x) => x != null).map((x) => n.stops[x].c);
     };
     const endSecs = (l) => (l.kind === "bike" ? bikeSecs : walkSecs);
+    // Getting on: the stop on this bus that lets you leave LATEST (bus time minus the walk to it), then the shorter
+    // walk -- never boarding earlier and riding around a turnaround just to save a few steps.
     if (legs[0].kind !== "ride" && legs[1] === first) {
-      let best = first._b, bestW = legs[0].secs;
+      let best = first._b, bestW = legs[0].secs, bestLeave = first._trip.times[first._b] - legs[0].secs;
       for (let pos = 0; pos < first._a; pos++) {
         const sIdx = first._p.stops[pos]; if (!ok(sIdx)) continue;
-        const w = endSecs(legs[0])(meters(from, n.stops[sIdx].c));
-        if (w < bestW && first._trip.times[pos] - w >= depart - 60) { best = pos; bestW = w; }
+        const w = endSecs(legs[0])(meters(from, n.stops[sIdx].c)), leave = first._trip.times[pos] - w;
+        if (!isFinite(leave) || leave < depart - 60) continue;
+        if (leave > bestLeave + 30 || (leave >= bestLeave - 30 && w < bestW)) { best = pos; bestW = w; bestLeave = leave; }
       }
       if (best !== first._b) { set(first, best, first._a); legs[0].to = n.stops[first._p.stops[best]].c; legs[0].toName = first.fromName; legs[0].secs = bestW; }
     }
     const lastWalk = legs[legs.length - 1];
+    // Getting off: the stop on this bus that gets you to your destination SOONEST (bus time plus the walk), then the
+    // shorter walk -- never riding past a closer stop around a turnaround to save a few steps.
     if (lastWalk.kind !== "ride" && legs[legs.length - 2] === last) {
-      let best = last._a, bestW = lastWalk.secs;
+      let best = last._a, bestW = lastWalk.secs, bestArrive = last._trip.times[last._a] + lastWalk.secs;
       for (let pos = last._b + 1; pos < last._p.stops.length; pos++) {
         const sIdx = last._p.stops[pos]; if (!ok(sIdx)) continue;
-        const w = endSecs(lastWalk)(meters(n.stops[sIdx].c, to));
-        if (w < bestW) { best = pos; bestW = w; }
+        const w = endSecs(lastWalk)(meters(n.stops[sIdx].c, to)), arrive = last._trip.times[pos] + w;
+        if (!isFinite(arrive)) continue;
+        if (arrive < bestArrive - 30 || (arrive <= bestArrive + 30 && w < bestW)) { best = pos; bestW = w; bestArrive = arrive; }
       }
       if (best !== last._a) { set(last, last._b, best); lastWalk.from = n.stops[last._p.stops[best]].c; lastWalk.fromName = last.toName; lastWalk.secs = bestW; }
     }
@@ -252,7 +284,21 @@
     try { tus = await L().liveTrips?.(); } catch { tus = null; }
     const now = Date.now() / 1000;
     let liveTrips = 0;
+    const liveFor = (t) => { // live times for one timetable trip (or null to keep the timetable)
+      const tu = tus?.get(t.id);
+      if (!tu) return null;
+      if (tu.startDate ? tu.startDate !== t.ymd : Math.abs((t.sched[0] + t.sched[t.sched.length - 1]) / 2 - now) > 12 * 3600) return null;
+      if (tu.canceled) return { times: t.sched.map(() => Infinity), live: false };
+      let any = false;
+      const times = t.sched.map((sec, i) => { const r = L().applyRealtime(tu, t.src, i, sec, t.midnight); if (!r) return Infinity; if (r.live) any = true; return r.epoch; });
+      return { times, live: any };
+    };
+    for (const p of n.patterns) for (const t of p.trips) if (t.parts) { // through trip: its two halves
+      const a = liveFor(t.parts[0].t) || { times: t.parts[0].t.sched, live: false }, b = liveFor(t.parts[1].t) || { times: t.parts[1].t.sched, live: false };
+      t.times = [...a.times.slice(0, t.parts[0].n), ...b.times]; t.live = a.live || b.live;
+    }
     for (const p of n.patterns) for (const t of p.trips) {
+      if (t.parts) continue;
       t.times = t.sched.slice(); t.live = false;
       const tu = tus?.get(t.id);
       if (!tu) continue;
@@ -267,6 +313,7 @@
   async function plan({ from, to, depart, arriveBy, prefs = {}, dayOffset = 0 }) {
     const n = await network(dayOffset);
     const live = dayOffset === 0 ? await applyLive(n) : (n.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; })), { feed: false, trips: 0 });
+    // (applyLive handles through trips too: each half gets its own trip's live times.)
     const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike };
     const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
     let result;

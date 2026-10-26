@@ -105,6 +105,7 @@
   }
   .pl-fastest { border-color: var(--live) !important; }
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
+  .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
   .st-transfer { display: block; margin-bottom: 3px; font-size: .74rem; font-weight: 700; color: var(--live); } .st-transfer.tight { color: #b45309; }
   .st-livestat { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: .72rem; font-weight: 600; color: var(--muted); }
   .st-livestat.live { color: var(--live); } .st-livestat .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
@@ -552,6 +553,10 @@ const map = new mapboxgl.Map({
   dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, // flat 2D map
   logoPosition: "bottom-right", // keep the Mapbox logo clear of the panel
 });
+// Ready once the map's style is in (or the "load" event fires, whichever comes first). Caught right away, so later
+// code can wait on it safely; it doesn't depend on every map tile or label finishing.
+const mapLoaded = new Promise((r) => { map.once("load", r); map.once("style.load", () => setTimeout(r, 200)); setTimeout(r, 4000);
+  const check = () => (map.isStyleLoaded() ? r() : setTimeout(check, 150)); setTimeout(check, 150); });
 map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 map.addControl({
@@ -666,6 +671,7 @@ map.addControl({
     btn.onclick = async () => {
       if (isFullscreen()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
       if (fullPageMode) { // close this full-page tab: the original page is still open, exactly as it was
+        try { window.opener?.postMessage({ gmtView: saveViewState() }, location.origin); } catch {} // and it picks up this view
         window.close();
         setTimeout(() => { if (history.length > 1) history.back(); else location.href = document.referrer || "https://ridegmt.com/"; }, 300); // if it couldn't close
         return;
@@ -690,23 +696,67 @@ map.addControl({
 }, "bottom-right");
 
 // The current view (camera, tab, legend selection, open stop), packed into a short string for the full-page tab.
+// The complete view, packed into a short string: camera, base layer, 3D, tab, legend selection, open stop or nearby
+// point, frequency settings, and the trip planner (start, finish, day, time, chosen trip). Carried to the full-page
+// tab when expanding, and sent back to the embedded map when minimizing, so neither loses anything.
 function saveViewState() {
-  const c = map.getCenter();
+  const c = map.getCenter(), place = (p) => (p ? { c: p.c.map((x) => +x.toFixed(5)), l: p.label } : null);
   const st = { c: [+c.lng.toFixed(5), +c.lat.toFixed(5)], z: +map.getZoom().toFixed(2), b: Math.round(map.getBearing()), p: Math.round(map.getPitch()),
-    v: view, h: [...hidden], o: openStopId && !openStopId.includes(":") ? openStopId : null };
+    v: view, h: [...hidden], bm: basemap.id, t3: !!three.on,
+    o: openStopId && !openStopId.includes(":") ? openStopId : null,
+    n: openStopId?.startsWith("near:") ? openStopId.slice(5).split(",").map(Number) : null,
+    fp: freqPeriod, ft: [...freqTiers],
+    pl: planState.from || planState.to ? { f: place(planState.from), t: place(planState.to), w: planState.when, tm: planState.time, d: planState.dayOffset || 0, s: planState.selected || 0, a: planState.alt || null } : null };
   return btoa(unescape(encodeURIComponent(JSON.stringify(st))));
 }
-function restoreViewState() {
-  const raw = new URLSearchParams(location.search).get("s"); if (!raw) return;
+// Wait for a camera move to finish (or the map to finish loading), but never long: live buses keep the map busy,
+// so "idle" alone can take a long time.
+const settle = (ms = 1500) => new Promise((res) => {
+  let done = false; const fin = () => { if (!done) { done = true; res(); } };
+  if (map.isMoving()) map.once("moveend", () => setTimeout(fin, 50));
+  else if (map.isStyleLoaded()) return setTimeout(fin, 50);
+  else map.once("idle", fin);
+  setTimeout(fin, ms);
+});
+async function restoreViewState(raw = new URLSearchParams(location.search).get("s")) {
+  if (!raw) return;
+  let st; try { st = JSON.parse(decodeURIComponent(escape(atob(raw)))); } catch { return; }
   try {
-    const st = JSON.parse(decodeURIComponent(escape(atob(raw))));
-    if (st.v && st.v !== view && !routeParam) setView(st.v);
-    if (Array.isArray(st.h) && !routeParam) { hidden = new Set(st.h.filter((id) => routes[id])); picking = hidden.size > 0; buildSystemPanel.sync?.(); applyFilters(); }
+    // 1. Base layer (3D picks its own), then wait for the new style to finish loading.
+    if (st.t3 && !three.on && document.querySelector(".three-ctrl:not([hidden])")) { setThreeD(true); await new Promise((r) => setTimeout(r, 300)); await settle(); }
+    else if (!st.t3 && three.on) { setThreeD(false); await settle(); }
+    if (!st.t3 && st.bm && st.bm !== basemap.id) { const btn = document.querySelector(`.basemaps [data-id="${st.bm}"]`); if (btn) { btn.click(); await new Promise((r) => map.once("style.load", r)); await settle(); } }
+    // 2. Tab, legend selection and frequency settings.
+    if (!routeParam) {
+      if (st.v && st.v !== view) setView(st.v);
+      if (Array.isArray(st.h)) { hidden = new Set(st.h.filter((id) => routes[id])); picking = hidden.size > 0; }
+      if (st.fp) freqPeriod = st.fp;
+      if (Array.isArray(st.ft)) freqTiers = new Set(st.ft);
+      buildSystemPanel(); applyFilters(); if (view === "frequency") applyFreq();
+    }
+    // 3. Trip planner: same start, finish, day and time, and the same trip chosen.
+    if (st.pl && !routeParam) {
+      const pl = st.pl, place = (p) => (p ? { c: p.c, label: p.l } : null);
+      Object.assign(planState, { from: place(pl.f), to: place(pl.t), when: pl.w || "now", time: pl.tm || "", dayOffset: pl.d || 0 });
+      buildSystemPanel();
+      if (planState.from && planState.to) {
+        await planTrip();
+        planState.selected = Math.min(pl.s || 0, Math.max(0, (planState.result?.options?.length || 1) - 1)); planState.alt = pl.a || null;
+        const el = document.getElementById("pl-results"); if (el) { el.innerHTML = planResultsHtml(); wirePlanResults(); }
+        drawPlan(false); fetchWalks(selectedOption());
+      }
+    }
+    // 4. The exact camera, last (after anything above that moved the map).
+    await settle();
     if (st.p) map.setMaxPitch(Math.max(map.getMaxPitch(), st.p));
     map.jumpTo({ center: st.c, zoom: st.z, bearing: st.b || 0, pitch: st.p || 0 });
+    // 5. An open stop, or a "service near" point.
     if (st.o && stopsById[st.o]) showStop(st.o, false);
+    else if (st.n?.length === 2) showNearby(st.n, "Service near this location", routeParam ? [routeParam] : null);
   } catch {}
 }
+// Minimize in the full-page tab sends its view back here (the embedded map that opened it) before closing.
+addEventListener("message", (e) => { if (e.origin === location.origin && typeof e.data?.gmtView === "string") restoreViewState(e.data.gmtView); });
 
 // Short hints beside map buttons, fading after 6 seconds.
 function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", keepOthers, persistent) {
@@ -1379,7 +1429,8 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
       if (g && (g.default === "off" || (g.default === "sundays" && !isSunday))) hidden.add(r.route_id);
     }
   });
-dataReady.then(() => map.once("idle", restoreViewState)); // full-page tab: open where the embedded map was
+// Full-page tab: open where the embedded map was (once the map and its data are ready).
+Promise.all([dataReady, mapLoaded]).then(() => setTimeout(() => restoreViewState(), 300));
 
 
 dataReady.then(() => {
@@ -2868,7 +2919,8 @@ function stepsHtml(o) {
       transfer = `<span class="st-transfer ${spare < 3 ? "tight" : ""}">${spare < 3 ? "Tight connection: " : ""}${Math.max(0, spare)} min to make this transfer${liveBoth ? " (live)" : ""}</span>`;
     }
     return `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
-        <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
+        <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${(l.stayOn?.firstHeadsign || l.headsign) ? ` toward ${esc(l.stayOn?.firstHeadsign || l.headsign)}` : ""} at ${esc(l.fromName)}
+        ${l.stayOn ? `<span class="st-stay">Stay on board at ${esc(l.stayOn.name)}: the same bus turns around there and continues toward ${esc(l.headsign)}. No transfer needed.</span>` : ""}
         <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span>
         ${planState.dayOffset ? "" : `<span class="st-livestat ${l.live ? "live" : ""}">${l.live ? `<span class="dot"></span>Live ∙ ${lateText(l.depDelay)}` : "Scheduled"}</span>`}</span></li>`;
   }).join("");
