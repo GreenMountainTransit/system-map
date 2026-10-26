@@ -2273,6 +2273,27 @@ async function refreshDetours() {
 }
 // The part of a route's usual shape between two points (the one of its shapes that passes closest to both,
 // in the right order). Used for the closed stretch of a detour and for trip planner rides.
+// The part of a GTFS shape between two points, matching each to the FIRST place the shape passes within ~60 m
+// (following the bus's order of travel), so loops and turnarounds are cut correctly.
+function shapeSlice(shapeId, from, to) {
+  const f = linesData.features.find((x) => x.properties.shape_id === shapeId || x.properties.also?.includes(shapeId)); if (!f) return null;
+  const c = f.geometry.coordinates, k = Math.cos((from[1] * Math.PI) / 180), m = (a, b) => Math.hypot((a[0] - b[0]) * k, a[1] - b[1]) * 111320;
+  const near = (p, start) => { let bi = -1, bd = Infinity;
+    for (let i = start; i < c.length; i++) { const d = m(c[i], p); if (d < bd) { bd = d; bi = i; } if (bd <= 60 && d > bd + 120) break; } // first close approach
+    return bd <= 150 ? bi : -1; };
+  const i = near(from, 0); if (i < 0) return null;
+  const j = near(to, i); if (j < 0 || j < i) return null;
+  return [from, ...c.slice(i + 1, j), to];
+}
+function tripPath(l) {
+  if (!l.shapes?.[0]) return null;
+  const a = l.path[0], b = l.path[l.path.length - 1];
+  if (l.stayOn?.c && l.shapes[1]) { // stay on board: first shape to the turnaround, then the second shape onward
+    const p1 = shapeSlice(l.shapes[0], a, l.stayOn.c), p2 = shapeSlice(l.shapes[1], l.stayOn.c, b);
+    return p1 && p2 ? [...p1, ...p2.slice(1)] : null;
+  }
+  return shapeSlice(l.shapes[0], a, b);
+}
 function routeBetween(rid, from, to) {
   let best = null;
   for (const f of linesData.features) {
@@ -2774,13 +2795,13 @@ async function checkLive() {
   if (el) { el.innerHTML = planResultsHtml(); wirePlanResults(); if (sc) sc.scrollTop = y; }
   if (!planState.alt) drawPlan(false);
 }
-const lateText = (secs) => { const m = Math.round(secs / 60); return m >= 2 ? `${m} min late` : m <= -2 ? `${-m} min early` : "on time"; };
 function liveLine(o) {
   const rides = o.legs.filter((l) => l.kind === "ride"), ride = rides[0], r = planState.result;
   if (!ride) return "";
   if (ride.live) {
     const allLive = rides.every((l) => l.live);
-    return `<span class="dot"></span>Live: Route ${esc(ride.short)} leaves ${when(ride.dep) === "Due" ? "now" : "in " + when(ride.dep)} ∙ ${lateText(ride.depDelay)}${rides.length > 1 ? (allLive ? " ∙ transfer timed live" : " ∙ later buses on the timetable") : ""}`;
+    // Live times are used, but the planner doesn't label buses as late, early or on time.
+    return `<span class="dot"></span>Live: Route ${esc(ride.short)} leaves ${when(ride.dep) === "Due" ? "now" : "in " + when(ride.dep)}${rides.length > 1 ? (allLive ? " ∙ transfer timed live" : " ∙ later buses on the timetable") : ""}`;
   }
   if (planState.dayOffset) return "";
   return `Scheduled times${r?.live?.feed === false ? " (live predictions unavailable)" : ""}`;
@@ -2922,7 +2943,7 @@ function stepsHtml(o) {
         <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${(l.stayOn?.firstHeadsign || l.headsign) ? ` toward ${esc(l.stayOn?.firstHeadsign || l.headsign)}` : ""} at ${esc(l.fromName)}
         ${l.stayOn ? `<span class="st-stay">Stay on board at ${esc(l.stayOn.name)}: the same bus turns around there and continues toward ${esc(l.headsign)}. No transfer needed.</span>` : ""}
         <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span>
-        ${planState.dayOffset ? "" : `<span class="st-livestat ${l.live ? "live" : ""}">${l.live ? `<span class="dot"></span>Live ∙ ${lateText(l.depDelay)}` : "Scheduled"}</span>`}</span></li>`;
+        ${planState.dayOffset ? "" : `<span class="st-livestat ${l.live ? "live" : ""}">${l.live ? `<span class="dot"></span>Live time` : "Scheduled"}</span>`}</span></li>`;
   }).join("");
 }
 function wirePlanResults() {
@@ -3062,8 +3083,9 @@ function planGeo() {
   if (o) for (const l of o.legs) {
     if (l.kind === "walk" || l.kind === "bike") f.push({ type: "Feature", properties: { kind: l.kind }, geometry: { type: "LineString", coordinates: walkInfo.get(walkKey(l))?.coords || [l.from, l.to] } });
     else {
-      // Follow the route's actual shape between the boarding and alighting stops (straight lines if it can't be matched).
-      const along = routeBetween(l.route, l.path[0], l.path[l.path.length - 1]);
+      // Follow this trip's own GTFS shape between the boarding and alighting stops; then the route's best-matching
+      // shape; straight lines between stops if neither can be matched.
+      const along = tripPath(l) || routeBetween(l.route, l.path[0], l.path[l.path.length - 1]);
       f.push({ type: "Feature", properties: { kind: "ride", color: l.color }, geometry: { type: "LineString", coordinates: along && along.length >= 2 ? along : l.path } });
       for (const c of [l.path[0], l.path[l.path.length - 1]]) f.push({ type: "Feature", properties: { kind: "stop", color: l.color }, geometry: { type: "Point", coordinates: c } });
     }

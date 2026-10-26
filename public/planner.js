@@ -185,16 +185,13 @@
       const p = n.patterns[lb.pattern], r = n.routes[p.route];
       legs.unshift({
         kind: "ride", route: p.route, short: r.short_name, color: r.color, text: r.text_color, trip: lb.trip.id,
-        headsign: lb.trip.stayAt != null && lb.alightPos <= lb.trip.stayAt ? lb.trip.firstHeadsign : lb.trip.headsign,
         fromStop: n.stops[lb.from].id, fromName: n.stops[lb.from].name, toStop: n.stops[s].id, toName: n.stops[s].name,
         dep: lb.trip.times[lb.boardPos], arr: lb.trip.times[lb.alightPos], stopsCount: lb.alightPos - lb.boardPos,
         path: p.stops.slice(lb.boardPos, lb.alightPos + 1).filter((x) => x != null).map((x) => n.stops[x].c),
         live: !!lb.trip.live, depDelay: lb.trip.times[lb.boardPos] - lb.trip.sched[lb.boardPos], arrDelay: lb.trip.times[lb.alightPos] - lb.trip.sched[lb.alightPos],
-        // Riding through a turnaround on the same bus: where to stay on, and which way it's headed before that.
-        ...(lb.trip.stayAt != null && lb.boardPos < lb.trip.stayAt && lb.alightPos > lb.trip.stayAt
-          ? { stayOn: { name: n.stops[p.stops[lb.trip.stayAt]]?.name || "", firstHeadsign: lb.trip.firstHeadsign } } : {}),
         _p: p, _trip: lb.trip, _b: lb.boardPos, _a: lb.alightPos, _n: n, // for the walking clean-up below
       });
+      rideDetails(legs[0], n, p, lb.trip, lb.boardPos, lb.alightPos);
       s = lb.from; k--;
     }
     legs.push({ kind: opt.bike ? "bike" : "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
@@ -225,6 +222,8 @@
       l.fromStop = n.stops[l._p.stops[b]].id; l.fromName = n.stops[l._p.stops[b]].name; l.dep = l._trip.times[b];
       l.toStop = n.stops[l._p.stops[a]].id; l.toName = n.stops[l._p.stops[a]].name; l.arr = l._trip.times[a];
       l.stopsCount = a - b; l.path = l._p.stops.slice(b, a + 1).filter((x) => x != null).map((x) => n.stops[x].c);
+      l.depDelay = l._trip.times[b] - l._trip.sched[b]; l.arrDelay = l._trip.times[a] - l._trip.sched[a];
+      rideDetails(l, n, l._p, l._trip, b, a); // direction, shapes and stay-on for the new stops
     };
     const endSecs = (l) => (l.kind === "bike" ? bikeSecs : walkSecs);
     // Getting on: the stop on this bus that lets you leave LATEST (bus time minus the walk to it), then the shorter
@@ -259,6 +258,21 @@
       if (after.kind === "ride") { legs[i].to = n.stops[after._p.stops[after._b]].c; legs[i].toName = after.fromName; }
     }
     for (const l of rides) { l.fromAcc = n.stops[l._p.stops[l._b]].acc; l.toAcc = n.stops[l._p.stops[l._a]].acc; delete l._p; delete l._trip; delete l._b; delete l._a; delete l._n; }
+  }
+
+  // Direction sign, GTFS shape(s) and stay-on-board details for a ride, from where the rider boards and gets off.
+  // Recomputed whenever the boarding or drop-off stop changes (e.g. a stop the bus passes before AND after a turnaround).
+  function rideDetails(l, n, p, trip, b, a) {
+    const thru = trip.parts && trip.stayAt != null;
+    l.headsign = thru && a <= trip.stayAt ? trip.firstHeadsign : trip.headsign;
+    l.shapes = !thru ? [trip.src?.p || null]
+      : b >= trip.stayAt ? [trip.parts[1].t.src.p || null]      // only the part after the turnaround
+      : a <= trip.stayAt ? [trip.parts[0].t.src.p || null]      // only the part before it
+      : trip.parts.map((x) => x.t.src.p || null);
+    if (thru && b < trip.stayAt && a > trip.stayAt) {
+      const sp = n.stops[p.stops[trip.stayAt]];
+      l.stayOn = { name: sp?.name || "", c: sp?.c, firstHeadsign: trip.firstHeadsign };
+    } else delete l.stayOn;
   }
 
   // Back-to-back walking (or walking then biking) becomes one leg, straight from the first start to the last end:
