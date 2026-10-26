@@ -164,7 +164,8 @@ const schedByRoute = new Map();
 for (const [routeId, list] of tripsByRoute) {
   // b = block: trips on the same block are the same bus, so the trip planner can let riders stay on board when one
   // trip ends where the next begins (e.g. Route 96 turning around at the St. Albans Park and Ride).
-  const sched = list.map((t) => ({ t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0", ...(t.block_id ? { b: t.block_id } : {}), st: byTrip.get(t.trip_id) }));
+  // p = the trip's GTFS shape, so the trip planner draws exactly the path this trip takes (variants differ by time of day).
+  const sched = list.map((t) => ({ t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0", ...(t.block_id ? { b: t.block_id } : {}), ...(t.shape_id ? { p: t.shape_id } : {}), st: byTrip.get(t.trip_id) }));
   fs.writeFileSync(path.join(OUT, "sched", `${encodeURIComponent(routeId)}.json`), JSON.stringify(sched));
 
   routeStops[routeId] = {};
@@ -225,8 +226,8 @@ for (const routeId of tripsByRoute.keys()) {
   for (const shapeId of shapesByRoute.get(routeId) || []) {
     const pts = shapePts.get(shapeId); if (!pts) continue;
     const coords = pts.sort((a, b) => a[0] - b[0]).map(([, lo, la]) => [lo, la]);
-    const key = coords.join(";"); if (seen.has(key)) continue; seen.add(key);
-    lineFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: coords } });
+    const key = coords.join(";"); if (seen.has(key)) { const f = lineFeatures.find((x) => x.properties.route_id === routeId && x.geometry.coordinates.join(";") === key); if (f) (f.properties.also ??= []).push(shapeId); continue; } seen.add(key);
+    lineFeatures.push({ type: "Feature", properties: { ...props, shape_id: shapeId }, geometry: { type: "LineString", coordinates: coords } });
   }
   if (!seen.size) for (const d of Object.values(routeStops[routeId])) // no shapes.txt: connect stops in order
     lineFeatures.push({ type: "Feature", properties: props,
