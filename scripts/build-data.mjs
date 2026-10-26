@@ -162,7 +162,9 @@ function daySummary(sched, ymd, dow) {
 const service = {};
 const schedByRoute = new Map();
 for (const [routeId, list] of tripsByRoute) {
-  const sched = list.map((t) => ({ t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0", st: byTrip.get(t.trip_id) }));
+  // b = block: trips on the same block are the same bus, so the trip planner can let riders stay on board when one
+  // trip ends where the next begins (e.g. Route 96 turning around at the St. Albans Park and Ride).
+  const sched = list.map((t) => ({ t: t.trip_id, s: t.service_id, h: t.trip_headsign || "", d: t.direction_id || "0", ...(t.block_id ? { b: t.block_id } : {}), st: byTrip.get(t.trip_id) }));
   fs.writeFileSync(path.join(OUT, "sched", `${encodeURIComponent(routeId)}.json`), JSON.stringify(sched));
 
   routeStops[routeId] = {};
