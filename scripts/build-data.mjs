@@ -470,6 +470,32 @@ const freqFeatures = [];
       for (const id of c.routeIds) drawnByRoute.set(id, (drawnByRoute.get(id) || 0) + 1);
     }
   }
+  // Fallback: a route with a set frequency (frequency_overrides) that the timetable method couldn't draw is drawn
+  // from its own route path at that frequency -- only the parts of streets not already drawn for other routes.
+  // Periods without a set frequency use the route's own timetable (trips leaving its first stop in that period).
+  const fallbackDrawn = new Map();
+  for (const [routeId, sched] of schedByRoute) {
+    const short = shortOf(routeId), o = overrides[short];
+    if (!o || groupFor(short) !== "local" || drawnByRoute.get(routeId)) continue;
+    const firstDeps = sched.filter((t) => freqServices.has(t.s)).map((t) => t.st[0][1]);
+    const props = { routes: short };
+    for (const [w, def] of Object.entries(FREQ_WINDOWS)) props["h_" + w] = o[w] ?? avgHeadway(firstDeps, def);
+    if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
+    let n = 0;
+    for (const f of lineFeatures.filter((x) => x.properties.route_id === routeId)) {
+      const coords = f.geometry.coordinates, pts = coords.map(xy), sm = [], cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+      const total = cum[cum.length - 1]; if (!total) continue;
+      for (let d = 12.5; d < total; d += 25) { let i = 1; while (i < cum.length - 1 && cum[i] < d) i++; const t = (d - cum[i - 1]) / ((cum[i] - cum[i - 1]) || 1);
+        sm.push({ x: pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, y: pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t, frac: d / total }); }
+      const isCovered = sm.map((p) => { const cx = Math.floor(p.x / DCELL), cy = Math.floor(p.y / DCELL);
+        for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) for (const q of drawn.get(`${i}:${j}`) || []) if (Math.hypot(q.x - p.x, q.y - p.y) <= 20) return true; return false; });
+      const parts = isCovered.every(Boolean) ? [] : isCovered.some(Boolean) ? uncoveredParts(coords, sm, isCovered).map((x) => x.coords) : [coords];
+      for (const p of sm.filter((_, i) => !isCovered[i])) { const k = `${Math.floor(p.x / DCELL)}:${Math.floor(p.y / DCELL)}`; if (!drawn.has(k)) drawn.set(k, []); drawn.get(k).push(p); }
+      for (const c of parts) if (c.length >= 2) { freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: c } }); n++; }
+    }
+    if (n) { fallbackDrawn.set(routeId, n); drawnByRoute.set(routeId, n); }
+  }
   // 3. Report each local route, so a route missing from the frequency map is easy to spot and explain.
   const day = freqDays.weekday;
   if (day) {
@@ -481,8 +507,14 @@ const freqFeatures = [];
       const inWindows = weekday.filter((t) => Object.values(FREQ_WINDOWS).some((def) => def.hours.some(([h0, h1]) => t.st[0][1] < h1 * 3600 && t.st[t.st.length - 1][1] >= h0 * 3600)));
       const drawnN = drawnByRoute.get(routeId) || 0;
       const why = !weekday.length ? "no trips in the regular weekday schedule" : !inWindows.length ? "no trips during the rush hour, midday or evening windows" : !drawnN ? "every street it uses is already drawn under other routes" : "";
-      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set: ${overrideText(overrides[short])})` : ""}${why ? " -- " + why : ""}`);
-      if (!drawnN && weekday.length) console.log(`::warning::Frequency map: Route ${short} has no lines of its own (${why || "no frequency found"}).`);
+      const fb = fallbackDrawn.get(routeId);
+      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set: ${overrideText(overrides[short])})` : ""}${fb ? " -- drawn from its route path at the set frequency" : why ? " -- " + why : ""}`);
+      // Details for a route the timetable method couldn't draw, to find out why.
+      if ((fb || !drawnN) && weekday.length) {
+        const withShape = weekday.filter((t) => tripShape[t.t] && shapePts.get(tripShape[t.t])).length;
+        const segsWith = directed.filter((d) => d.routes.has(routeId)).length, candsWith = candidates.filter((c) => c.routeIds.includes(routeId)).length;
+        console.log(`::warning::Frequency map: Route ${short} -- timetable method found no lines of its own${fb ? " (shown from its route path instead)" : ""}. Details: ${weekday.length} weekday trips (${inWindows.length} in the time windows), ${withShape} with a route path; ${segsWith} street pieces, ${candsWith} with a frequency.`);
+      }
     }
     console.log("Frequency map by route: " + report.join("; "));
   }
