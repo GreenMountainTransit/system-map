@@ -279,17 +279,29 @@ const freqFeatures = [];
     if (!line || line.length < 2 || pts.some((p) => !p)) out = pts.slice(1).map((p, i) => [pts[i], p].filter(Boolean));
     else {
       const k = Math.cos((pts[0][1] * Math.PI) / 180);
+      // Where a stop sits along the path, searching forward from the previous stop. Take the FIRST place the path
+      // passes within 40 m of the stop (then the closest point in the next ~150 m of path), not the closest point
+      // anywhere ahead: a loop like Route 8 starts and ends at the same transit center, and matching its first stop
+      // to the END of the loop used to squeeze every later stop into nothing. With no point that close, use the
+      // closest point anywhere ahead, as before.
+      const M_PER_DEG = 111320, NEAR_STOP = 40;
       const proj = (p, from) => {
-        let best = { d: Infinity, i: from, t: 0, pt: line[from] };
+        let best = { d: Infinity, i: from, t: 0, pt: line[from] }, near = null, along = 0;
         for (let i = from; i < line.length - 1; i++) {
           const [ax, ay] = line[i], [bx, by] = line[i + 1];
           const dx = (bx - ax) * k, dy = by - ay, px = (p[0] - ax) * k, py = p[1] - ay;
           const L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, (px * dx + py * dy) / L)) : 0;
-          const d = (px - t * dx) ** 2 + (py - t * dy) ** 2;
-          if (d < best.d) best = { d, i, t, pt: [ax + (bx - ax) * t, ay + (by - ay) * t] };
-          if (best.d < 1e-9 && i > best.i + 40) break;
+          const d = (px - t * dx) ** 2 + (py - t * dy) ** 2, hit = { d, i, t, pt: [ax + (bx - ax) * t, ay + (by - ay) * t] };
+          if (d < best.d) best = hit;
+          const meters = Math.sqrt(d) * M_PER_DEG;
+          if (!near && meters <= NEAR_STOP) { near = hit; along = 0; continue; }
+          if (near) {
+            if (d < near.d) near = hit;
+            along += Math.sqrt(L) * M_PER_DEG;
+            if (along > 150) break; // the closest point near the first match is enough
+          }
         }
-        return best;
+        return near || best;
       };
       let prev = proj(pts[0], 0);
       out = [];
