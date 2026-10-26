@@ -97,8 +97,8 @@
       "mid": 20
     },
     "8": {
-      "peak": 30,
-      "mid": 30,
+      "peak": 60,
+      "mid": 60,
       "inbound_only": true
     },
     "9": {
