@@ -125,6 +125,10 @@
   .pl-accnote svg { width: 14px; height: 14px; flex: none; }
   .pl-cost { margin: 0 12px 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: #f7f9f8; font-size: .82rem; }
   .pl-cost p { margin: 0; } .pl-cost strong { color: var(--live); }
+  .pl-mappick { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 8px; border: 0; background: none; padding: 4px 0; font: inherit; font-size: .8rem; font-weight: 700; color: var(--gmt); cursor: pointer; }
+  .pl-mappick svg { width: 15px; height: 15px; } .pl-mappick:hover { text-decoration: underline; }
+  .pl-results-sort { margin-top: 10px; }
+  #pl-results .pl-sort { margin-top: 10px; }
   .pl-two-weeks { margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--line); font-size: .8rem; }
   .pl-two-weeks p { margin: 0; } .pl-two-weeks strong { color: var(--live); }
   .pl-tw-sub { margin-top: 2px !important; font-size: .72rem; color: var(--muted); } .pl-tw-sub strong { color: var(--ink); }
@@ -1688,7 +1692,11 @@ map.on("click", (e) => {
     // Show the pin right away (before any trip is found), and zoom in a little toward it -- not far.
     map.getSource("plan")?.setData(planGeo());
     if (first) map.easeTo({ center: c, zoom: Math.min(map.getZoom() + 1.5, 15), duration: reduceMotion ? 0 : 500 });
-    buildSystemPanel(); planTrip();
+    if (planPick && first) planPickBar(`Now ${tapOrClick().toLowerCase()} where you’re going`);
+    const finishing = planPick && !first;
+    if (finishing) endPlanPick();
+    buildSystemPanel();
+    planTrip().then?.(() => { if (finishing && isPhone()) { snapSheet(document.getElementById("panel"), "half"); drawPlan(true); showInTray("#pl-results"); } }); // trips up halfway, no swiping
     return;
   }
   const b = isPhone() ? 12 : 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
@@ -2437,6 +2445,7 @@ function plannerHtml() {
         <button type="button" class="pl-me" id="pl-swap" title="Swap From and To" aria-label="Swap From and To">${ICON.swap}</button>
         <ul id="pl-to-list" class="pl-list" role="listbox" hidden></ul></div>
     </div>
+    <button type="button" class="pl-mappick" id="pl-mappick">${ICON.place}Choose your start and finish on the map</button>
     <div class="pl-when">
       <label for="pl-day" class="sr-only">Day</label>
       <select id="pl-day">${planDays().map((d, i) => `<option value="${i}" ${planState.dayOffset === i ? "selected" : ""}>${d}</option>`).join("")}</select>
@@ -2445,14 +2454,9 @@ function plannerHtml() {
       <span class="pl-timesel" id="pl-timesel" role="group" aria-label="${planState.when === "by" ? "Arrival time" : "Departure time"}" ${planState.when === "now" ? "hidden" : ""}>${timeSelects(planState.time)}</span>
     </div>
     <div class="pl-prefs" role="group" aria-label="Trip preferences">
-      <div class="pl-sort" role="radiogroup" aria-label="Show trips by">
-        ${[["fastest", "Fastest"], ["walk", "Least walking"], ["transfers", "Fewest transfers"]].map(([k, t]) =>
-          `<button type="button" role="radio" data-sort="${k}" aria-checked="${loadPrefs().sort === k}">${t}</button>`).join("")}
-      </div>
       <label class="pl-acc"><input type="checkbox" id="pl-acc" ${loadPrefs().accessible ? "checked" : ""}>${ICON.wheelchair}Wheelchair-accessible stops</label>
       <label class="pl-acc"><input type="checkbox" id="pl-bike" ${loadPrefs().bike ? "checked" : ""}>${ICON.bike}Bike to and from the bus (bike-friendly routes)</label>
     </div>
-    <p class="legend-hint">Or click the map to set where you’re starting, then where you’re going.</p>
     <div id="pl-results" aria-live="polite">${planResultsHtml()}</div>
   </div>`;
 }
@@ -2494,11 +2498,8 @@ function wirePlanner() {
   };
 
   const savePrefs = (pr) => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(pr)); } catch {} };
-  document.querySelectorAll(".pl-sort [data-sort]").forEach((b) => (b.onclick = () => {
-    const pr = { ...loadPrefs(), sort: b.dataset.sort }; savePrefs(pr);
-    document.querySelectorAll(".pl-sort [data-sort]").forEach((x) => x.setAttribute("aria-checked", String(x === b)));
-    if (planState.from && planState.to) planTrip();
-  }));
+
+  document.getElementById("pl-mappick").onclick = () => startPlanPick();
   document.getElementById("pl-acc").onchange = (e) => { savePrefs({ ...loadPrefs(), accessible: e.target.checked }); if (planState.from && planState.to) planTrip(); };
   document.getElementById("pl-bike").onchange = (e) => { savePrefs({ ...loadPrefs(), bike: e.target.checked }); if (planState.from && planState.to) planTrip(); };
   wirePlanResults();
@@ -2617,6 +2618,23 @@ function readTimeSelects(el) {
   if (!h) return null; const H = (h % 12) + (ap === "PM" ? 12 : 0);
   return `${String(H).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+// "Choose your start and finish on the map": show the map (phones lower the tray), guide with a bar, and bring the
+// tray back up halfway with the trips once both points are set. Map clicks in the planner always set From, then To.
+let planPick = false;
+function planPickBar(text) {
+  let bar = document.getElementById("spot-bar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "spot-bar"; document.getElementById("map").appendChild(bar); }
+  if (!text) { bar.hidden = true; return; }
+  bar.innerHTML = `<span>${text}</span><button type="button" id="spot-cancel">Done</button>`; bar.hidden = false;
+  document.getElementById("spot-cancel").onclick = () => endPlanPick();
+}
+function startPlanPick() {
+  planPick = true; planState.from = null; planState.to = null; planState.result = null; planState.alt = null;
+  map.getSource("plan")?.setData(planGeo());
+  if (isPhone()) setSheet(false);
+  planPickBar(`${tapOrClick()} where you’re starting`);
+}
+function endPlanPick() { planPick = false; planPickBar(null); }
 // Day choices: Today, Tomorrow, then the next five days by name and date.
 function planDays() {
   return Array.from({ length: 7 }, (_, i) => {
@@ -2727,7 +2745,9 @@ function planResultsHtml() {
     const tag = e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
     return e.html.replace("@@BADGE@@", tag ? `<span class="pl-fast-tag">${tag}</span>` : "");
   }).join("");
-  const sortNote = `<p class="pl-sortnote">${{ fastest: r.arriveBy ? "Bus trips first, leaving latest while still arriving on time" : "Bus trips first, soonest arrival first", walk: "Bus trips first, least walking first", transfers: "Bus trips first, fewest transfers first" }[sort]}; then walking and biking.</p>`;
+  // Fastest / Least walking / Fewest transfers: shown once there are trips to sort.
+  const sortNote = busEntries.length ? `<div class="pl-sort" role="radiogroup" aria-label="Show bus trips by">${[["fastest", "Fastest"], ["walk", "Least walking"], ["transfers", "Fewest transfers"]]
+    .map(([k, t]) => `<button type="button" role="radio" data-sort="${k}" aria-checked="${sort === k}">${t}</button>`).join("")}</div>` : "";
   const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
   return `${dayNote}${swipeNote}${sortNote}<ul class="pl-opts">${cards}</ul>
@@ -2754,20 +2774,20 @@ async function drivingMiles(a, b) {
   if (miles == null) miles = (meters(a, b) * 1.3) / 1609.34; // fallback: straight line x 1.3
   driveCache.set(key, miles); return miles;
 }
-// "Twice a day for two weeks" (28 one-way trips over 14 days), following GMT's fare caps:
-//  - Ride Ready app or card: fares stop at $4 a day, so a transfer costs nothing extra once you ride twice in a day,
-//    and at $50 for 30 days, so two weeks of this trip costs at most $50 and the rest of the month is free.
+// "Twice a day for a month" (20 workdays = 40 one-way trips), following GMT's fare caps:
+//  - Ride Ready app or card: fares stop at $4 a day (a transfer costs nothing extra once you ride twice in a day) and at
+//    $50 for 30 days, so a month of this trip costs at most $50, however many buses it takes.
 //  - Cash or contactless card: not capped, so every bus is $2, every time.
 function twoWeekHtml(o, paidRides, driveOne, c) {
   if (!paidRides) return ""; // Shopping Specials are free
-  const days = 14, trips = 2 * days;
+  const days = 20, trips = 2 * days;
   const perDay = Math.min(2 * paidRides * c.bus_fare, c.bus_fare_daily_cap || Infinity);
   const capped = Math.min(perDay * days, c.bus_fare_monthly_cap || Infinity), uncapped = trips * paidRides * c.bus_fare;
   const drive = trips * driveOne, save = drive - capped;
   const money = (x) => `$${Math.round(x).toLocaleString("en-US")}`;
-  const why = `fares stop at ${money(c.bus_fare_daily_cap)} a day${paidRides > 1 ? ", transfers included," : ""} and ${money(c.bus_fare_monthly_cap)} for 30 days${capped >= c.bus_fare_monthly_cap ? ", so the rest of the month is free" : ""}`;
+  const why = `fares stop at ${money(c.bus_fare_daily_cap)} a day${paidRides > 1 ? ", transfers included," : ""} and ${money(c.bus_fare_monthly_cap)} for 30 days`;
   return `<div class="pl-two-weeks">
-      <p>${save >= 5 ? `Twice a day for two weeks, you’d save about <strong>${money(save)}</strong> compared with driving.` : `Twice a day for two weeks:`}</p>
+      <p>${save >= 5 ? `Twice a day for a month (20 days), you’d save about <strong>${money(save)}</strong> compared with driving.` : `Twice a day for a month (20 days):`}</p>
       <p class="pl-tw-sub">Driving ${money(drive)} vs. <strong>${money(capped)}</strong> with the Ride Ready app or card (${why}). Paying cash or by credit card: ${money(uncapped)}.</p>
     </div>`;
 }
@@ -2812,9 +2832,15 @@ function stepsHtml(o) {
   }).join("");
 }
 function wirePlanResults() {
+  document.querySelectorAll(".pl-sort [data-sort]").forEach((b) => (b.onclick = () => {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), sort: b.dataset.sort })); } catch {}
+    const el = document.getElementById("pl-results"); if (el && planState.result) { planState.selected = 0; el.innerHTML = planResultsHtml(); wirePlanResults(); drawPlan(true); }
+  }));
   document.querySelectorAll("[data-alt]").forEach((b) => (b.onclick = () => {
+    if (isPhone()) snapSheet(document.getElementById("panel"), "half");
     planState.alt = planState.alt === b.dataset.alt ? null : b.dataset.alt;
     document.getElementById("pl-results").innerHTML = planResultsHtml(); wirePlanResults(); drawPlan(true);
+    showInTray(".pl-opt.open");
   }));
   document.querySelectorAll(".pl-why").forEach((b) => (b.onclick = (e) => {
     e.stopPropagation();
@@ -2822,10 +2848,18 @@ function wirePlanResults() {
     box.hidden = !box.hidden; b.setAttribute("aria-expanded", String(!box.hidden));
   }));
   document.querySelectorAll("[data-opt]").forEach((b) => b.onclick = () => {
+    if (isPhone()) snapSheet(document.getElementById("panel"), "half"); // trip on the map above, details below
     planState.selected = +b.dataset.opt; planState.alt = null;
     document.getElementById("pl-results").innerHTML = planResultsHtml(); wirePlanResults();
     drawPlan(true); applyFilters(); fetchWalks(selectedOption());
+    showInTray(".pl-opt.open"); // the chosen trip's details at the top of the tray
   });
+}
+// Scroll the tray so an element sits at its top (no manual scrolling to find the trip).
+function showInTray(sel) {
+  const el = document.querySelector(sel), sc = document.querySelector("#panel .scroll");
+  if (!el || !sc) return;
+  setTimeout(() => sc.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8), behavior: reduceMotion ? "auto" : "smooth" }), 60);
 }
 // Walking legs follow real streets and paths (Mapbox walking directions), fetched for the trip being shown.
 const walkInfo = new Map(); // "lon,lat|lon,lat" -> { coords, meters, secs }
@@ -2951,7 +2985,8 @@ function drawPlan(fit) {
     const b = new mapboxgl.LngLatBounds();
     geo.features.forEach((ft) => (ft.geometry.type === "Point" ? [ft.geometry.coordinates] : ft.geometry.coordinates).forEach((c) => b.extend(c)));
     // Extra room at the top: the START/FINISH pins stand about 55 px above their points.
-    const base = isPhone() ? { top: 70, left: 30, right: 30, bottom: (document.querySelector("#panel header")?.offsetHeight || 140) + 30 } : panelPad();
+    const H = document.getElementById("wrap").clientHeight;
+    const base = isPhone() ? { top: 70, left: 30, right: 30, bottom: (sheetState === "half" ? Math.round(H * 0.5) : document.querySelector("#panel header")?.offsetHeight || 140) + 30 } : panelPad();
     const pad = { ...base, top: (base.top || 0) + 60, left: (base.left || 0) + 20, right: (base.right || 0) + 20 };
     map.fitBounds(b, { padding: pad, maxZoom: 16.5, duration: reduceMotion ? 0 : 700 });
   }
@@ -3341,7 +3376,8 @@ function snapSheet(el, state) {
   // open = bottom three-quarters (the top quarter stays map). The trip planner opens to nearly the full screen, so the
   // From/To boxes sit at the top and their suggestions show above the phone's keyboard instead of under it.
   const full = el.id === "panel" && view === "plan" && !routeParam;
-  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : "";
+  // half = halfway up the screen: a chosen trip on the map above, its details in the tray below.
+  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : state === "half" ? Math.round(H * 0.5) + "px" : "";
   el.classList.toggle("plan-full", full && state === "open");
   const t = el.querySelector("#toggle"); if (t) t.setAttribute("aria-expanded", String(state !== "collapsed"));
 }
