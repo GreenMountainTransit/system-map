@@ -92,10 +92,6 @@
   },
   "frequency_overrides": {
     "_help": "Minutes between buses. A number applies to rush hour, midday and evening; or set periods (peak, mid, eve), optionally for trips heading to the Downtown Transit Center only (inbound_only). Wherever the route runs, the frequency map shows at least that often.",
-    "2": {
-      "peak": 20,
-      "mid": 20
-    },
     "8": {
       "peak": 60,
       "mid": 60,
