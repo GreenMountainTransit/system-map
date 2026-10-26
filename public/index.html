@@ -105,6 +105,9 @@
   }
   .pl-fastest { border-color: var(--live) !important; }
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
+  .st-transfer { display: block; margin-bottom: 3px; font-size: .74rem; font-weight: 700; color: var(--live); } .st-transfer.tight { color: #b45309; }
+  .st-livestat { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: .72rem; font-weight: 600; color: var(--muted); }
+  .st-livestat.live { color: var(--live); } .st-livestat .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
   .pl-climb { display: flex; gap: 6px; align-items: flex-start; margin: 0 12px 8px; font-size: .78rem; color: var(--live); font-weight: 600; } .pl-climb svg { width: 16px; height: 16px; flex: none; }
   .pl-sortnote { margin: 10px 0 0; font-size: .76rem; font-weight: 600; color: var(--ink); }
   .pl-fast-tag { font-size: .74rem; font-weight: 700; color: var(--live); }
@@ -2674,32 +2677,43 @@ async function planTrip(force) {
     planState.alt = null; fetchAlternatives();
     drivingMiles(planState.from.c, planState.to.c).then(() => { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } });
   } catch (err) { planState.result = { options: [], error: true }; }
-  planState.selected = 0; planState.live = {};
+  planState.selected = 0; planState.live = {}; lastLivePlan = Date.now();
   if (out()) { out().innerHTML = planResultsHtml(); wirePlanResults(); }
   drawPlan(true); applyFilters(); checkLive(); fetchWalks(selectedOption());
 }
 // Check the first bus of the shown trips against Swiftly's live predictions (one stop each).
-async function checkLive(selectedOnly) {
-  if (planState.dayOffset) return; // live predictions only matter for trips today
-  // First search: check the top 3 trips once. After that, only the trip the rider picked is refreshed,
-  // so the planner adds just one Swiftly request every 15 seconds.
-  const opts = planState.result?.options || [];
-  const which = selectedOnly ? [[planState.selected, opts[planState.selected]]].filter(([, o]) => o) : [...opts.slice(0, 3).entries()];
-  for (const [i, o] of which) {
-    if (!liveReady) break;
-    const r = await GMTPlanner.liveFirstBus(o);
-    if (planState.result?.options?.[i] !== o) return; // a new search replaced these
-    planState.live[i] = r;
-    const el = document.querySelector(`[data-live-for="${i}"]`); if (el) el.innerHTML = liveLine(o, r);
-  }
+// Live times for every leg come from the search itself (planner.js applies live predictions to every trip). While
+// today's trips are on screen, re-plan every 30 seconds with fresh predictions, keeping the chosen trip selected.
+let lastLivePlan = 0;
+async function checkLive() {
+  if (planState.dayOffset || !relayReady || !planState.from || !planState.to || Date.now() - lastLivePlan < 30000) return;
+  lastLivePlan = Date.now();
+  const prev = selectedOption(), key = (o) => o?.legs.filter((l) => l.kind === "ride").map((l) => l.trip).join(">");
+  let r;
+  try {
+    const prefs = loadPrefs();
+    r = planState.when === "by" && planState.time
+      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: 0 })
+      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: 0 });
+  } catch { return; }
+  if (view !== "plan" || !planState.result) return;
+  planState.result = r;
+  const keep = r.options.findIndex((o) => key(o) === key(prev));
+  planState.selected = keep >= 0 ? keep : 0;
+  const el = document.getElementById("pl-results"), sc = document.querySelector("#panel .scroll"), y = sc?.scrollTop;
+  if (el) { el.innerHTML = planResultsHtml(); wirePlanResults(); if (sc) sc.scrollTop = y; }
+  if (!planState.alt) drawPlan(false);
 }
-function liveLine(o, r) {
-  const ride = o.legs.find((l) => l.kind === "ride");
-  if (r?.live) {
-    const late = Math.round(r.delay / 60);
-    return `<span class="dot"></span>Route ${esc(ride.short)} leaves ${esc(ride.fromName)} ${when(r.dep) === "Due" ? "now" : "in " + when(r.dep)}${late >= 2 ? ` ∙ ${late} min late` : late <= -2 ? ` ∙ ${-late} min early` : " ∙ on time"} (live)`;
+const lateText = (secs) => { const m = Math.round(secs / 60); return m >= 2 ? `${m} min late` : m <= -2 ? `${-m} min early` : "on time"; };
+function liveLine(o) {
+  const rides = o.legs.filter((l) => l.kind === "ride"), ride = rides[0], r = planState.result;
+  if (!ride) return "";
+  if (ride.live) {
+    const allLive = rides.every((l) => l.live);
+    return `<span class="dot"></span>Live: Route ${esc(ride.short)} leaves ${when(ride.dep) === "Due" ? "now" : "in " + when(ride.dep)} ∙ ${lateText(ride.depDelay)}${rides.length > 1 ? (allLive ? " ∙ transfer timed live" : " ∙ later buses on the timetable") : ""}`;
   }
-  return r ? `Scheduled times${r.feed === false ? " (live predictions unavailable)" : ""}` : "";
+  if (planState.dayOffset) return "";
+  return `Scheduled times${r?.live?.feed === false ? " (live predictions unavailable)" : ""}`;
 }
 const dur = (secs) => { const m = Math.round(secs / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr ${m % 60 ? (m % 60) + " min" : ""}`.trim(); };
 function planResultsHtml() {
@@ -2721,7 +2735,7 @@ function planResultsHtml() {
           o.bikeSecs ? `${Math.max(1, Math.round(o.bikeSecs / 60))} min biking` : "",
           o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : o.bikeSecs ? "" : "No walking"].filter(Boolean).join(" ∙ ")}</span>
         ${r.prefs?.accessible ? accessNote(o) : ""}
-        <span class="pl-live src-line ${planState.live[i]?.live ? "live" : ""}" data-live-for="${i}">${liveLine(o, planState.live[i])}</span>
+        <span class="pl-live src-line ${o.legs.find((l) => l.kind === "ride")?.live ? "live" : ""}">${liveLine(o)}</span>
         @@BADGE@@</button>${open ? `<ol class="pl-steps">${stepsHtml(o)}</ol>${bikeClimbHtml(o)}${costHtml(o)}` : ""}</li>`;
     return { bus: true, arrive: o.arrive, depart: o.depart, walk: o.walkSecs || 0, rides: o.rides, html };
   });
@@ -2751,7 +2765,7 @@ function planResultsHtml() {
   const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
   return `${dayNote}${swipeNote}${sortNote}<ul class="pl-opts">${cards}</ul>
-    <p class="src">Trips use GMT’s timetable with walking up to about 10 minutes and at least 2 minutes to transfer. The first bus is checked against live predictions.</p>`;
+    <p class="src">${relayReady && !planState.dayOffset ? "Trips use live bus predictions for every bus and transfer (the timetable where a bus has no live prediction)" : "Trips use GMT’s timetable"}, with walking up to about 10 minutes and at least 2 minutes to transfer.</p>`;
 }
 // Wheelchair mode: say which boarding/alighting stops aren't confirmed accessible (stops marked inaccessible are avoided).
 function accessNote(o) {
@@ -2826,9 +2840,18 @@ function stepsHtml(o) {
       const where = i === last ? planState.to.label : l.toName;
       return `<li class="st-walk"><span class="st-ico">${bike ? ICON.bike : ICON.walk}</span><span>${bike ? "Bike" : "Walk"} ${dur(info?.secs ?? l.secs)}${info ? ` (${dist(info.meters)})` : ""} to ${esc(where)}${bike ? `<span class="st-sub">Bike-friendly route: bike paths, bike lanes and quieter streets where available${i === 0 ? ". GMT buses have front bike racks." : ""}</span>` : ""}</span></li>`;
     }
+    // Transfer margin: from getting off the previous bus (plus any walk) to this bus leaving -- live when both are.
+    const prev = o.legs.slice(0, i).reverse().find((x) => x.kind === "ride");
+    let transfer = "";
+    if (prev) {
+      const walk = o.legs.slice(o.legs.indexOf(prev) + 1, i).filter((x) => x.kind !== "ride").reduce((a, x) => a + x.secs, 0);
+      const spare = Math.round((l.dep - prev.arr - walk) / 60), liveBoth = prev.live && l.live;
+      transfer = `<span class="st-transfer ${spare < 3 ? "tight" : ""}">${spare < 3 ? "Tight connection: " : ""}${Math.max(0, spare)} min to make this transfer${liveBoth ? " (live)" : ""}</span>`;
+    }
     return `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
-        <span><strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
-        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span></span></li>`;
+        <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${l.headsign ? ` toward ${esc(l.headsign)}` : ""} at ${esc(l.fromName)}
+        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span>
+        ${planState.dayOffset ? "" : `<span class="st-livestat ${l.live ? "live" : ""}">${l.live ? `<span class="dot"></span>Live ∙ ${lateText(l.depDelay)}` : "Scheduled"}</span>`}</span></li>`;
   }).join("");
 }
 function wirePlanResults() {

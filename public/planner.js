@@ -5,8 +5,8 @@
 // It uses RAPTOR (round-based public transit routing), the method most journey planners use:
 // round 1 finds everywhere reachable on one bus, round 2 adds one transfer, and so on.
 // Walking: up to ACCESS_M to and from stops, up to TRANSFER_M between stops when changing buses.
-// Live data: GMT's real-time predictions are only available one stop at a time, so each suggested
-// trip's FIRST bus is checked live (GMTLive.arrivals); later legs use the timetable.
+// Live data: with the relay, every trip and stop gets Swiftly's live predictions before the search (applyLive), so
+// every bus and transfer is timed live. Without the relay, the timetable is used.
 (function () {
   const WALK_MPS = 1.25;          // walking speed, meters per second (about 2.8 mph)
   const DETOUR = 1.3;             // streets aren't straight lines: straight-line distance x 1.3
@@ -54,7 +54,7 @@
     // The day before's late trips, the chosen day's, and the next day's early ones, as real times (seconds since 1970).
     const days = [-1, 0, 1].map((o) => {
       const { ymd, dow } = L().shiftYmd(target.ymd, o);
-      return { midnight: localMidnight(ymd), on: L().servicesOn(cal, ymd, dow) };
+      return { midnight: localMidnight(ymd), ymd, on: L().servicesOn(cal, ymd, dow) };
     });
     const patterns = [], byKey = new Map();
     for (const r of meta.routes) {
@@ -66,7 +66,9 @@
           byKey.set(key, patterns.length);
           patterns.push({ route: r.route_id, stops: trip.st.map((x) => idx.get(x[0])), trips: [] });
         }
-        patterns[byKey.get(key)].trips.push({ id: trip.t, headsign: trip.h, times: trip.st.map((x) => day.midnight + x[1]) });
+        const sched = trip.st.map((x) => day.midnight + x[1]);
+        // times = what the search uses (live when available); sched = the timetable; src/midnight/ymd for live updates.
+        patterns[byKey.get(key)].trips.push({ id: trip.t, headsign: trip.h, times: sched.slice(), sched, src: trip, midnight: day.midnight, ymd: day.ymd, live: false });
       }
     }
     for (const p of patterns) p.trips.sort((a, b) => a.times[0] - b.times[0]);
@@ -121,7 +123,8 @@
           // Can we catch an earlier bus here than the one we're on?
           const ready = tau[k - 1][s] + (k > 1 && label[k - 1][s]?.kind === "ride" ? TRANSFER_BUFFER : 0);
           if (ready < INF && usable(s) && pos < p.stops.length - 1 && (!trip || ready <= trip.times[pos])) {
-            const t = p.trips.find((x) => x.times[pos] >= ready);
+            let t = null; // the trip that actually leaves soonest (live delays can reorder buses)
+            for (const x of p.trips) { const d = x.times[pos]; if (d >= ready && isFinite(d) && (!t || d < t.times[pos])) t = x; }
             if (t && t !== trip) { trip = t; boardPos = pos; boardStop = s; }
           }
         }
@@ -163,6 +166,7 @@
         fromStop: n.stops[lb.from].id, fromName: n.stops[lb.from].name, toStop: n.stops[s].id, toName: n.stops[s].name,
         dep: lb.trip.times[lb.boardPos], arr: lb.trip.times[lb.alightPos], stopsCount: lb.alightPos - lb.boardPos,
         path: p.stops.slice(lb.boardPos, lb.alightPos + 1).filter((x) => x != null).map((x) => n.stops[x].c),
+        live: !!lb.trip.live, depDelay: lb.trip.times[lb.boardPos] - lb.trip.sched[lb.boardPos], arrDelay: lb.trip.times[lb.alightPos] - lb.trip.sched[lb.alightPos],
         _p: p, _trip: lb.trip, _b: lb.boardPos, _a: lb.alightPos, _n: n, // for the walking clean-up below
       });
       s = lb.from; k--;
@@ -240,8 +244,29 @@
   // ---------- public: plan a trip ----------
   // Preferences: sort = "fastest" | "walk" (least walking) | "transfers" (fewest); accessible = avoid stops marked
   // not wheelchair accessible. Least-walking also searches with shorter walking limits, for options that walk less.
+  // Live predictions for every trip and stop (GTFS-realtime through the relay), laid over the timetable before
+  // searching, so every leg and every transfer is timed live -- as Google Maps and Transit do. A canceled trip or
+  // skipped stop can't be used. Trips without live data keep their timetable times.
+  async function applyLive(n) {
+    let tus = null;
+    try { tus = await L().liveTrips?.(); } catch { tus = null; }
+    const now = Date.now() / 1000;
+    let liveTrips = 0;
+    for (const p of n.patterns) for (const t of p.trips) {
+      t.times = t.sched.slice(); t.live = false;
+      const tu = tus?.get(t.id);
+      if (!tu) continue;
+      if (tu.startDate ? tu.startDate !== t.ymd : Math.abs((t.sched[0] + t.sched[t.sched.length - 1]) / 2 - now) > 12 * 3600) continue; // that day's run only
+      if (tu.canceled) { t.times = t.times.map(() => Infinity); continue; }
+      let any = false;
+      t.times = t.sched.map((sec, i) => { const r = L().applyRealtime(tu, t.src, i, sec, t.midnight); if (!r) return Infinity; if (r.live) any = true; return r.epoch; });
+      t.live = any; if (any) liveTrips++;
+    }
+    return { feed: !!tus, trips: liveTrips };
+  }
   async function plan({ from, to, depart, arriveBy, prefs = {}, dayOffset = 0 }) {
     const n = await network(dayOffset);
+    const live = dayOffset === 0 ? await applyLive(n) : (n.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; })), { feed: false, trips: 0 });
     const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike };
     const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
     let result;
@@ -251,7 +276,7 @@
       for (const o of runs) collect(n, from, to, depart, o, options, seen);
       result = finish(options, from, to);
     }
-    return { ...result, options: sortByPref(result.options, prefs.sort), prefs };
+    return { ...result, options: sortByPref(result.options, prefs.sort), prefs, live };
   }
   const walkTotal = (o) => o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
   const bikeTotal = (o) => o.legs.filter((l) => l.kind === "bike").reduce((a, l) => a + l.secs, 0);

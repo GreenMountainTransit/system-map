@@ -326,7 +326,8 @@
     configure({ key, dataDir, relay: r }) { KEY = key; if (dataDir) DATA = dataDir; RELAY = (r || "").replace(/\/$/, ""); },
     detours, alerts,
     vehicles, arrivals, decodeTripUpdates,
-    // shared with the trip planner (planner.js)
-    data, localClock, shiftYmd, servicesOn,
+    // shared with the trip planner (planner.js): live predictions for EVERY trip and stop, via the relay
+    data, localClock, shiftYmd, servicesOn, applyRealtime,
+    liveTrips: () => (RELAY ? relayTripUpdates() : Promise.resolve(null)),
   };
 })();
