@@ -2979,18 +2979,36 @@ function showInTray(sel) {
 // Walking legs follow real streets and paths (Mapbox walking directions), fetched for the trip being shown.
 const walkInfo = new Map(); // "lon,lat|lon,lat" -> { coords, meters, secs }
 const walkKey = (l) => `${l.from.map((x) => x.toFixed(5))}|${l.to.map((x) => x.toFixed(5))}`;
+// The best street route between two points. Walking: ask Mapbox for its standard routes AND routes that favor
+// pedestrian walkways (plazas, Church Street Marketplace, passages through blocks), with alternatives for each, and
+// keep the QUICKEST -- the first suggestion alone can loop around a block. Biking: Mapbox's recommended bike-friendly route.
+async function streetRoute(kind, a, b) {
+  const base = `https://api.mapbox.com/directions/v5/mapbox/${kind === "bike" ? "cycling" : "walking"}/${a.join(",")};${b.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
+  const urls = kind === "bike" ? [base] : [`${base}&alternatives=true`, `${base}&alternatives=true&walkway_bias=1`];
+  const all = (await Promise.all(urls.map(async (u) => { try { return (await (await fetch(u)).json()).routes || []; } catch { return []; } }))).flat()
+    .filter((r) => r?.geometry?.coordinates?.length > 1);
+  if (!all.length) return null;
+  const r = kind === "bike" ? all[0] : all.reduce((x, y) => (y.duration < x.duration - 1 || (Math.abs(y.duration - x.duration) <= 1 && y.distance < x.distance) ? y : x));
+  return { coords: r.geometry.coordinates, meters: r.distance, secs: r.duration };
+}
 async function fetchWalks(o) {
   if (!o) return;
   const todo = o.legs.filter((l) => (l.kind === "walk" || l.kind === "bike") && !walkInfo.has(walkKey(l)));
   if (!todo.length) return;
   await Promise.all(todo.map(async (l) => {
-    try {
-      const url = `https://api.mapbox.com/directions/v5/mapbox/${l.kind === "bike" ? "cycling" : "walking"}/${l.from.join(",")};${l.to.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
-      const r = (await (await fetch(url)).json()).routes?.[0];
-      if (r?.geometry?.coordinates?.length > 1) walkInfo.set(walkKey(l), { coords: [l.from, ...r.geometry.coordinates, l.to], meters: r.distance, secs: r.duration });
-    } catch {}
+    const r = await streetRoute(l.kind, l.from, l.to);
+    if (r) walkInfo.set(walkKey(l), { ...r, coords: [l.from, ...r.coords, l.to] });
   }));
-  if (selectedOption() === o) { drawPlan(false); const el = document.querySelector(".pl-opt.open .pl-steps"); if (el) el.innerHTML = stepsHtml(o); }
+  // The trip's start and arrival times use the real walking times from the street routes (the planner's first estimate
+  // is from straight-line distance), so the card matches the steps.
+  const rides = o.legs.filter((l) => l.kind === "ride"), first = o.legs[0], last = o.legs[o.legs.length - 1];
+  if (rides.length && first.kind !== "ride" && walkInfo.get(walkKey(first))) o.depart = rides[0].dep - Math.round(walkInfo.get(walkKey(first)).secs);
+  if (rides.length && last.kind !== "ride" && walkInfo.get(walkKey(last))) o.arrive = rides[rides.length - 1].arr + Math.round(walkInfo.get(walkKey(last)).secs);
+  if (selectedOption() === o) {
+    drawPlan(false);
+    const el = document.getElementById("pl-results"), sc = document.querySelector("#panel .scroll"), y = sc?.scrollTop;
+    if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); if (sc) sc.scrollTop = y; }
+  }
 }
 // "Walk the whole way" / "Bike the whole way": Mapbox walking and cycling directions for the whole trip.
 const altInfo = new Map(); // "from|to" -> { walk: {coords, meters, secs}, bike: {...} }
@@ -2999,12 +3017,7 @@ async function fetchAlternatives() {
   if (!planState.from || !planState.to) return;
   const key = altKey(); if (altInfo.has(key)) return;
   const out = {}; altInfo.set(key, out);
-  await Promise.all([["walk", "walking"], ["bike", "cycling"]].map(async ([k, profile]) => {
-    try {
-      const r = (await (await fetch(`https://api.mapbox.com/directions/v5/mapbox/${profile}/${planState.from.c.join(",")};${planState.to.c.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`)).json()).routes?.[0];
-      if (r?.geometry?.coordinates?.length > 1) out[k] = { coords: r.geometry.coordinates, meters: r.distance, secs: r.duration };
-    } catch {}
-  }));
+  await Promise.all(["walk", "bike"].map(async (k) => { const r = await streetRoute(k, planState.from.c, planState.to.c); if (r) out[k] = r; }));
   if (altKey() === key) { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } }
 }
 // Walking (and, with the bike option on, cycling) beats every bus trip when it gets you there sooner, counting
