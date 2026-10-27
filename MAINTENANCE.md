@@ -116,15 +116,19 @@ Commit the file and the map picks up the new figures with the next build. Drivin
 - After each build, the **Build data** log has a line **"Frequency map by route: …"** listing every local route and how many frequency lines it got. A route with none gets a yellow warning saying why: no weekday trips, no trips during the rush hour / midday / evening windows, or every street it uses is already drawn under other routes (it still appears in those streets' route lists).
 - **Manual settings for any route:** `route-info.json` → `"frequency_overrides"` has an entry for every local route. Leave it empty (`"5": {}`) to use the timetable. Add minutes for any period to **replace** the timetable figure for that route, faster or slower: `peak` (rush hour), `mid` (midday), `eve` (evening). For example, `"7": { "peak": 20 }` shows Route 7 every 20 minutes at rush hour and uses the timetable at other times, and `"8": { "peak": 60, "mid": 60 }` shows Route 8 hourly. Add `"inbound_only": true` to apply a setting only on trips heading to the Downtown Transit Center. Streets shared by several routes add their buses together (Route 7 every 20 + Route 8 every 60 = every 15). Leave out periods a route doesn't run (a setting for a period draws the route then). Commit the file and the next build uses it; the **Build data** log lists each route's settings.
 
-### Testing a new GTFS feed (without publishing it)
-Use this to check a new schedule before it goes live, such as an upcoming feed from Trillium, or an older one.
+### Testing a new GTFS feed (preview link)
+Use this to check a new schedule before it goes live, such as an upcoming feed from Trillium, or an older one. The live map stays on GMT's current feed throughout.
 1. Get a link to the feed's `.zip` file. Trillium (support+ccta-vt-us@trilliumtransit.com) can share an upcoming feed, and MobilityData keeps every past version of GMT's feed at mobilitydatabase.org/feeds/gtfs/mdb-629 (each version has a download link).
 2. In GitHub, open **Actions**, then **Build map data and publish**, then **Run workflow**.
-3. Paste the link into **GTFS URL**. If the feed starts in the future (or ended in the past), put a date it covers in **Build date** (YYYY-MM-DD), since the build only accepts a feed with service in the 7 days from that date.
+3. Paste the link into **GTFS URL**. If the feed starts in the future (or ended in the past), put a date it covers in **Build date** (YYYY-MM-DD); the build only accepts a feed with service in the 7 days from that date.
 4. Check **Test only**, then click **Run workflow**.
-5. When it finishes, open the run. Its summary shows the dates the feed covers; how many routes, stops and trips it built; the frequency map line for every local route; and any warnings or errors. Compare these with the current feed's numbers (from a normal run). The built map data is under **Artifacts** as **test-map-data**, along with the full build log.
+5. When it finishes, open the run. Its summary shows the dates the feed covers; its routes, stops and trips; the frequency map line; any warnings; and the **preview link**:
+   **https://greenmountaintransit.github.io/system-map/?preview=1**
+6. Open the preview link. It's the full map running on the test schedule, behaving as if it were the build date you entered, so departures and the trip planner use the test schedule. A dark red banner says it's a preview, with the feed's dates. Live buses are off in the preview, since they belong to today's real service. Route pages work too: add `&preview=1` (for example `?route=2&preview=1`).
 
-A test run never publishes and never opens a "Map update failed" issue, whatever happens. When the new feed is ready to go live, Trillium publishes it at GMT's usual feed address and the nightly build picks it up automatically, so nothing needs changing.
+The preview stays available (nightly builds keep it) until you run another test, for up to 90 days. If the test feed fails to build, nothing is published and the live map is unchanged. Test runs never open a "Map update failed" issue. The preview's data and build logs are also under **Artifacts** on the run's page as **test-map-data**.
+
+When the new feed is ready to go live, Trillium publishes it at GMT's usual feed address and the nightly build picks it up automatically, so nothing needs changing.
 
 ### Build failure alerts
 If the nightly update fails, **the live map stays up** with its last good data, and two alerts go out:
