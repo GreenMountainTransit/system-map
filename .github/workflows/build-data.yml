@@ -21,7 +21,7 @@ on:
         required: false
         default: ""
       test_only:
-        description: "Test only: build and check the feed, but DON'T publish (the live map stays as it is). The built data is saved on the run's page."
+        description: "Test only: build the feed above as a PREVIEW at .../system-map/?preview=1; the live map stays on GMT's current feed."
         type: boolean
         required: false
         default: false
@@ -30,13 +30,16 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read   # to restore the latest preview (from the last "Test only" run) when publishing
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 env:
-  GTFS_URL: ${{ github.event.inputs.gtfs_url || 'http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip' }}   # GMT GTFS, published by Trillium
+  CURRENT_GTFS: http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip   # GMT GTFS, published by Trillium
+  GTFS_URL: ${{ github.event.inputs.gtfs_url || 'http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip' }}
+  TEST_ONLY: ${{ inputs.test_only }}
   BUILD_DATE: ${{ github.event.inputs.build_date }}
 
 jobs:
@@ -49,28 +52,58 @@ jobs:
           node-version: 22   # long-term support release (Node.js 20 reached end of life in April 2026)
       - name: Download GTFS
         run: |
-          echo "Using $GTFS_URL"
-          curl -fsSL --retry 3 --retry-delay 30 "$GTFS_URL" -o gtfs.zip
-          unzip -q -o gtfs.zip -d gtfs
-          # Some zips put the files in a subfolder; use whichever folder holds routes.txt.
-          dir=$(dirname "$(find gtfs -name routes.txt | head -1)")
-          echo "GTFS_DIR=$dir" >> "$GITHUB_ENV"
+          get() { # get URL FOLDER VARIABLE: download a feed and note the folder that holds routes.txt
+            echo "Downloading $1"
+            curl -fsSL --retry 3 --retry-delay 30 "$1" -o "$2.zip"
+            unzip -q -o "$2.zip" -d "$2"
+            echo "$3=$(dirname "$(find "$2" -name routes.txt | head -1)")" >> "$GITHUB_ENV"
+          }
+          if [ "$TEST_ONLY" = "true" ]; then
+            get "$GTFS_URL" gtfs_test TEST_DIR      # the test feed, for the preview
+            get "$CURRENT_GTFS" gtfs GTFS_DIR       # GMT's current feed, for the live map as usual
+          else
+            get "$GTFS_URL" gtfs GTFS_DIR
+          fi
       - name: Build data
         run: |
           set -o pipefail
-          if [ -f amenities.csv ]; then node scripts/build-data.mjs "$GTFS_DIR" amenities.csv 2>&1 | tee build.log; else node scripts/build-data.mjs "$GTFS_DIR" 2>&1 | tee build.log; fi
+          build() { if [ -f amenities.csv ]; then node scripts/build-data.mjs "$1" amenities.csv; else node scripts/build-data.mjs "$1"; fi; }
+          if [ "$TEST_ONLY" = "true" ]; then
+            # 1. The preview, from the test feed, as of the test date (BUILD_DATE). If it fails, nothing is published.
+            PREVIEW_FEED="$GTFS_URL" build "$TEST_DIR" 2>&1 | tee build.log
+            mkdir -p public/preview && rm -rf public/preview/data && mv public/data public/preview/data && mkdir -p public/data
+            # 2. The live map, from GMT's current feed, as of today -- exactly as a normal run.
+            BUILD_DATE= build "$GTFS_DIR" 2>&1 | tee build-live.log
+          else
+            build "$GTFS_DIR" 2>&1 | tee build.log
+          fi
+      - name: Keep the current preview (from the last "Test only" run)
+        if: ${{ !inputs.test_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=preview-site&per_page=20" --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty' || true)
+          if [ -n "$id" ]; then
+            gh run download "$id" --repo "${{ github.repository }}" -n preview-site -D public/preview && echo "Preview restored from run $id." || echo "Couldn't restore the preview; publishing without it."
+          else
+            echo "No preview to keep."
+          fi
       - name: Summary on the run's page
         if: always()
         run: |
           {
-            if [ "${{ inputs.test_only }}" = "true" ]; then echo "## Test build (not published)"; else echo "## Map build"; fi
+            if [ "${{ inputs.test_only }}" = "true" ]; then echo "## Test build: preview of a test feed"; else echo "## Map build"; fi
             echo ""
             echo "- **Feed:** $GTFS_URL"
             [ -n "$BUILD_DATE" ] && echo "- **Built as if it were:** $BUILD_DATE"
             [ -f gtfs/feed_info.txt ] && echo "- **feed_info.txt:** $(sed -n 2p "$(find gtfs -name feed_info.txt | head -1)")"
             echo ""
             grep -E "Feed covers|Built [0-9]+ routes|Frequency map by route|Frequency map uses|Ridership:|Amenities:|::warning::|::error::|Error:" build.log 2>/dev/null | sed -E 's/^::(warning|error)::/**\1:** /; s/^/- /'
-            if [ "${{ inputs.test_only }}" = "true" ]; then echo ""; echo "The built map data is in **test-map-data** under Artifacts below."; fi
+            if [ "${{ inputs.test_only }}" = "true" ]; then
+              echo ""
+              echo "**Preview:** https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/?preview=1 (the live map stays on GMT's current feed)."
+              echo "The preview's data and build logs are also under **test-map-data** in Artifacts below."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Add keys from the repository secrets
         env:
@@ -94,22 +127,28 @@ jobs:
             else add("SWIFTLY_KEY", "__SWIFTLY_KEY__", "publishing without live buses");
             add("GOOGLE_MAPS_KEY", "__GOOGLE_KEY__", "Street View opens as a link to Google Maps instead of inside the panel");
             fs.writeFileSync(f, html);'
-      - name: Save the test build (Test only)
+      - name: Save the preview (nightly builds restore it until the next test)
+        if: ${{ inputs.test_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-site
+          path: public/preview
+          retention-days: 90
+      - name: Save the test build's data and logs
         if: ${{ inputs.test_only }}
         uses: actions/upload-artifact@v4
         with:
           name: test-map-data
           path: |
-            public/data
+            public/preview/data
             build.log
+            build-live.log
           retention-days: 14
-      - if: ${{ !inputs.test_only }}
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: public
   deploy:
     needs: build
-    if: ${{ !inputs.test_only }}   # Test only: never publish
     runs-on: ubuntu-latest
     environment:
       name: github-pages
