@@ -1864,7 +1864,7 @@ function buildSystemPanel() {
       <ul class="tiers" aria-label="Filter by frequency">${FREQ.map((t) => `<li><button type="button" data-tier="${t.tier}" aria-pressed="${freqTiers.has(t.tier)}">
         <span class="swatch ${t.dashed ? "dashed" : ""}" style="--c:${t.color};--w:${[0, 7, 5, 3.5, 2.5][t.tier]}px"></span><span>${t.label}</span>
         <span class="tick" aria-hidden="true">${ICON.check}</span></button></li>`).join("")}</ul>
-      <p class="freq-note">Approximate: based on the average number of buses each hour. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
+      <p class="freq-note">Based on how often buses leave the Downtown Transit Center (Route 4: the Essex Junction Amtrak station) in each period, as GMT schedules service. Streets served by more than one route add their buses together. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
     </div>` : `
     <div class="scroll">
       <div class="legend-bar"><span id="vis-count" aria-live="polite"></span>
@@ -2549,7 +2549,7 @@ function plannerHtml() {
     </div>
     <div class="pl-prefs" role="group" aria-label="Trip preferences">
       <label class="pl-acc"><input type="checkbox" id="pl-acc" ${loadPrefs().accessible ? "checked" : ""}>${ICON.wheelchair}Wheelchair-accessible stops</label>
-      <label class="pl-acc"><input type="checkbox" id="pl-bike" ${loadPrefs().bike ? "checked" : ""}>${ICON.bike}Bike to and from the bus (bike-friendly routes)</label>
+      <label class="pl-acc"><input type="checkbox" id="pl-bike" ${loadPrefs().bike ? "checked" : ""}>${ICON.bike}Bike to and from the bus (bike-friendly routes; the bus takes the hills)</label>
     </div>
     <div id="pl-results" aria-live="polite">${planResultsHtml()}</div>
   </div>`;
@@ -2761,10 +2761,10 @@ async function planTrip(force) {
   if (!planState.from || !planState.to) { if (force && out()) out().innerHTML = `<p class="none">Choose where you’re starting and where you’re going.</p>`; return; }
   if (out()) out().innerHTML = `<p class="none">Finding trips…</p>`;
   try {
-    const prefs = loadPrefs();
+    const prefs = loadPrefs(), elev = prefs.bike ? await bikeElevations(planState.from.c, planState.to.c) : null;
     planState.result = planState.when === "by" && planState.time
-      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: planState.dayOffset || 0 })
-      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: planState.dayOffset || 0 });
+      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: planState.dayOffset || 0, elev })
+      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: planState.dayOffset || 0, elev });
     planState.alt = null; fetchAlternatives();
     drivingMiles(planState.from.c, planState.to.c).then(() => { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } });
   } catch (err) { planState.result = { options: [], error: true }; }
@@ -2782,10 +2782,10 @@ async function checkLive() {
   const prev = selectedOption(), key = (o) => o?.legs.filter((l) => l.kind === "ride").map((l) => l.trip).join(">");
   let r;
   try {
-    const prefs = loadPrefs();
+    const prefs = loadPrefs(), elev = prefs.bike ? await bikeElevations(planState.from.c, planState.to.c) : null;
     r = planState.when === "by" && planState.time
-      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: 0 })
-      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: 0 });
+      ? await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, arriveBy: planDepart(), prefs, dayOffset: 0, elev })
+      : await GMTPlanner.plan({ from: planState.from.c, to: planState.to.c, depart: planDepart(), prefs, dayOffset: 0, elev });
   } catch { return; }
   if (view !== "plan" || !planState.result) return;
   planState.result = r;
@@ -2929,7 +2929,8 @@ function stepsHtml(o) {
     if (l.kind === "walk" || l.kind === "bike") {
       const info = walkInfo.get(walkKey(l)), bike = l.kind === "bike";
       const where = i === last ? planState.to.label : l.toName;
-      return `<li class="st-walk"><span class="st-ico">${bike ? ICON.bike : ICON.walk}</span><span>${bike ? "Bike" : "Walk"} ${dur(info?.secs ?? l.secs)}${info ? ` (${dist(info.meters)})` : ""} to ${esc(where)}${bike ? `<span class="st-sub">Bike-friendly route: bike paths, bike lanes and quieter streets where available${i === 0 ? ". GMT buses have front bike racks." : ""}</span>` : ""}</span></li>`;
+      const up = bike && info?.climb != null ? Math.round((info.climb * 3.281) / 10) * 10 : null;
+      return `<li class="st-walk"><span class="st-ico">${bike ? ICON.bike : ICON.walk}</span><span>${bike ? "Bike" : "Walk"} ${dur(info?.secs ?? l.secs)}${info ? ` (${dist(info.meters)}${up != null ? `, ${up ? `${up} ft uphill` : "no climbing"}` : ""})` : ""} to ${esc(where)}${bike ? `<span class="st-sub">Bike-friendly route: bike paths, bike lanes and quieter streets where available${i === 0 ? ". GMT buses have front bike racks." : ""}</span>` : ""}</span></li>`;
     }
     // Transfer margin: from getting off the previous bus (plus any walk) to this bus leaving -- live when both are.
     const prev = o.legs.slice(0, i).reverse().find((x) => x.kind === "ride");
@@ -2979,16 +2980,39 @@ function showInTray(sel) {
 // Walking legs follow real streets and paths (Mapbox walking directions), fetched for the trip being shown.
 const walkInfo = new Map(); // "lon,lat|lon,lat" -> { coords, meters, secs }
 const walkKey = (l) => `${l.from.map((x) => x.toFixed(5))}|${l.to.map((x) => x.toFixed(5))}`;
+// Bike mode: ground heights for the start, the finish and every stop within biking range (about 2 miles), from
+// Mapbox's elevation tiles, so the planner can let the bus take the hills. Cached per trip; if the tiles don't load
+// within a few seconds, the planner times bike legs on the flat as before.
+const elevCache = new Map();
+async function bikeElevations(from, to) {
+  const key = `${from.map((x) => x.toFixed(4))}|${to.map((x) => x.toFixed(4))}`;
+  if (elevCache.has(key)) return elevCache.get(key);
+  const RANGE = 3300, ids = Object.values(stopsById).filter((s) => meters(s.coords, from) <= RANGE || meters(s.coords, to) <= RANGE);
+  const work = (async () => {
+    const [ef, et, ...es] = await Promise.all([elevationAt(from), elevationAt(to), ...ids.map((s) => elevationAt(s.coords))]);
+    if (ef == null || et == null) return null;
+    return { from: ef, to: et, stops: new Map(ids.map((s, i) => [s.stop_id, es[i]]).filter(([, v]) => v != null)) };
+  })();
+  const out = await Promise.race([work.catch(() => null), new Promise((r) => setTimeout(() => r(null), 4000))]);
+  if (out) elevCache.set(key, out);
+  return out;
+}
 // The best street route between two points. Walking: ask Mapbox for its standard routes AND routes that favor
 // pedestrian walkways (plazas, Church Street Marketplace, passages through blocks), with alternatives for each, and
 // keep the QUICKEST -- the first suggestion alone can loop around a block. Biking: Mapbox's recommended bike-friendly route.
 async function streetRoute(kind, a, b) {
   const base = `https://api.mapbox.com/directions/v5/mapbox/${kind === "bike" ? "cycling" : "walking"}/${a.join(",")};${b.join(",")}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
-  const urls = kind === "bike" ? [base] : [`${base}&alternatives=true`, `${base}&alternatives=true&walkway_bias=1`];
+  const urls = kind === "bike" ? [`${base}&alternatives=true`] : [`${base}&alternatives=true`, `${base}&alternatives=true&walkway_bias=1`];
   const all = (await Promise.all(urls.map(async (u) => { try { return (await (await fetch(u)).json()).routes || []; } catch { return []; } }))).flat()
     .filter((r) => r?.geometry?.coordinates?.length > 1);
   if (!all.length) return null;
-  const r = kind === "bike" ? all[0] : all.reduce((x, y) => (y.duration < x.duration - 1 || (Math.abs(y.duration - x.duration) <= 1 && y.distance < x.distance) ? y : x));
+  if (kind === "bike") {
+    // Mapbox's bike-friendly routes, scored by time plus 10 s per meter climbed: flatter wins unless much slower.
+    const scored = await Promise.all(all.map(async (r) => { const up = (await climb(r.geometry.coordinates).catch(() => null)) ?? 0; return { r, up, score: r.duration + up * 10 }; }));
+    const b = scored.reduce((x, y) => (y.score < x.score ? y : x));
+    return { coords: b.r.geometry.coordinates, meters: b.r.distance, secs: b.r.duration + b.up * 10, climb: b.up };
+  }
+  const r = all.reduce((x, y) => (y.duration < x.duration - 1 || (Math.abs(y.duration - x.duration) <= 1 && y.distance < x.distance) ? y : x));
   return { coords: r.geometry.coordinates, meters: r.distance, secs: r.duration };
 }
 async function fetchWalks(o) {
@@ -3083,7 +3107,8 @@ function bikeClimbHtml(o) {
 function altCard(k) { // "Walk" / "Bike" for the whole trip, or "" if not available
   const a = planState.from && planState.to ? altInfo.get(altKey()) : null, info = a?.[k];
   if (!info || info.secs > 2.5 * 3600) return "";
-  const note = k === "walk" ? "walking route from Mapbox" : "bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available";
+  const up = k === "bike" && info.climb != null ? Math.round((info.climb * 3.281) / 10) * 10 : null;
+  const note = k === "walk" ? "walking route from Mapbox" : `${up != null ? (up ? `${up} ft of climbing ∙ ` : "no climbing ∙ ") : ""}bike-friendly route from Mapbox: bike paths, bike lanes and quieter streets where available`;
   return `<li class="pl-opt ${planState.alt === k ? "open" : ""}"><button type="button" class="pl-card" data-alt="${k}" aria-expanded="${planState.alt === k}">
       <span class="pl-times"><strong><span class="pl-alt-ico">${k === "walk" ? ICON.walk : ICON.bike}</span>${k === "walk" ? "Walk" : "Bike"}</strong><span>${dur(info.secs)}</span></span>
       <span class="pl-meta">${(info.meters / 1609).toFixed(1)} mi ∙ ${note}</span>@@BADGE@@</button></li>`;

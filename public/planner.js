@@ -27,6 +27,14 @@
   };
   const walkSecs = (m) => Math.round((m * DETOUR) / WALK_MPS);
   const bikeSecs = (m) => Math.round((m * DETOUR) / BIKE_MPS) + 60; // + a minute to lock or load the bike
+  // Hills: a casual rider loses about 10 seconds for every meter climbed, and gains a little going downhill (capped,
+  // so steep descents don't look unrealistically fast). dz = meters of rise from start to end (null if unknown).
+  const CLIMB_SECS_PER_M = 10, DESCENT_SECS_PER_M = 2;
+  const bikeHillSecs = (m, dz) => {
+    const base = bikeSecs(m);
+    if (dz == null || !isFinite(dz)) return base;
+    return Math.max(Math.round(base * 0.8), Math.round(base + (dz > 0 ? dz * CLIMB_SECS_PER_M : dz * DESCENT_SECS_PER_M)));
+  };
 
   // ---------- network: built once per service day from the data/ files ----------
   // Midnight in Vermont at the start of a date (YYYYMMDD), as seconds since 1970 (right across daylight-saving changes).
@@ -117,13 +125,23 @@
   // ---------- one RAPTOR search ----------
   function raptor(n, from, to, depart, opt = {}) {
     const S = n.stops.length, INF = Infinity, accessM = opt.bike ? BIKE_ACCESS_M : opt.accessM || ACCESS_M, transferM = opt.transferM || TRANSFER_M;
-    const endSecs = opt.bike ? bikeSecs : walkSecs; // getting to the first stop and from the last stop
+    // Getting to the first stop and from the last stop. Biking includes hills when elevations are known (opt.elev):
+    // so the planner prefers biking downhill to a stop and riding the bus up the hill.
+    const el = opt.elev, stopEl = (i) => el?.stops?.get(n.stops[i].id);
+    const dzTo = (i) => (el && el.from != null && stopEl(i) != null ? stopEl(i) - el.from : null);
+    const dzFrom = (i) => (el && el.to != null && stopEl(i) != null ? el.to - stopEl(i) : null);
+    const accessSecs = (i, m) => (opt.bike ? bikeHillSecs(m, dzTo(i)) : walkSecs(m));
+    const egressSecs = (i, m) => (opt.bike ? bikeHillSecs(m, dzFrom(i)) : walkSecs(m));
     const usable = (i) => !opt.accessible || n.stops[i].acc !== "no"; // wheelchair mode: skip stops marked not accessible
-    const access = n.near(from, accessM).filter(([i]) => usable(i)), egress = new Map(n.near(to, accessM).filter(([i]) => usable(i)).map(([i, m]) => [i, endSecs(m)]));
+    const access = n.near(from, accessM).filter(([i]) => usable(i)), egress = new Map(n.near(to, accessM).filter(([i]) => usable(i)).map(([i, m]) => [i, egressSecs(i, m)]));
     const tau = [new Float64Array(S).fill(INF)], label = [new Array(S)], best = new Float64Array(S).fill(INF);
     let marked = new Set();
-    for (const [i, m] of access) { tau[0][i] = depart + endSecs(m); best[i] = tau[0][i]; label[0][i] = { kind: "access", secs: endSecs(m) }; marked.add(i); }
-    const targetBest = () => { let b = INF; for (const [i, w] of egress) if (best[i] + w < b) b = best[i] + w; return b; };
+    for (const [i, m] of access) { const a = accessSecs(i, m); tau[0][i] = depart + a; best[i] = tau[0][i]; label[0][i] = { kind: "access", secs: a }; marked.add(i); }
+    // Bus trips are compared only with other bus trips: arriving at a stop by bike or on foot (no bus at all) never
+    // blocks a bus arrival there, or every bus option could vanish whenever biking/walking the whole way is quicker.
+    // (Walk and Bike for the whole trip are offered separately, after the bus trips.)
+    const bestRide = new Float64Array(S).fill(INF);
+    const targetBest = () => { let b = INF; for (const [i, w] of egress) if (bestRide[i] + w < b) b = bestRide[i] + w; return b; };
 
     for (let k = 1; k <= MAX_RIDES && marked.size; k++) {
       tau[k] = new Float64Array(S).fill(INF); label[k] = new Array(S);
@@ -137,8 +155,8 @@
           const s = p.stops[pos]; if (s == null) continue;
           if (trip && usable(s)) {
             const arr = trip.times[pos];
-            if (arr < best[s] && arr < cutoff) {
-              tau[k][s] = arr; best[s] = arr; newly.add(s);
+            if (arr < bestRide[s] && arr < cutoff) {
+              tau[k][s] = arr; bestRide[s] = arr; if (arr < best[s]) best[s] = arr; newly.add(s);
               label[k][s] = { kind: "ride", pattern: pi, trip, boardPos, alightPos: pos, from: boardStop };
             }
           }
@@ -155,7 +173,7 @@
       for (const s of [...newly]) for (const [j, w] of n.footpaths[s]) {
         if (!usable(j) || w > walkSecs(transferM)) continue;
         const arr = tau[k][s] + w;
-        if (arr < best[j]) { tau[k][j] = arr; best[j] = arr; label[k][j] = { kind: "walk", from: s, secs: w }; newly.add(j); }
+        if (arr < bestRide[j]) { tau[k][j] = arr; bestRide[j] = arr; if (arr < best[j]) best[j] = arr; label[k][j] = { kind: "walk", from: s, secs: w }; newly.add(j); }
       }
       marked = newly;
     }
@@ -225,14 +243,16 @@
       l.depDelay = l._trip.times[b] - l._trip.sched[b]; l.arrDelay = l._trip.times[a] - l._trip.sched[a];
       rideDetails(l, n, l._p, l._trip, b, a); // direction, shapes and stay-on for the new stops
     };
-    const endSecs = (l) => (l.kind === "bike" ? bikeSecs : walkSecs);
+    const el = opt.elev, stopEl = (sIdx) => el?.stops?.get(n.stops[sIdx].id);
+    const firstSecs = (l, sIdx, m) => (l.kind === "bike" ? bikeHillSecs(m, el?.from != null && stopEl(sIdx) != null ? stopEl(sIdx) - el.from : null) : walkSecs(m));
+    const lastSecs = (l, sIdx, m) => (l.kind === "bike" ? bikeHillSecs(m, el?.to != null && stopEl(sIdx) != null ? el.to - stopEl(sIdx) : null) : walkSecs(m));
     // Getting on: the stop on this bus that lets you leave LATEST (bus time minus the walk to it), then the shorter
     // walk -- never boarding earlier and riding around a turnaround just to save a few steps.
     if (legs[0].kind !== "ride" && legs[1] === first) {
       let best = first._b, bestW = legs[0].secs, bestLeave = first._trip.times[first._b] - legs[0].secs;
       for (let pos = 0; pos < first._a; pos++) {
         const sIdx = first._p.stops[pos]; if (!ok(sIdx)) continue;
-        const w = endSecs(legs[0])(meters(from, n.stops[sIdx].c)), leave = first._trip.times[pos] - w;
+        const w = firstSecs(legs[0], sIdx, meters(from, n.stops[sIdx].c)), leave = first._trip.times[pos] - w;
         if (!isFinite(leave) || leave < depart - 60) continue;
         if (leave > bestLeave + 30 || (leave >= bestLeave - 30 && w < bestW)) { best = pos; bestW = w; bestLeave = leave; }
       }
@@ -245,7 +265,7 @@
       let best = last._a, bestW = lastWalk.secs, bestArrive = last._trip.times[last._a] + lastWalk.secs;
       for (let pos = last._b + 1; pos < last._p.stops.length; pos++) {
         const sIdx = last._p.stops[pos]; if (!ok(sIdx)) continue;
-        const w = endSecs(lastWalk)(meters(n.stops[sIdx].c, to)), arrive = last._trip.times[pos] + w;
+        const w = lastSecs(lastWalk, sIdx, meters(n.stops[sIdx].c, to)), arrive = last._trip.times[pos] + w;
         if (!isFinite(arrive)) continue;
         if (arrive < bestArrive - 30 || (arrive <= bestArrive + 30 && w < bestW)) { best = pos; bestW = w; bestArrive = arrive; }
       }
@@ -324,11 +344,12 @@
     }
     return { feed: !!tus, trips: liveTrips };
   }
-  async function plan({ from, to, depart, arriveBy, prefs = {}, dayOffset = 0 }) {
+  async function plan({ from, to, depart, arriveBy, prefs = {}, dayOffset = 0, elev = null }) {
     const n = await network(dayOffset);
     const live = dayOffset === 0 ? await applyLive(n) : (n.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; })), { feed: false, trips: 0 });
     // (applyLive handles through trips too: each half gets its own trip's live times.)
-    const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike };
+    // elev (bike mode): { from, to: meters above sea level, stops: Map(stop id -> meters) }, looked up by the page.
+    const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike, elev: prefs.bike ? elev || null : null };
     const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
     let result;
     if (arriveBy) result = planArriveBy(n, from, to, arriveBy, runs);
