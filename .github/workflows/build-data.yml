@@ -88,6 +88,41 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
+  # Failure alerts for everyone: if the build or the publish step fails, open a "Map update failed" issue (or comment on
+  # the one already open), which emails everyone watching the repository. When a later run succeeds, close it.
+  notify:
+    needs: [build, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the "Map update failed" issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD: ${{ needs.build.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          title="Map update failed"
+          when="$(TZ=America/New_York date '+%B %-d, %Y at %-I:%M %p') Eastern"
+          open=$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ "$BUILD" = "failure" ] || [ "$DEPLOY" = "failure" ]; then
+            step=$([ "$BUILD" = "failure" ] && echo "building the map data" || echo "publishing to GitHub Pages")
+            body="The map's automatic update failed while **$step** on $when (run started by: $TRIGGER).
+
+          **The live map is still up**, showing the last data that built successfully.
+
+          - What went wrong: open the run, then the step with the red X, and read the last lines of its log: $RUN_URL
+          - Common causes and fixes are in MAINTENANCE.md (for example, the GTFS feed has expired or GMT's feed URL changed).
+          - This issue closes itself the next time the map updates successfully."
+            if [ -n "$open" ]; then gh issue comment "$open" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
+          elif [ "$BUILD" = "success" ] && [ "$DEPLOY" = "success" ] && [ -n "$open" ]; then
+            gh issue close "$open" --comment "Fixed: the map updated successfully on $when. $RUN_URL"
+          fi
+
   # GitHub switches off scheduled workflows in public repos after 60 days with no repository activity.
   # If nothing has been committed for 45 days, this adds an empty commit so the nightly updates never stop.
   keepalive:
