@@ -798,7 +798,14 @@ if (overriddenStops) console.log(`Amenity overrides applied to ${overriddenStops
     if (last >= 0) r.last_from_dtc = fmt(last);
   }
 }
-write("routes.json", { tripCosts: routeInfo.trip_costs || null, built: todayNY, groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
+// feed: the dates the GTFS covers. preview: set for a "Test only" build (PREVIEW_FEED = the test feed's link), so the
+// page can show a preview banner and behave as if it were the date the test was built for.
+const feedRange = (() => {
+  const d = [...cal.cal.flatMap((c) => [c.a, c.b]), ...Object.keys(cal.ex)].filter(Boolean).sort(), f = (x) => `${x.slice(0, 4)}-${x.slice(4, 6)}-${x.slice(6, 8)}`;
+  return d.length ? { start: f(d[0]), end: f(d[d.length - 1]) } : null;
+})();
+write("routes.json", { tripCosts: routeInfo.trip_costs || null, built: todayNY, feed: feedRange,
+  ...(process.env.PREVIEW_FEED ? { preview: { date: todayNY, url: process.env.PREVIEW_FEED, made: new Date().toISOString() } } : {}), groups: (routeInfo.groups || []).map(({ id, name, default: d, collapsed }) => ({ id, name, default: d, collapsed })), routes: routeList, stops: routeStops });
 write("calendar.json", cal);
 write("headsigns.json", headsigns);
 write("trip-routes.json", Object.fromEntries(trips.filter((t) => byTrip.has(t.trip_id) && routeById[t.route_id]).map((t) => [t.trip_id, t.route_id])));
