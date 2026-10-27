@@ -370,14 +370,60 @@ const freqFeatures = [];
   });
   // Each bus's time at this exact point on the street, interpolated between its two stops,
   // so routes with differently spaced stops line up correctly. Each trip counts once.
-  const gapsAt = (near) => { // near: Map(segment idx -> fraction along that segment)
-    const m = new Map();
-    for (const [i, frac] of near) for (const [t, [t0, t1]] of directed[i].trips) if (!m.has(t)) m.set(t, t0 + (t1 - t0) * frac);
-    const times = [...m.values()];
-    return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => [w, avgHeadway(times, def)]));
+  // Frequency is measured the way GMT schedules service: by departures from each route's origin station. Each trip
+  // gets ONE reference time -- when it's at the Downtown Transit Center (leaving it, arriving at it, or passing
+  // through), or at its first stop if it never goes there (e.g. Route 4 from the Essex Junction Amtrak station) --
+  // and that time decides which period (rush hour, midday, evening) it counts toward, on every street it serves.
+  // A street's frequency is the period's length divided by the trips serving it (clockface: 3 an hour = every 20 min).
+  const dtcStops = new Set(stops.filter((st) => /downtown transit center/i.test(st.stop_name || "")).map((st) => st.stop_id));
+  const refTime = new Map(), outbound = new Set(), tripRoute = new Map();
+  for (const [routeId, sc] of schedByRoute) {
+    const reg = sc.filter((t) => freqServices.has(t.s));
+    // For a route that never touches the transit center, its origin = its most common first stop (e.g. Amtrak).
+    const firsts = new Map(); for (const t of reg) firsts.set(t.st[0][0], (firsts.get(t.st[0][0]) || 0) + 1);
+    const origin = [...firsts].sort((a, b) => b[1] - a[1])[0]?.[0];
+    for (const t of reg) {
+      tripRoute.set(t.t, routeId);
+      const i = t.st.findIndex((x) => dtcStops.has(x[0]));
+      refTime.set(t.t, (i >= 0 ? t.st[i] : t.st[0])[1]);
+      // Outbound: leaves the transit center (or runs through it), or leaves the origin; inbound: ends at the transit center.
+      if (i >= 0 ? i < t.st.length - 1 : t.st[0][0] === origin) outbound.add(t.t);
+    }
+  }
+  // Each point, route by route: count the route's departures passing it (outbound trips; inbound only where none of
+  // its outbound trips pass), or use the route's manual setting for that period (route-info.json frequency_overrides),
+  // then add the routes together: a street's frequency = the period's minutes / all the departures serving it.
+  // The routes listed for a street piece: those running along at least 40% of it (plus the piece's own routes), not every
+  // route that merely crosses or touches it -- so "Routes 7, 8 combined" only appears where both really share the street.
+  const mainRoutes = (atSample, own) => {
+    const n = new Map(); for (const x of atSample) for (const r of x.routes) n.set(r, (n.get(r) || 0) + 1);
+    const keep = new Set([...own, ...[...n].filter(([, c]) => c >= Math.max(1, atSample.length * 0.4)).map(([r]) => r)]);
+    return [...keep].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
   };
-  // Routes GMT knows run at a set frequency all day (route-info.json "frequency_overrides", e.g. {"2": 20}):
-  // wherever such a route runs, the street shows at least that often, combined with any other routes there.
+  const gapsAt = (near) => { // near: Map(segment idx -> fraction along that segment), both sides of the street
+    const byRoute = new Map(), inboundHere = new Set();
+    for (const [i, frac] of near) {
+      directed[i].inbound?.forEach((r) => inboundHere.add(r));
+      for (const [t, [t0, t1]] of directed[i].trips) {
+        const r = tripRoute.get(t) || [...directed[i].routes][0];
+        if (!byRoute.has(r)) byRoute.set(r, new Map());
+        if (!byRoute.get(r).has(t)) byRoute.get(r).set(t, refTime.get(t) ?? t0 + (t1 - t0) * frac);
+      }
+    }
+    return Object.fromEntries(Object.entries(FREQ_WINDOWS).map(([w, def]) => {
+      const minutes = def.hours.reduce((a, [h0, h1]) => a + (h1 - h0) * 60, 0);
+      let buses = 0;
+      for (const [r, trips] of byRoute) {
+        const o = overrides[shortOf(r)];
+        if (o && o[w] && (!o.inbound_only || inboundHere.has(r))) { buses += minutes / o[w]; continue; } // manual setting
+        const out = [...trips].filter(([t]) => outbound.has(t)), use = out.length ? out : [...trips];
+        buses += use.filter(([, x]) => def.hours.some(([h0, h1]) => x >= h0 * 3600 && x < h1 * 3600)).length;
+      }
+      return [w, buses ? Math.round(minutes / buses) : null];
+    }));
+  };
+  // Manual frequency settings (route-info.json "frequency_overrides"): a route's setting REPLACES its timetable count for
+  // that period, wherever it runs, faster or slower; other routes on the same street still add their departures.
   // Each override is minutes for every time period ("8": 30), or per period, optionally for inbound trips only
   // (toward the Downtown Transit Center): "2": { "peak": 20, "mid": 20 }, "9": { "mid": 30, "inbound_only": true }.
   const overrides = {};
@@ -386,7 +432,8 @@ const freqFeatures = [];
     if (typeof v === "number" && v > 0) overrides[String(k)] = { peak: v, mid: v, eve: v };
     else if (v && typeof v === "object") overrides[String(k)] = { ...Object.fromEntries(Object.keys(FREQ_WINDOWS).filter((w) => +v[w] > 0).map((w) => [w, +v[w]])), inbound_only: !!v.inbound_only };
   }
-  const overrideText = (o) => (o ? Object.keys(FREQ_WINDOWS).filter((w) => o[w]).map((w) => `${w} every ${o[w]} min`).join(", ") + (o.inbound_only ? " (inbound)" : "") : "");
+  const overrideText = (o) => { const set = o ? Object.keys(FREQ_WINDOWS).filter((w) => o[w]) : []; // "" for an empty entry (timetable)
+    return set.length ? set.map((w) => `${w} every ${o[w]} min`).join(", ") + (o.inbound_only ? " (inbound)" : "") : ""; };
   const shortOf = (rid) => String(routeById[rid]?.route_short_name || rid);
   const candidates = [];
   for (const [idx, d] of directed.entries()) {
@@ -403,7 +450,7 @@ const freqFeatures = [];
         best.set(o.idx, dist);
         (dot > 0 ? same : opp).set(o.idx, o.frac);
       }
-      const g = gapsAt(same), go = opp.size ? gapsAt(opp) : null;
+      const g = gapsAt(new Map([...same, ...opp])), go = null; // both sides together: outbound trips set the frequency
       const routesAtPoint = new Set(), inboundAtPoint = new Set();
       [...same.keys(), ...opp.keys()].forEach((i) => { directed[i].routes.forEach((r) => { routesHere.add(r); routesAtPoint.add(r); }); directed[i].inbound?.forEach((r) => inboundAtPoint.add(r)); });
       // The override that applies here in a time period: the route runs here (inbound, if the override says so).
@@ -411,9 +458,8 @@ const freqFeatures = [];
         return o && o[w] && (!o.inbound_only || inboundAtPoint.has(r)) ? o[w] : Infinity; }));
       const here = { v: {}, routes: routesAtPoint };
       for (const w of Object.keys(FREQ_WINDOWS)) {
-        // No directionality: use whichever direction has more buses at this point.
-        const floor = floorFor(w);
-        const vals = [g[w], go?.[w], isFinite(floor) ? floor : null].filter((x) => x != null);
+        // One value per point, from outbound departures (see gapsAt), or an override where set.
+        const vals = [g[w]].filter((x) => x != null); // manual settings are applied route by route in gapsAt
         if (vals.length) { perSample[w].push(Math.min(...vals)); here.v[w] = Math.min(...vals); }
       }
       atSample.push(here);
@@ -424,7 +470,7 @@ const freqFeatures = [];
       props["h_" + w] = v.length ? v[Math.floor((v.length - 1) / 2)] : null;
     }
     if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
-    props.routes = [...routesHere].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ");
+    props.routes = mainRoutes(atSample, d.routes);
     candidates.push({ idx, props, coords: d.coords, routeIds: [...d.routes], atSample });
   }
   // No directionality on the map: draw each street once. Both directions (and routes sharing a street)
@@ -441,8 +487,7 @@ const freqFeatures = [];
       const v = part.map((x) => x.v[w]).filter((x) => x != null).sort((a, b) => a - b);
       props["h_" + w] = v.length ? v[Math.floor((v.length - 1) / 2)] : null;
     }
-    const rs = new Set(part.flatMap((x) => [...x.routes]));
-    props.routes = [...rs].map((id) => routeById[id].route_short_name || id).sort((x, y) => x.localeCompare(y, undefined, { numeric: true })).join(", ") || c.props.routes;
+    props.routes = mainRoutes(part, new Set()) || c.props.routes;
     return props;
   };
   function uncoveredParts(coords, sm, isCovered) {
@@ -523,7 +568,7 @@ const freqFeatures = [];
       const drawnN = drawnByRoute.get(routeId) || 0;
       const why = !weekday.length ? "no trips in the regular weekday schedule" : !inWindows.length ? "no trips during the rush hour, midday or evening windows" : !drawnN ? "every street it uses is already drawn under other routes" : "";
       const fb = fallbackDrawn.get(routeId);
-      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrides[short] ? ` (set: ${overrideText(overrides[short])})` : ""}${fb ? " -- drawn from its route path at the set frequency" : why ? " -- " + why : ""}`);
+      report.push(`Route ${short}: ${drawnN} piece${drawnN === 1 ? "" : "s"}${overrideText(overrides[short]) ? ` (set: ${overrideText(overrides[short])})` : ""}${fb ? " -- drawn from its route path at the set frequency" : why ? " -- " + why : ""}`);
       // Details for a route the timetable method couldn't draw, to find out why.
       if ((fb || !drawnN) && weekday.length) {
         const withShape = weekday.filter((t) => tripShape[t.t] && shapePts.get(tripShape[t.t])).length;
