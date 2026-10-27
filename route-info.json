@@ -93,10 +93,7 @@
   "frequency_overrides": {
     "_help": "Manual frequency settings for the frequency map, in minutes between buses. A setting REPLACES the timetable figure for that route and period (faster or slower); leave a route empty {} to use the timetable (measured by departures from the Downtown Transit Center, or Amtrak for Route 4). Periods: peak (rush hour 7-9 AM and 4-6 PM), mid (midday 9 AM-3 PM), eve (evening 7-10 PM). Add \"inbound_only\": true to apply a setting only on trips heading to the Downtown Transit Center. Streets shared by several routes add their buses together.",
     "1": {},
-    "2": {
-      "peak": 20,
-      "mid": 20
-    },
+    "2": {},
     "4": {},
     "5": {},
     "6": {},
