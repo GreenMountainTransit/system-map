@@ -37,8 +37,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CURRENT_GTFS: http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip   # GMT GTFS, published by Trillium
-  GTFS_URL: ${{ github.event.inputs.gtfs_url || 'http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip' }}
+  # GMT's GTFS, published by Trillium. This is the ONLY place the link appears: if Trillium moves it, change it here.
+  CURRENT_GTFS: http://data.trilliumtransit.com/gtfs/ccta-vt-us/ccta-vt-us.zip
+  GTFS_URL: ${{ github.event.inputs.gtfs_url }}   # a test feed from the Run workflow form (blank = GMT's current feed)
   TEST_ONLY: ${{ inputs.test_only }}
   BUILD_DATE: ${{ github.event.inputs.build_date }}
 
@@ -58,6 +59,7 @@ jobs:
             unzip -q -o "$2.zip" -d "$2"
             echo "$3=$(dirname "$(find "$2" -name routes.txt | head -1)")" >> "$GITHUB_ENV"
           }
+          GTFS_URL="${GTFS_URL:-$CURRENT_GTFS}"; echo "GTFS_URL=$GTFS_URL" >> "$GITHUB_ENV"   # blank form = GMT's current feed
           if [ "$TEST_ONLY" = "true" ]; then
             get "$GTFS_URL" gtfs_test TEST_DIR      # the test feed, for the preview
             get "$CURRENT_GTFS" gtfs GTFS_DIR       # GMT's current feed, for the live map as usual
