@@ -16,7 +16,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink: #1c2a22; --muted: #56655c; --faint: #8a978f; --panel: #fff; --line: #e1e7e3; --hover: #f1f5f2;
+    --ink: #1c2a22; --muted: #56655c; --faint: #66726a; /* 5:1 on white (WCAG AA) */ --panel: #fff; --line: #e1e7e3; --hover: #f1f5f2;
     --gmt: #00703c; --focus: #0b5cad; --live: #0a7d3b; --warn: #a3361b; --chip-bg: #eef3ef;
     --panel-w: 300px; --stop-w: 320px;
     font-family: "Overpass", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -109,6 +109,9 @@
   .st-transfer { display: block; margin-bottom: 3px; font-size: .74rem; font-weight: 700; color: var(--live); } .st-transfer.tight { color: #b45309; }
   .st-livestat { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: .72rem; font-weight: 600; color: var(--muted); }
   .st-livestat.live { color: var(--live); } .st-livestat .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+  #preview-bar { position: absolute; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 7; max-width: min(640px, calc(100% - 24px));
+    background: #7c2d12; color: #fff; border-radius: 4px; padding: 7px 12px; font-size: .78rem; line-height: 1.35; box-shadow: 0 1px 3px rgba(0,0,0,.25); text-align: center; }
+  @media (max-width: 640px) { #preview-bar { top: 52px; bottom: auto; } }
   .pl-climb { display: flex; gap: 6px; align-items: flex-start; margin: 0 12px 8px; font-size: .78rem; color: var(--live); font-weight: 600; } .pl-climb svg { width: 16px; height: 16px; flex: none; }
   .pl-sortnote { margin: 10px 0 0; font-size: .76rem; font-weight: 600; color: var(--ink); }
   .pl-fast-tag { font-size: .74rem; font-weight: 700; color: var(--live); }
@@ -215,7 +218,9 @@
   .route-row { transition: opacity .15s, background-color .15s; }
   .route-row.sel { background: #f3f5f4; box-shadow: inset 3px 0 0 var(--rc); }
   .route-row.sel:hover, .route-row.sel.hl { background: #eceff0; }
-  .scroll.has-hl .route-row:not(.hl) { opacity: .55; }
+  /* Highlighting a route (hover, or the routes at an open stop) marks it with a tinted background and bar instead of
+     fading the others: faded text and route badges would fall below WCAG AA contrast. */
+  .scroll.has-hl .route-row.hl { background: #edf3ef; box-shadow: inset 3px 0 0 var(--rc, var(--gmt)); }
   /* Unselected routes keep their route color (many riders know routes by color); the cleared checkbox and grayer name show they're off. */
   .route-row.off .rname { color: var(--muted); }
 
@@ -508,11 +513,14 @@ let routeParam = new URLSearchParams(location.search).get("route"), missingRoute
 // add &back=1, so riders who came from the full map can return to it.
 const showBack = new URLSearchParams(location.search).has("back");
 const routeLink = (r) => `?route=${encodeURIComponent(r.short_name)}&back=1`;
-const DIR = "data/";
-const relayReady = !RELAY_URL.startsWith("__");
-const liveReady = relayReady || !SWIFTLY_KEY.startsWith("__");
+// Preview (?preview=1): the map running on a TEST schedule from a "Test only" build, in public/preview/data. Live bus
+// data is for today's real service, so it's off in a preview: scheduled times only.
+const PREVIEW = new URLSearchParams(location.search).has("preview");
+const DIR = PREVIEW ? "preview/data/" : "data/";
+const relayReady = !PREVIEW && !RELAY_URL.startsWith("__");
+const liveReady = !PREVIEW && (relayReady || !SWIFTLY_KEY.startsWith("__"));
 // With the relay, the page never sees the Swiftly key; without it, the page calls Swiftly directly.
-GMTLive.configure({ key: relayReady || SWIFTLY_KEY.startsWith("__") ? "" : SWIFTLY_KEY, dataDir: DIR, relay: relayReady ? RELAY_URL : "" });
+GMTLive.configure({ key: PREVIEW || relayReady || SWIFTLY_KEY.startsWith("__") ? "" : SWIFTLY_KEY, dataDir: DIR, relay: relayReady ? RELAY_URL : "" });
 
 let routes = {}, groups = [], routeStops = {}, stopsById = {}, linesData, stopsData;
 let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "FeatureCollection", features: [] };
@@ -597,7 +605,7 @@ const activation = (() => {
   const verb = matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click";
   el.innerHTML = `<span class="act-pill"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V10m0-1.5a1.5 1.5 0 0 1 3 0V11m0-1a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7L4 14.5a1.6 1.6 0 0 1 2.5-2L9 15"/></svg>${verb} to activate ${what}</span>`;
   el.setAttribute("aria-label", `Activate the ${what}`);
-  document.getElementById("wrap").appendChild(el);
+  document.getElementById("wrap").prepend(el); // first in the Tab order: keyboard and screen reader users reach it first
   const state = { active: false };
   let timer = null;
   const activate = () => {
@@ -1411,8 +1419,45 @@ new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) t
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 
 // ---------- data ----------
-const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"].map((f) => fetch(DIR + f).then((r) => r.json())))
+// A preview of a test schedule: if the test was built for another date (e.g. a summer feed), the map behaves as if it
+// were that date (same time of day), so departures and the trip planner use the test schedule. Plus a clear banner.
+function startPreview(meta) {
+  const pv = meta?.preview;
+  if (pv?.date) {
+    const RealDate = Date, now = RealDate.now();
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new RealDate(now)).map((x) => [x.type, x.value]));
+    const today = `${p.year}-${p.month}-${p.day}`;
+    if (pv.date !== today) {
+      const shift = RealDate.UTC(...pv.date.split("-").map((x, i) => (i === 1 ? +x - 1 : +x))) - RealDate.UTC(+p.year, +p.month - 1, +p.day);
+      class PreviewDate extends RealDate {
+        constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + shift); }
+        static now() { return RealDate.now() + shift; }
+      }
+      globalThis.Date = PreviewDate;
+    }
+  }
+  const nice = (d) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "?");
+  const bar = document.createElement("div"); bar.id = "preview-bar"; bar.setAttribute("role", "status");
+  bar.innerHTML = pv
+    ? `<strong>Preview of a test schedule</strong> (covers ${nice(meta.feed?.start)} – ${nice(meta.feed?.end)}), shown as of ${nice(pv.date)}. Scheduled times only; this isn’t the live map.`
+    : `<strong>Preview</strong>: no test schedule has been built yet. Run the map update with “Test only” checked.`;
+  document.getElementById("wrap").appendChild(bar);
+  document.title = "PREVIEW: " + document.title;
+  const robots = document.createElement("meta"); robots.name = "robots"; robots.content = "noindex"; document.head.appendChild(robots);
+}
+function noPreviewYet() {
+  const bar = document.createElement("div"); bar.id = "preview-bar"; bar.setAttribute("role", "status");
+  const live = location.pathname + location.search.replace(/[?&]preview(=[^&]*)?/, "").replace(/^&/, "?");
+  bar.innerHTML = `<strong>No preview yet.</strong> Run the map update with “Test only” checked to build one. <a href="${live}" style="color:#fff;text-decoration:underline">Open the live map</a>`;
+  document.getElementById("wrap").appendChild(bar);
+}
+const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"].map((f) => fetch(DIR + f).then((r) => {
+    // A preview link with no test build yet: say so, with a link to the live map.
+    if (!r.ok && PREVIEW) { if (!document.getElementById("preview-bar")) noPreviewYet(); throw new Error("no preview"); }
+    return r.json();
+  })))
   .then(async ([lines, stops, meta]) => {
+    if (PREVIEW) startPreview(meta);
     linesData = lines; stopsData = stops;
     freqData = await fetch(DIR + "frequency.geojson").then((r) => (r.ok ? r.json() : null)).catch(() => null) || { type: "FeatureCollection", features: [] };
     fetch(DIR + "ridership.json").then((r) => (r.ok ? r.json() : null)).then((d) => (ridershipData = d)).catch(() => {}); // optional
@@ -1827,7 +1872,7 @@ const niceDest = (h) => String(h || "").replace(/^Downtown Transit Center.*$/i, 
 async function refreshBuses() {
   markRoutes(); // keep legend warning marks after the list is redrawn
   const status = document.getElementById("status");
-  if (!liveReady) { if (status) status.textContent = "Live buses aren’t connected yet. Showing scheduled times."; return; }
+  if (!liveReady) { if (status) status.textContent = PREVIEW ? "Preview: scheduled times from the test schedule (no live buses)." : "Live buses aren’t connected yet. Showing scheduled times."; return; }
   try {
     const data = await GMTLive.vehicles();
     data.features = data.features.filter((f) => routes[f.properties.route_id]);
@@ -2191,7 +2236,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
   const seeAll = arrivals === "error" ? "" : `<button type="button" id="see-all" class="see-all" aria-expanded="${showAllTimes}">${showAllTimes ? "Hide all times" : "See all times today"}</button>${showAllTimes ? allTimesHtml(allTimes) : ""}`;
   // Say where the times come from, so riders (and staff) can tell live predictions from the timetable.
   const source = arrivals === null || arrivals === "error" ? ""
-    : !liveReady ? `<p class="src-line">Scheduled times. Live predictions aren’t connected yet.</p>`
+    : !liveReady ? `<p class="src-line">${PREVIEW ? "Scheduled times from the test schedule (preview)." : "Scheduled times. Live predictions aren’t connected yet."}</p>`
     : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions ∙ updated ${clock(Date.now() / 1000)}</p>`
     : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
   const closedBy = (detourInfo.closedStops[s.stop_id] || []).filter((r) => !routeParam || r === routeParam);
