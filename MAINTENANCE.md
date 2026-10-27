@@ -222,7 +222,7 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | Trip planner recent places and popular stops | `public/index.html` | `RECENT_MAX`, `popularStops` |
 | Trip planner preferences (fastest, least walking, fewest transfers, wheelchair-accessible stops, bike to and from the bus) | `public/planner.js` | `sortByPref`, `acc`, `BIKE_ACCESS_M` |
 | Walk / bike options and how trip options are sorted (one list, badge on top) | `public/index.html` | `fetchAlternatives`, `altCard`, `planResultsHtml` |
-| Climbing avoided on bike-and-bus trips (Mapbox elevation tiles) | `public/index.html` | `climb`, `bikeClimbHtml` |
+| Bike mode and hills: heights looked up for the start, finish and nearby stops; extra bike time per meter climbed; flatter bike routes chosen | `public/planner.js` (`CLIMB_SECS_PER_M`, `bikeHillSecs`) and `public/index.html` (`bikeElevations`, `streetRoute`, `climb`) |
 | Directions from a searched place (Google Maps style) | `public/index.html` | `goDirections` |
 | The ? Helpful hints, the first-visit hints, and hover labels on map buttons | `public/index.html` | `toggleHelp`, `ctrlHint`, `HOVER_LABELS` |
 | Place and address search area (Chittenden, Washington and Franklin counties; Chittenden listed first) | `public/index.html` | `SERVICE_COUNTIES`, `VT_BBOX`, `chittendenFirst` |
