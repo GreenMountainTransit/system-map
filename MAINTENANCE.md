@@ -116,6 +116,16 @@ Commit the file and the map picks up the new figures with the next build. Drivin
 - After each build, the **Build data** log has a line **"Frequency map by route: …"** listing every local route and how many frequency lines it got. A route with none gets a yellow warning saying why: no weekday trips, no trips during the rush hour / midday / evening windows, or every street it uses is already drawn under other routes (it still appears in those streets' route lists).
 - **Manual settings for any route:** `route-info.json` → `"frequency_overrides"` has an entry for every local route. Leave it empty (`"5": {}`) to use the timetable. Add minutes for any period to **replace** the timetable figure for that route, faster or slower: `peak` (rush hour), `mid` (midday), `eve` (evening). For example, `"7": { "peak": 20 }` shows Route 7 every 20 minutes at rush hour and uses the timetable at other times, and `"8": { "peak": 60, "mid": 60 }` shows Route 8 hourly. Add `"inbound_only": true` to apply a setting only on trips heading to the Downtown Transit Center. Streets shared by several routes add their buses together (Route 7 every 20 + Route 8 every 60 = every 15). Leave out periods a route doesn't run (a setting for a period draws the route then). Commit the file and the next build uses it; the **Build data** log lists each route's settings.
 
+### Testing a new GTFS feed (without publishing it)
+Use this to check a new schedule before it goes live, such as an upcoming feed from Trillium, or an older one.
+1. Get a link to the feed's `.zip` file. Trillium (support+ccta-vt-us@trilliumtransit.com) can share an upcoming feed, and MobilityData keeps every past version of GMT's feed at mobilitydatabase.org/feeds/gtfs/mdb-629 (each version has a download link).
+2. In GitHub, open **Actions**, then **Build map data and publish**, then **Run workflow**.
+3. Paste the link into **GTFS URL**. If the feed starts in the future (or ended in the past), put a date it covers in **Build date** (YYYY-MM-DD), since the build only accepts a feed with service in the 7 days from that date.
+4. Check **Test only**, then click **Run workflow**.
+5. When it finishes, open the run. Its summary shows the dates the feed covers; how many routes, stops and trips it built; the frequency map line for every local route; and any warnings or errors. Compare these with the current feed's numbers (from a normal run). The built map data is under **Artifacts** as **test-map-data**, along with the full build log.
+
+A test run never publishes and never opens a "Map update failed" issue, whatever happens. When the new feed is ready to go live, Trillium publishes it at GMT's usual feed address and the nightly build picks it up automatically, so nothing needs changing.
+
 ### Build failure alerts
 If the nightly update fails, **the live map stays up** with its last good data, and two alerts go out:
 - **A GitHub issue titled "Map update failed"** is opened automatically, with a link to the failed run. Everyone **watching** the repository gets it by email. To get these emails, open the repository on GitHub, click **Watch**, and choose **All activity** (or **Custom**, then **Issues**). Repeated failures add comments to the same issue rather than opening new ones, and the issue **closes itself** the next time the map updates successfully.
