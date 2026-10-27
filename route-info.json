@@ -91,17 +91,28 @@
     "fare_url": "https://www.ridegmt.com/166/Fare-Chart"
   },
   "frequency_overrides": {
-    "_help": "Minutes between buses. A number applies to rush hour, midday and evening; or set periods (peak, mid, eve), optionally for trips heading to the Downtown Transit Center only (inbound_only). Wherever the route runs, the frequency map shows at least that often.",
+    "_help": "Manual frequency settings for the frequency map, in minutes between buses. A setting REPLACES the timetable figure for that route and period (faster or slower); leave a route empty {} to use the timetable (measured by departures from the Downtown Transit Center, or Amtrak for Route 4). Periods: peak (rush hour 7-9 AM and 4-6 PM), mid (midday 9 AM-3 PM), eve (evening 7-10 PM). Add \"inbound_only\": true to apply a setting only on trips heading to the Downtown Transit Center. Streets shared by several routes add their buses together.",
+    "1": {},
+    "2": {
+      "peak": 20,
+      "mid": 20
+    },
+    "4": {},
+    "5": {},
+    "6": {},
+    "7": {
+      "peak": 20
+    },
     "8": {
       "peak": 60,
-      "mid": 60,
-      "inbound_only": true
+      "mid": 60
     },
     "9": {
       "peak": 30,
       "mid": 30,
       "inbound_only": true
-    }
+    },
+    "11": {}
   },
   "amenity_overrides": [
     {
