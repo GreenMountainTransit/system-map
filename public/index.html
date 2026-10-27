@@ -112,6 +112,9 @@
   #preview-bar { position: absolute; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 7; max-width: min(640px, calc(100% - 24px));
     background: #7c2d12; color: #fff; border-radius: 4px; padding: 7px 12px; font-size: .78rem; line-height: 1.35; box-shadow: 0 1px 3px rgba(0,0,0,.25); text-align: center; }
   @media (max-width: 640px) { #preview-bar { top: 52px; bottom: auto; } }
+  .report { margin: 18px 16px 14px; padding-top: 10px; border-top: 1px solid var(--line); font-size: .74rem; color: var(--muted); }
+  .report p { margin: 0 0 4px; } .report-link { display: inline-flex; align-items: center; gap: 5px; color: var(--gmt); font-weight: 700; }
+  .report-link svg { width: 14px; height: 14px; } .report-addr { display: block; margin-top: 2px; color: var(--muted); }
   .pl-climb { display: flex; gap: 6px; align-items: flex-start; margin: 0 12px 8px; font-size: .78rem; color: var(--live); font-weight: 600; } .pl-climb svg { width: 16px; height: 16px; flex: none; }
   .pl-sortnote { margin: 10px 0 0; font-size: .76rem; font-weight: 600; color: var(--ink); }
   .pl-fast-tag { font-size: .74rem; font-weight: 700; color: var(--live); }
@@ -3548,8 +3551,24 @@ const dayEpoch = (secs) => {
 };
 
 // ---------- helpers ----------
+// The footer at the end of every view: estimates note, and a "Report a problem" link to GMT planning, pre-filled with
+// the page's address (which includes the view, route and trip) so staff can see what the rider was looking at.
+const REPORT_EMAIL = "planning@ridegmt.com";
+function reportFooter() {
+  return `<footer class="report"><p>Times, trip plans and cost savings are estimates.</p>
+    <p><a href="mailto:${REPORT_EMAIL}" class="report-link" target="_blank" rel="noopener">${ICON.mail}Report a problem with this map</a>
+      <span class="report-addr">${REPORT_EMAIL}</span></p></footer>`;
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest?.(".report-link"); if (!a) return;
+  const where = view === "plan" ? "Trip planner" : view === "frequency" ? "Frequency map" : routeParam ? `Route ${routes[routeParam]?.short_name || routeParam} page` : "Routes";
+  let page = location.href; try { if (typeof saveViewState === "function") { const u = new URL(location.href); u.searchParams.set("s", saveViewState()); page = u.toString(); } } catch {}
+  const body = `What went wrong?\n\n\n\n---\nView: ${where}${PREVIEW ? " (PREVIEW)" : ""}\nMap address: ${page}\nDevice: ${navigator.userAgent}`;
+  a.href = `mailto:${REPORT_EMAIL}?subject=${encodeURIComponent("Problem with the GMT system map")}&body=${encodeURIComponent(body)}`;
+});
 function panel(html, fill) {
   const el = document.getElementById("panel"); el.innerHTML = html;
+  const sc = [...el.querySelectorAll(".scroll")].pop(); if (sc) sc.insertAdjacentHTML("beforeend", reportFooter());
   el.classList.toggle("fit", !fill);
   const t = document.getElementById("toggle");
   if (t) t.onclick = () => { if (el._dragged) return; setSheet(!sheetOpen); };
@@ -3690,6 +3709,7 @@ const ICON = {
   bike: svg('<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-7h5l3 7M10 9l-1.5-3H6M15 9l-2 7"/>'),
   pinch: svg('<path d="M9 11V6.5a1.5 1.5 0 0 1 3 0V11M12 10V5a1.5 1.5 0 0 1 3 0v6M15 10.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-4.6-2.2L4 15.5a1.5 1.5 0 0 1 2.3-1.9L9 16"/>'),
   mouse: svg('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>'),
+  mail: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/>'),
   mountain: svg('<path d="M2.5 19.5l6-10 3.5 5.5 2.5-3.5 7 8z"/>'),
   directions: svg('<path d="M12 2.5l9.5 9.5-9.5 9.5L2.5 12z"/><path d="M9 13v-2.5h5.5M12.5 8l2.5 2.5-2.5 2.5"/>'),
   wheelchair: svg('<circle cx="11" cy="4.5" r="1.8" fill="currentColor" stroke="none"/><path d="M11 7.5v6h5l2.5 5"/><path d="M8 10.5a6 6 0 1 0 7.5 7.5"/>'),
