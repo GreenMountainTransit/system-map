@@ -106,17 +106,13 @@ Each build looks up restaurants and cafes, shops and pharmacies, and public rest
 Once set up, nothing needs doing when GMT publishes a new GTFS: each night the workflow downloads the current feed and rebuilds everything as of that day (Vermont time). There are no hard-coded dates.
 
 Safeguards:
-- **Bad or expired feeds don't go live.** If the GTFS fails to download, has no routes or stops, or has no service in the coming 7 days (expired, or only future service), the build stops, the current site stays up, and GitHub emails the repo admins about the failed run. The run's log also warns when the feed will expire within two weeks.
+- **Bad or expired feeds don't go live.** If the GTFS fails to download, has no routes or stops, or has no service in the coming 7 days (expired, or only future service), the build stops, the current site stays up, and a "Map update failed" issue opens on GitHub (emailing everyone watching the repo; it closes itself after the next successful build). The run's log also warns when the feed will expire within two weeks.
 - **The nightly schedule stays on.** GitHub turns off scheduled workflows in public repos after 60 days without activity; the workflow's keepalive job adds an empty commit after 45 quiet days to prevent that.
 - **Live data degrades gracefully.** If Swiftly is down or rate-limited, the map shows scheduled times. If the nearby-places lookup fails, stops show without it.
 
-### Testing an older GTFS
+### Testing another GTFS (preview)
 
-In **Actions → Build map data and publish → Run workflow**, fill in either or both boxes:
-- **GTFS link**: a .zip URL for another feed (for example an archived version from the Mobility Database).
-- **Build date**: build as if it were that day (YYYY-MM-DD), for a feed whose dates are in the past.
-
-This publishes the test build to the live site, so do it when traffic is low. Routes, stops, frequencies and service wording reflect the test feed and date, but arrival times always use the real clock, so stops may show no upcoming buses. When you're done, run the workflow again with both boxes empty to go back to the current feed.
+In **Actions → Build map data and publish → Run workflow**, paste a feed's .zip link into **GTFS URL** (for example an archived or upcoming version from the Mobility Database), add a **Build date** the feed covers if it's not current, and check **Test only**. The test feed is published as a preview at `?preview=1` (for example https://greenmountaintransit.github.io/system-map/?preview=1), behaving as if it were the build date, with a banner and no live buses; the live map stays on GMT's current feed. The preview stays until the next test (up to 90 days). See MAINTENANCE.md for details.
 
 ## Keeping it current
 
