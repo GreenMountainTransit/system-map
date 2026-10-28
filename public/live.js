@@ -53,10 +53,18 @@
   // Relay requests: the relay already shares one Swiftly request among all visitors; this just avoids
   // asking the relay twice for the same thing within a few seconds.
   const relayCache = new Map();
+  const RELAY_TIMEOUT_MS = 8000;
   function relay(path, maxAge = FEED_MAX_AGE) {
     const hit = relayCache.get(path);
     if (hit && Date.now() - hit.at < maxAge) return hit.promise;
-    const promise = fetch(RELAY + path).then((r) => { if (!r.ok) throw new Error(`Relay ${r.status}`); return r.json(); });
+    // Give up after 8 seconds: a request that never finishes would otherwise leave "Loading arrivals..." up forever
+    // (and be reused by every later request). On a timeout the map falls back to scheduled times and retries next update.
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl && setTimeout(() => ctl.abort(), RELAY_TIMEOUT_MS);
+    const promise = fetch(RELAY + path, ctl ? { signal: ctl.signal } : undefined)
+      .then((r) => { if (!r.ok) throw new Error(`Relay ${r.status}`); return r.json(); })
+      .catch((e) => { throw e?.name === "AbortError" ? new Error("Relay timed out") : e; })
+      .finally(() => timer && clearTimeout(timer));
     promise.catch(() => relayCache.delete(path));
     relayCache.set(path, { at: Date.now(), promise });
     return promise;
