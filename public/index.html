@@ -2193,12 +2193,20 @@ async function refreshPopup(announce) {
   const only = routeParam ? [routeParam] : null; // on a route page, only that route's buses
   const closed = detourInfo.closedStops[id] || []; // routes detoured away from this stop don't stop here now
   const open = (list) => list.filter((a) => !closed.includes(a.route_id));
-  try { const r = await GMTLive.arrivals({ stop: id, only }); arrivals = open(r.arrivals[id] || []); feedLive = r.live; } catch {}
-  if (showAllTimes) try { allTimes = open((await GMTLive.arrivals({ stop: id, all: true, only })).arrivals[id] || []); } catch {}
+  // Never wait forever: after 10 seconds, show what we have (scheduled times, or a message) and try again next update.
+  const limit = (p) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timed out after 10 s")), 10000))]);
+  try { const r = await limit(GMTLive.arrivals({ stop: id, only })); arrivals = open(r.arrivals[id] || []); feedLive = r.live; }
+  catch (e) { noteError("departures", e); }
+  if (showAllTimes) try { allTimes = open((await limit(GMTLive.arrivals({ stop: id, all: true, only }))).arrivals[id] || []); } catch (e) { noteError("all times", e); }
   if (id !== openStopId) return;
   const body = stopPanel.querySelector(".sp-body"); if (!body) return;
   const scrollTop = body.scrollTop, keepSv = body.querySelector("#sv-box[data-wired]"), keepRd = body.querySelector("#rider-box[data-wired]");
-  body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
+  try { body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive); }
+  catch (e) { // show something useful rather than leaving "Loading arrivals..." up
+    noteError("stop panel", e);
+    try { body.innerHTML = stopHtml(stopsById[id], "error", null, false); }
+    catch { body.innerHTML = `<p class="none">Departures for this stop couldn’t be shown right now. Please try again in a minute.</p>`; }
+  }
   if (keepSv) body.querySelector("#sv-box")?.replaceWith(keepSv); // keep the loaded Street View as is
   if (keepRd) body.querySelector("#rider-box")?.replaceWith(keepRd); // and the ridership chart
   body.scrollTop = scrollTop;
@@ -2410,6 +2418,12 @@ function offRoutePieces(path, rid) {
 // ---------- diagnostics (?debug=1): live-data status at a glance, readable on a phone ----------
 const debugOn = new URLSearchParams(location.search).get("debug") === "1";
 let debugInfo = { detoursIn: 0, detoursToday: 0, drawn: 0, alerts: 0, relayErr: "" };
+// The last thing that went wrong while showing departures: logged to the browser console and shown in ?debug=1.
+function noteError(where, e) {
+  debugInfo.lastError = `${where}: ${e?.message || e}`.slice(0, 160);
+  console.error("[GMT map]", where, e);
+  renderDebug();
+}
 function renderDebug() {
   if (!debugOn) return;
   let el = document.getElementById("debug-box");
@@ -2420,6 +2434,7 @@ function renderDebug() {
     `today (Vermont): ${ymdToday()}`,
     `detours from Swiftly: ${debugInfo.detoursIn} ∙ running today: ${debugInfo.detoursToday} ∙ shapes drawn: ${debugInfo.drawn}`,
     `alerts: ${debugInfo.alerts}`,
+    `last error: ${debugInfo.lastError || "none"}`,
     `screen: ${innerWidth}×${innerHeight} ∙ ${navigator.userAgent.replace(/^Mozilla\/5\.0 /, "").slice(0, 70)}`,
   ].join("\n");
 }
