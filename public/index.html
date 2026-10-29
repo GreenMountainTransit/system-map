@@ -534,6 +534,13 @@ GMTLive.configure({ key: PREVIEW || relayReady || SWIFTLY_KEY.startsWith("__") ?
 
 let routes = {}, groups = [], routeStops = {}, stopsById = {}, linesData, stopsData;
 let hidden = new Set(), highlighted = [], liveCounts = {}, lastBuses = { type: "FeatureCollection", features: [] };
+let busStatusText = "Loading buses…", busStatusProblem = false;
+function setBusStatus(message, problem = false) {
+  busStatusText = message; busStatusProblem = problem;
+  document.querySelectorAll(".status-row .status").forEach(el => {
+    el.textContent = message; el.classList.toggle("problem", problem);
+  });
+}
 let openPopup = null, openStopId = null, routeArrivals = {}, routeArrivalsLoaded = false, activeDir = null;
 let basemap = BASEMAPS[0];
 const liveBusesOn = true; // live buses are always shown
@@ -770,7 +777,7 @@ async function restoreViewState(raw = new URLSearchParams(location.search).get("
     map.jumpTo({ center: st.c, zoom: st.z, bearing: st.b || 0, pitch: st.p || 0 });
     // 5. An open stop, or a "service near" point.
     if (st.o && stopsById[st.o]) showStop(st.o, false);
-    else if (st.n?.length === 2) showNearby(st.n, "Service near this location", routeParam ? [routeParam] : null);
+    else if (st.n?.length === 2) showNearby(st.n, "Service near this location", null);
   } catch {}
 }
 // Minimize in the full-page tab sends its view back here (the embedded map that opened it) before closing.
@@ -1343,7 +1350,7 @@ const HOVER_LABELS = {
 geolocate.on("geolocate", (e) => {
   const here = [e.coords.longitude, e.coords.latitude];
   if (view === "plan") { planState.from = { c: here, label: "My location" }; buildSystemPanel(); planTrip(); return; }
-  setTimeout(() => showNearby(here, "Service near you", routeParam ? [routeParam] : null), 400); // after the map moves to the rider
+  setTimeout(() => showNearby(here, "Service near you", null), 400); // after the map moves to the rider
 });
 // "Next service near you": for each nearby route, the closest stop in EACH direction (one stop for loop
 // routes), the walk there, and the next departures that way. Used by the locate button and, on route
@@ -1356,70 +1363,74 @@ const meters = (a, b) => { const k = Math.cos((a[1] * Math.PI) / 180); return Ma
 // place: { label } for a searched or picked place: labeled on the map, with Directions to it (and it becomes the
 // trip planner's destination, like Google Maps).
 async function showNearby(here, title, onlyRoutes, place) {
+  // Service-near-you always means the entire GMT network, not the previously selected routes.
+  if (!routeParam) {
+    hidden.clear(); picking = false; stopFocus = null; highlighted = [];
+    if (view !== "routes") setView("routes");
+    buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
+  }
   if (place?.label && !routeParam) planState.to = { c: here, label: place.label };
   rememberStopNavigation();
   closeStop();
-  const near = Object.values(stopsById).map((s) => [s, meters(here, s.coords)]).filter(([, m]) => m <= WALK.maxM);
-  let routeIds = onlyRoutes || [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r] && visibleRoutes().includes(r));
-  if (!onlyRoutes && !routeIds.length) routeIds = [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r]);
-  const options = [];
-  for (const rid of routeIds) {
-    for (const [dir, pat] of Object.entries(routeStops[rid] || {})) {
-      let best = null;
-      pat.stops.slice(0, -1).forEach((sid) => { const st = stopsById[sid]; if (!st) return; const m = meters(here, st.coords); if (m <= WALK.maxM && (!best || m < best.m)) best = { st, m }; });
-      if (best) options.push({ rid, dir, headsign: pat.headsign, loop: Object.keys(routeStops[rid]).length === 1, ...best });
-    }
-  }
-  options.sort((a, b) => a.m - b.m);
-  // Keep routes whose nearest stop is reasonably close compared with the very nearest (and at most 8 routes).
-  if (options.length) { const nearestM = options[0].m, keepRoutes = [...new Set(options.filter((o) => o.m <= Math.max(1200, nearestM * 1.6)).map((o) => o.rid))].slice(0, 8);
-    for (let i = options.length - 1; i >= 0; i--) if (!keepRoutes.includes(options[i].rid)) options.splice(i, 1); }
-  const byRoute = {};
-  for (const o of options) (byRoute[o.rid] ??= []).push(o);
-  openStopId = "near:" + here.join(",");
+  const maxStops = 16;
+  const near = Object.values(stopsById)
+    .map(st => ({ st, m: meters(here, st.coords) }))
+    .filter(o => o.m <= WALK.maxM && (o.st.routes || []).some(rid => routes[rid]))
+    .sort((a, b) => a.m - b.m)
+    .slice(0, maxStops);
+  // Each physical stop appears once, regardless of how many routes or directions serve it.
+  const routeIds = [...new Set(near.flatMap(o => o.st.routes || []))].filter(rid => routes[rid]);
+  const nearbyKey = "near:" + here.join(",");
+  openStopId = nearbyKey;
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}<h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
       <button type="button" class="sp-close" aria-label="Close">×</button></div>
     <div class="sp-body">${place?.label ? `<div class="near-actions"><button type="button" class="dir-btn" id="near-dir">${ICON.directions}Directions</button></div>` : ""}
-      <div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
+      <div class="pop" id="near-list">${near.length ? "<p class='none'>Loading upcoming arrivals…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
   stopPanel.hidden = false; document.getElementById("wrap").classList.add("stop-open"); map.resize();
   wireStopNavigation();
   stopPanel.querySelector(".sp-close").onclick = () => { stopNav = []; closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
   if (isPhone()) { setSheet(false); snapSheet(stopPanel, "half"); }
   map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: { name: place?.label || "" }, geometry: { type: "Point", coordinates: here } }] });
   document.getElementById("near-dir")?.addEventListener("click", () => goDirections({ c: here, label: place.label }));
-  if (options.length) {
-    const b = new mapboxgl.LngLatBounds(here, here); options.slice(0, 2).forEach((o) => b.extend(o.st.coords)); // refined below once times are in
-    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
+  if (near.length) {
+    const bounds = new mapboxgl.LngLatBounds(here, here);
+    near.slice(0, 3).forEach(({st}) => bounds.extend(st.coords));
+    map.fitBounds(bounds, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 600 });
   }
+  let fetching = false;
   const render = async () => {
-    const arr = {};
-    await Promise.all(Object.keys(byRoute).map(async (rid) => { try { arr[rid] = (await GMTLive.arrivals({ route: rid })).arrivals; } catch { arr[rid] = {}; } }));
-    if (openStopId !== "near:" + here.join(",")) return;
-    // Next service first: each route's directions by their next departure, and routes by their soonest one.
-    // Routes with nothing more today go last.
-    const nextOf = (rid, o) => (arr[rid]?.[o.st.stop_id]?.[o.dir] || [])[0]?.time ?? Infinity;
-    const ordered = Object.entries(byRoute).map(([rid, opts]) => [rid, opts.slice().sort((a, b) => nextOf(rid, a) - nextOf(rid, b))])
-      .sort(([ra, oa], [rb, ob]) => nextOf(ra, oa[0]) - nextOf(rb, ob[0]) || oa[0].m - ob[0].m);
-    document.getElementById("near-list").innerHTML = ordered.map(([rid, opts]) => `<div class="near-route">
-      <p class="near-head">${chip(routes[rid])}<strong>${esc(routes[rid].long_name)}</strong></p>
-      ${opts.map((o) => { const list = arr[rid]?.[o.st.stop_id]?.[o.dir] || [];
-        return `<button type="button" class="near-opt" data-stop="${esc(o.st.stop_id)}">
-          <span class="near-dir">${o.loop ? "Loop" : `To ${esc(o.headsign || "")}`}</span>
-          <span class="near-stop">${esc(o.st.name)} ∙ ${walkText(o.m)}</span>
-          <span class="near-next">${list.length ? list.map((a, i) => `<b class="${a.live && i === 0 ? "now" : ""}">${when(a.time)}</b>`).join(" ∙ ") : "No more trips today"}</span></button>`; }).join("")}
-    </div>`).join("") + `<p class="src">Walking times are estimates. Tap a stop for full details.</p>`;
-    document.querySelectorAll(".near-opt").forEach((btn) => (btn.onclick = () => showStop(btn.dataset.stop, true)));
-    // First time: zoom to the location and the stop of the best option (the soonest bus), and highlight that route.
-    if (!render.zoomed && ordered.length) {
-      render.zoomed = true;
-      const [bestRid, bestOpts] = ordered[0], bestStop = bestOpts[0].st.coords;
-      const bb = new mapboxgl.LngLatBounds(here, here).extend(bestStop);
-      map.fitBounds(bb, { padding: isPhone() ? { top: 80, left: 40, right: 40, bottom: Math.round(document.getElementById("wrap").clientHeight * 0.5) + 20 } : panelPad(), maxZoom: 17, duration: reduceMotion ? 0 : 700 });
-      highlight([bestRid]); setTimeout(() => { if (openStopId?.startsWith("near:")) highlight([]); }, 5000);
-    }
+    if (fetching || openStopId !== nearbyKey) return;
+    fetching = true;
+    try {
+      // One cached GTFS/realtime request per route, NOT a new request per stop.
+      const result = {};
+      await Promise.all(routeIds.map(async rid => {
+        try { result[rid] = (await GMTLive.arrivals({ route: rid })).arrivals || {}; }
+        catch (e) { console.warn("Nearby arrivals unavailable for route", rid, e); result[rid] = {}; }
+      }));
+      if (openStopId !== nearbyKey) return;
+      const area = document.getElementById("near-list");
+      if (!area) return;
+      area.innerHTML = near.map(({st, m}, i) => {
+        const arrivals = (st.routes || []).flatMap(rid => {
+          const byDirection = result[rid]?.[st.stop_id] || {};
+          return Object.values(byDirection).flat().filter(a => a && Number.isFinite(a.time));
+        }).sort((a, b) => a.time - b.time);
+        const unique = [...new Map(arrivals.map(a => [a.route_id + ":" + a.trip + ":" + a.time, a])).values()];
+        return `<div class="near-route">
+          <button type="button" class="near-opt" data-stop="${esc(st.stop_id)}">
+            <span class="near-dir">${i + 1}. ${esc(st.name)}</span>
+            <span class="near-stop">${walkText(m)}</span>
+            <span class="near-next">${unique.length ? unique.slice(0, 5).map(a => `${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })} <b class="${a.live ? "now" : ""}">${when(a.time)}</b>`).join(" &nbsp;·&nbsp; ") : "No more trips today"}</span>
+          </button></div>`;
+      }).join("") + `<p class="src">Stops are ordered by distance from the selected location; arrivals at each stop are ordered by time. Walking times are estimates. Tap any stop for full departures.</p>`;
+      area.querySelectorAll(".near-opt").forEach(btn => btn.onclick = () => showStop(btn.dataset.stop, true));
+    } finally { fetching = false; }
   };
-  if (options.length) { await render(); nearbyTimer && clearInterval(nearbyTimer); nearbyTimer = setInterval(() => (openStopId?.startsWith("near:") ? render() : clearInterval(nearbyTimer)), REFRESH_MS); }
+  if (near.length) { await render(); nearbyTimer && clearInterval(nearbyTimer);
+    nearbyTimer = setInterval(() => openStopId === nearbyKey ? render() : clearInterval(nearbyTimer), REFRESH_MS); }
 }
+
 let nearbyTimer = null;
 function nearestStop(c, maxM = 3000) {
   let best = null, bestM = maxM;
@@ -1903,7 +1914,7 @@ map.on("click", (e) => {
   if (pickingSpot) { // Choose a location: nearby service for wherever was tapped; tap again to move it (Cancel to stop)
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
     const bar = document.querySelector("#spot-bar span"); if (bar) bar.textContent = `${tapOrClick()} anywhere else to move the location`;
-    showNearby(c, near ? `Near ${near.name}` : "Service near this location", routeParam ? [routeParam] : null);
+    showNearby(c, near ? `Near ${near.name}` : "Service near this location", null);
     return;
   }
   if (Date.now() - followDragged < 400) return; // the end of a look-around drag isn't a click
@@ -2073,7 +2084,7 @@ const niceDest = (h) => String(h || "").replace(/^Downtown Transit Center.*$/i, 
 async function refreshBuses() {
   markRoutes(); // keep legend warning marks after the list is redrawn
   const status = document.getElementById("status");
-  if (!liveReady) { if (status) status.textContent = PREVIEW ? "Preview: scheduled times from the test schedule (no live buses)." : "Live buses aren’t connected yet. Showing scheduled times."; return; }
+  if (!liveReady) { setBusStatus(PREVIEW ? "Preview: scheduled times from the test schedule (no live buses)." : "Live buses aren’t connected yet. Showing scheduled times."); return; }
   try {
     const data = await GMTLive.vehicles();
     data.features = data.features.filter((f) => routes[f.properties.route_id]);
@@ -2100,14 +2111,12 @@ async function refreshBuses() {
       const gpsAge = newest ? Math.max(0, Math.round((Date.now() - newest) / 1000)) : null;
       const feedAge = feed?.ageSeconds;
       if (feed?.state === "delayed" || feed?.state === "unavailable") {
-        status.textContent = `Live locations delayed · ${n} buses reporting` +
-          (feedAge != null ? ` · feed ${feedAge}s old` : "");
-        status.classList.add("problem");
+        setBusStatus(`Live locations delayed · ${n} buses reporting` +
+          (feedAge != null ? ` · feed ${feedAge}s old` : ""), true);
       } else {
-        status.textContent = `${n} bus${n === 1 ? "" : "es"} reporting` +
+        setBusStatus(`${n} bus${n === 1 ? "" : "es"} reporting` +
           (data.meta?.leavingSoon ? ` · ${data.meta.leavingSoon} leaving soon` : "") +
-          (gpsAge != null ? ` · latest GPS ${gpsAge}s ago` : " · no recent GPS");
-        status.classList.remove("problem");
+          (gpsAge != null ? ` · latest GPS ${gpsAge}s ago` : " · no recent GPS"));
       }
     }
     document.querySelectorAll("[data-live]").forEach((el) => {
@@ -2120,8 +2129,7 @@ async function refreshBuses() {
     map.getSource("buses")?.setData(lastBuses);
     document.querySelectorAll("[data-live]").forEach((el) => { el.innerHTML = ""; });
     if (status) {
-      status.textContent = "Live bus locations unavailable · scheduled service remains available";
-      status.classList.add("problem");
+      setBusStatus("Live bus locations unavailable · scheduled service remains available", true);
     }
     console.warn("GMT live vehicle update failed:", e);
   }
@@ -3801,7 +3809,7 @@ function wireSearch(routePool, stopPool) {
   function choose(i) {
     const it = items[i]; if (!it) return;
     input.value = ""; close(); input.blur();
-    if (it.type === "place") { showNearby(it.c, `Near ${it.label}`, routeParam ? [routeParam] : null, { label: it.label }); return; }
+    if (it.type === "place") { showNearby(it.c, `Near ${it.label}`, null, { label: it.label }); return; }
     if (it.type === "stop") {
       const st = stopsById[it.id];
       if (!routeParam) {
@@ -4020,7 +4028,7 @@ swipeAnywhere(document.getElementById("panel"), "header", ".scroll");
 swipeAnywhere(stopPanel, ".sp-head", ".sp-body");
 addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, stopPanel.style.height === "min(180px, 25vh)" ? "compact" : "half"); });
 // Status line (how many buses are running, when last updated). Live buses are always on.
-const statusRow = () => `<div class="status-row"><p class="status" id="status" aria-live="polite">Loading buses…</p></div>`;
+const statusRow = () => `<div class="status-row"><p class="status${busStatusProblem ? " problem" : ""}" id="status" aria-live="polite">${esc(busStatusText)}</p></div>`;
 function wireLiveToggle() {} // (the live-buses switch was removed; kept so existing calls stay harmless)
 try { localStorage.removeItem("gmt-live-buses"); } catch {} // forget any old "off" setting
 const toggleBtn = (label) => `<button id="toggle" aria-expanded="true"><span class="grip" aria-hidden="true"></span><span class="t-label">${label}</span><span class="sr-only">Show the list</span></button>`;
