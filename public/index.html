@@ -824,7 +824,8 @@ function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", kee
 const tapOrClick = () => (matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click");
 // ---------- 3D mode (desktop only): tilted map with 3D buildings; click a bus to ride along behind it ----------
 const three = { on: false, follow: null, misses: 0 };
-const canThreeD = () => !matchMedia("(hover: none) and (pointer: coarse)").matches && innerWidth > 640;
+// Keep 3D available on touchscreens and phones too; pointer type does not determine Mapbox 3D support.
+const canThreeD = () => true;
 map.addControl({
   onAdd() {
     const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group three-ctrl";
