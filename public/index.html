@@ -1508,7 +1508,9 @@ function ensureBusLayer() {
   try {
     // addSource/addLayer are safe once the style object exists. The style may
     // still be loading tiles, which is why isStyleLoaded() is not required.
-    if (!map.getStyle()) return false;
+    // getStyle() serializes the style and throws before style.load.
+    // Use isStyleLoaded() to wait for the style to be usable.
+    if (!map.isStyleLoaded()) return false;
     if (!map.getSource("buses")) {
       map.addSource("buses", { type: "geojson", data: lastBuses });
     }
@@ -1540,8 +1542,9 @@ function ensureBusLayer() {
             "icon-image": ["concat", "bus-", ["get", "route_id"]],
             "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
             "icon-allow-overlap": true, "icon-ignore-placement": true,
-            "text-field": ["case", ["==", ["get", "service_status"], "leaving_soon"],
-              "Leaving soon", ["step", ["zoom"], "", 12,
+            "text-field": ["step", ["zoom"],
+              ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon", ""],
+              12, ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon",
                 ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
             "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25],
             "text-optional": true, "text-max-width": 14
@@ -1663,11 +1666,14 @@ function addOverlay() {
     layout: { "text-field": ["format", ["get", "name"], { "font-scale": 1 }, "\n", {}, "Scheduled timepoint", { "font-scale": 0.82 }],
       "text-size": 12, "text-anchor": "top", "text-offset": [0, 0.9], "text-max-width": 12, "text-optional": true },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top");
-  add({ id: "buses", type: "symbol", source: "buses",
+  if (!map.getLayer("buses")) add({ id: "buses", type: "symbol", source: "buses",
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
       "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop],
       // Where the bus is headed, under its badge once zoomed in a little (hidden if it would overlap another label).
-      "text-field": ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon", ["step", ["zoom"], "", 12, ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
+      "text-field": ["step", ["zoom"],
+              ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon", ""],
+              12, ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon",
+                ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
       "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25], "text-optional": true, "text-max-width": 14 },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top"); // local buses drawn last (on top)
   // Detours (from Swiftly Service Adjustments):
