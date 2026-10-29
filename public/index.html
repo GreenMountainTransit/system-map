@@ -385,6 +385,9 @@
     background: #fff;   overflow: hidden; }
   #stop-panel[hidden] { display: none; }
   .sp-head { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 8px; padding: 14px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+  .sp-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .sp-head:has(.sp-back) { grid-template-columns: auto minmax(0,1fr) auto; }
+  .sp-back { justify-self: start; border: 0; background: transparent; color: var(--gmt); font-size: .78rem; font-weight: 700; font-family: inherit; padding: 4px 6px; cursor: pointer; }
   .sp-head h2 { margin: 0; font-size: 1.05rem; line-height: 1.3; outline: none; }
   .sp-grip { display: none; }
   .sp-close { width: 32px; height: 32px; border: 0; border-radius: 4px; background: var(--chip-bg); font-size: 20px; line-height: 1; color: var(--muted); cursor: pointer; }
@@ -455,7 +458,11 @@
     #panel header input { touch-action: manipulation; }
     #stop-panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 75%; z-index: 6; border-radius: 10px 10px 0 0;
       box-shadow: 0 -1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); padding-bottom: env(safe-area-inset-bottom, 0px); }
-    .sp-head { grid-template-columns: 1fr auto; padding-top: 4px; cursor: grab; }
+    .sp-head { grid-template-columns: auto 1fr auto; padding-top: 4px; cursor: grab; }
+    .sp-head .sp-grip { grid-column: 1 / -1; }
+    .sp-head h2 { grid-column: 2; }
+    .sp-head:not(:has(.sp-back)) h2 { grid-column: 1 / 3; }
+    .sp-head .sp-close { grid-column: 3; }
     .sp-grip { display: block; grid-column: 1 / -1; justify-self: center; width: 40px; height: 5px; border-radius: 3px; background: #c9d3cc; margin: 2px 0 6px; }
     #map, #wrap.stop-open #map { left: 0; right: 0; }
       #panel { border-right: 0; }
@@ -1343,6 +1350,7 @@ const meters = (a, b) => { const k = Math.cos((a[1] * Math.PI) / 180); return Ma
 // trip planner's destination, like Google Maps).
 async function showNearby(here, title, onlyRoutes, place) {
   if (place?.label && !routeParam) planState.to = { c: here, label: place.label };
+  rememberStopNavigation();
   closeStop();
   const near = Object.values(stopsById).map((s) => [s, meters(here, s.coords)]).filter(([, m]) => m <= WALK.maxM);
   let routeIds = onlyRoutes || [...new Set(near.flatMap(([s]) => s.routes))].filter((r) => routes[r] && visibleRoutes().includes(r));
@@ -1362,13 +1370,14 @@ async function showNearby(here, title, onlyRoutes, place) {
   const byRoute = {};
   for (const o of options) (byRoute[o.rid] ??= []).push(o);
   openStopId = "near:" + here.join(",");
-  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span><h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
+  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}<h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
       <button type="button" class="sp-close" aria-label="Close">×</button></div>
     <div class="sp-body">${place?.label ? `<div class="near-actions"><button type="button" class="dir-btn" id="near-dir">${ICON.directions}Directions</button></div>` : ""}
       <div class="pop" id="near-list">${options.length ? "<p class='none'>Loading times…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
   stopPanel.hidden = false; document.getElementById("wrap").classList.add("stop-open"); map.resize();
-  stopPanel.querySelector(".sp-close").onclick = () => { closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
-  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
+  wireStopNavigation();
+  stopPanel.querySelector(".sp-close").onclick = () => { stopNav = []; closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
+  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "half"); }
   map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: { name: place?.label || "" }, geometry: { type: "Point", coordinates: here } }] });
   document.getElementById("near-dir")?.addEventListener("click", () => goDirections({ c: here, label: place.label }));
   if (options.length) {
@@ -1398,7 +1407,7 @@ async function showNearby(here, title, onlyRoutes, place) {
       render.zoomed = true;
       const [bestRid, bestOpts] = ordered[0], bestStop = bestOpts[0].st.coords;
       const bb = new mapboxgl.LngLatBounds(here, here).extend(bestStop);
-      map.fitBounds(bb, { padding: isPhone() ? { top: 80, left: 40, right: 40, bottom: Math.round(document.getElementById("wrap").clientHeight * 0.75) + 20 } : panelPad(), maxZoom: 17, duration: reduceMotion ? 0 : 700 });
+      map.fitBounds(bb, { padding: isPhone() ? { top: 80, left: 40, right: 40, bottom: Math.round(document.getElementById("wrap").clientHeight * 0.5) + 20 } : panelPad(), maxZoom: 17, duration: reduceMotion ? 0 : 700 });
       highlight([bestRid]); setTimeout(() => { if (openStopId?.startsWith("near:")) highlight([]); }, 5000);
     }
   };
@@ -2089,12 +2098,47 @@ function summary(list) {
 
 // ---------- stop details panel ----------
 const stopPanel = document.getElementById("stop-panel");
+stopPanel.addEventListener("click", (e) => e.stopPropagation());
+stopPanel.addEventListener("pointerup", (e) => e.stopPropagation());
 // Clicking a stop (main Routes view) shows just the routes serving it and their live buses; closing the stop puts the
 // route list back exactly as it was. Changing the route list while a stop is open keeps that change instead.
+let stopNav = [], suppressStopNav = false;
+function rememberStopNavigation() {
+  if (suppressStopNav || !openStopId) return;
+  const cur = openStopId.startsWith("near:") ? { kind: "near", c: openStopId.slice(5).split(",").map(Number), title: document.querySelector("#sp-title")?.textContent || "Nearby service" }
+    : openStopId.startsWith("temp:") ? { kind: "temp", id: openStopId.slice(5) } : { kind: "stop", id: openStopId };
+  if (!stopNav.length || JSON.stringify(stopNav[stopNav.length - 1]) !== JSON.stringify(cur)) stopNav.push(cur);
+  if (stopNav.length > 12) stopNav.shift();
+}
+function stopBackButton() {
+  return stopNav.length ? '<button type="button" class="sp-back" aria-label="Back to previous selection" title="Back to previous selection">← Back</button>' : '';
+}
+function wireStopNavigation() {
+  const back = stopPanel.querySelector(".sp-back");
+  if (back) back.onclick = (e) => {
+    e.stopPropagation(); const last = stopNav.pop(); if (!last) return;
+    suppressStopNav = true;
+    const done = last.kind === "near" ? showNearby(last.c, last.title) : last.kind === "temp" ? showTempStop(last.id) : showStop(last.id, false);
+    Promise.resolve(done).finally(() => { suppressStopNav = false; });
+  };
+}
 let stopFocus = null; // the route list's filters from before a stop focused the map
-function focusStopRoutes(s) {
+let todayStopRoutesCache = new Map(), todayStopRoutesDate = "";
+async function routesServingStopToday(s) {
+  const now = GMTLive.localClock(), today = now.ymd;
+  if (todayStopRoutesDate !== today) { todayStopRoutesCache.clear(); todayStopRoutesDate = today; }
+  if (todayStopRoutesCache.has(s.stop_id)) return todayStopRoutesCache.get(s.stop_id);
+  const cal = await GMTLive.data("calendar.json"), on = GMTLive.servicesOn(cal, today, GMTLive.shiftYmd(today, 0).dow);
+  const candidates = (s.routes || []).filter((rid) => routes[rid]);
+  const found = (await Promise.all(candidates.map(async (rid) => {
+    const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`);
+    return sched.some((t) => on.has(t.s) && t.st.some((x) => String(x[0]) === String(s.stop_id))) ? rid : null;
+  }))).filter(Boolean);
+  todayStopRoutesCache.set(s.stop_id, found); return found;
+}
+function focusStopRoutes(s, todayRoutes) {
   if (routeParam || view !== "routes") return;
-  const rids = (s.routes || []).filter((r) => routes[r]); if (!rids.length) return;
+  const rids = (todayRoutes || []).filter((r) => routes[r]);
   if (!stopFocus) stopFocus = { hidden: new Set(hidden), picking };
   hidden = new Set(Object.keys(routes).filter((x) => !rids.includes(x))); picking = true;
   buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
@@ -2107,27 +2151,35 @@ function restoreAfterStop() {
 }
 function showStop(id, fly) {
   const s = stopsById[id]; if (!s) return;
+  if (openStopId !== id) rememberStopNavigation();
   const wasOpen = !!openStopId;
   openStopId = id; hideTip(); showAllTimes = false; svOpen = false; setCamera(null); riderOpen = false;
   openPopup?.remove();
-  focusStopRoutes(s);
-  highlight(s.routes.filter((rid) => visibleRoutes().includes(rid)));
+  highlight([]); // clear the previous selection while today's service is checked
+  // Only highlight routes with trips serving this stop on the Vermont service date.
+  const selectedId = id;
+  routesServingStopToday(s).then((todayRoutes) => {
+    if (openStopId !== selectedId) return;
+    focusStopRoutes(s, todayRoutes);
+    highlight(todayRoutes.filter((rid) => visibleRoutes().includes(rid)));
+  }).catch((err) => console.warn("Today's stop service could not be checked", err));
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
-  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>
+  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}
       <h2 id="sp-title" tabindex="-1">${esc(s.name)}</h2>
       <button type="button" class="sp-close" aria-label="Close stop details">×</button></div>
     <div class="sp-body"><div class="pop"><h3 class="sp-sub">Next departures</h3><p class="none">Loading arrivals…</p></div></div>`;
   stopPanel.hidden = false;
   document.getElementById("wrap").classList.add("stop-open");
   map.resize(); // the map narrows to make room for the docked stop panel
-  stopPanel.querySelector(".sp-close").onclick = closeStop;
-  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
+  wireStopNavigation();
+  stopPanel.querySelector(".sp-close").onclick = () => { stopNav = []; closeStop(); };
+  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "half"); }
   if (!wasOpen) stopPanel.querySelector("#sp-title").focus({ preventScroll: true });
   // Keep the stop in view beside the panel (desktop) or above the sheet (phones).
   // Center the stop in the visible map: the strip above the three-quarter sheet on phones,
   // between the two panels on desktop. (Padding, not an offset, because earlier fits leave padding set.)
   const H = document.getElementById("wrap").clientHeight;
-  const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.75), left: 0, right: 0 }
+  const padding = isPhone() ? { top: 10, bottom: Math.round(H * 0.5), left: 0, right: 0 }
     : { top: 20, bottom: 20, left: 20, right: 20 };
   const inView = map.getBounds().contains(s.coords);
   if (three.on && !isPhone()) enterStopView(s); // 3D view: street-level stop view
@@ -2139,16 +2191,18 @@ function showStop(id, fly) {
 async function showTempStop(tempId, rid) {
   const t = detourInfo.tempStops.find((x) => x.id === tempId && (!rid || x.route === rid)) || detourInfo.tempStops.find((x) => x.id === tempId);
   if (!t) return;
+  rememberStopNavigation();
   closeStop();
   openStopId = "temp:" + tempId; hideTip();
-  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>
+  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}
       <h2 id="sp-title" tabindex="-1">${esc(t.name)}</h2><button type="button" class="sp-close" aria-label="Close">×</button></div>
     <div class="sp-body"><div class="pop"><p class="temp-tag">${ICON.warn}Temporary stop for the ${chip(routes[t.route])} detour</p>
       <h3 class="sp-sub">Next departures</h3><div id="temp-times"><p class="none">Loading…</p></div></div></div>`;
   stopPanel.hidden = false;
   document.getElementById("wrap").classList.add("stop-open"); map.resize();
-  stopPanel.querySelector(".sp-close").onclick = closeStop;
-  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "open"); }
+  wireStopNavigation();
+  stopPanel.querySelector(".sp-close").onclick = () => { stopNav = []; closeStop(); };
+  if (isPhone()) { setSheet(false); snapSheet(stopPanel, "half"); }
   highlight([t.route]);
   map.easeTo({ center: t.c, zoom: Math.max(map.getZoom(), 15), duration: reduceMotion ? 0 : 500 });
   const list = await tempStopTimes(t);
@@ -3022,6 +3076,7 @@ function stepsHtml(o) {
       const spare = Math.round((l.dep - prev.arr - walk) / 60), liveBoth = prev.live && l.live;
       transfer = `<span class="st-transfer ${spare < 3 ? "tight" : ""}">${spare < 3 ? "Tight connection: " : ""}${Math.max(0, spare)} min to make this transfer${liveBoth ? " (live)" : ""}</span>`;
     }
+    if (l.scheduledInterline) transfer = `<span class="st-stay">Scheduled same-bus continuation from Route ${esc(l.scheduledInterline.fromRoute)} to Route ${esc(l.short)} at ${esc(l.fromName)} (same GTFS block). Confirm with GMT/driver whether riders may stay aboard.</span>`;
     return `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
         <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${(l.stayOn?.firstHeadsign || l.headsign) ? ` toward ${esc(l.stayOn?.firstHeadsign || l.headsign)}` : ""} at ${esc(l.fromName)}
         ${l.stayOn ? `<span class="st-stay">Stay on board at ${esc(l.stayOn.name)}: the same bus turns around there and continues toward ${esc(l.headsign)}. No transfer needed.</span>` : ""}
@@ -3629,7 +3684,7 @@ function snapSheet(el, state) {
   // From/To boxes sit at the top and their suggestions show above the phone's keyboard instead of under it.
   const full = el.id === "panel" && view === "plan" && !routeParam;
   // half = halfway up the screen: a chosen trip on the map above, its details in the tray below.
-  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : state === "half" ? Math.round(H * 0.5) + "px" : "";
+  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : state === "half" ? Math.round(H * 0.5) + "px" : state === "compact" ? "min(180px, 25vh)" : "";
   el.classList.toggle("plan-full", full && state === "open");
   const t = el.querySelector("#toggle"); if (t) t.setAttribute("aria-expanded", String(state !== "collapsed"));
 }
@@ -3639,7 +3694,7 @@ function draggable(el, handleSel) {
   let start = null;
   el.addEventListener("pointerdown", (e) => {
     if (!isPhone() || !e.target.closest(handleSel)) return;
-    if (e.target.closest("input, a, [role=option], .sp-close, .viewtoggle")) return;
+    if (e.target.closest("input, a, button, [role=option], .sp-close, .viewtoggle")) return;
     start = { y: e.clientY, h: el.offsetHeight, moved: false };
     start_focusedSearch = document.activeElement?.id === "q";
   });
@@ -3661,7 +3716,7 @@ function draggable(el, handleSel) {
     if (document.activeElement?.id === "q" && !start_focusedSearch) document.activeElement.blur(); // a drag isn't a tap on search
     // One swipe: up opens to three-quarters, down collapses (or closes the stop sheet).
     const up = el.offsetHeight > startH;
-    if (el.id === "stop-panel") return up ? snapSheet(el, "open") : closeStop();
+    if (el.id === "stop-panel") return snapSheet(el, up ? "half" : "compact");
     snapSheet(el, up ? "open" : "collapsed");
   };
   addEventListener("pointerup", end); addEventListener("pointercancel", end);
@@ -3700,14 +3755,14 @@ function swipeAnywhere(el, handleSel, scrollSel) {
     el.classList.remove("dragging");
     if (!took) return;
     el._dragged = true; setTimeout(() => (el._dragged = false), 50);
-    if (el.id === "stop-panel") return up ? snapSheet(el, "open") : closeStop();
+    if (el.id === "stop-panel") return snapSheet(el, up ? "half" : "compact");
     snapSheet(el, up ? "open" : "collapsed");
   };
   el.addEventListener("touchend", end); el.addEventListener("touchcancel", end);
 }
 swipeAnywhere(document.getElementById("panel"), "header", ".scroll");
 swipeAnywhere(stopPanel, ".sp-head", ".sp-body");
-addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, "open"); });
+addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, stopPanel.style.height === "min(180px, 25vh)" ? "compact" : "half"); });
 // Status line (how many buses are running, when last updated). Live buses are always on.
 const statusRow = () => `<div class="status-row"><p class="status" id="status" aria-live="polite">Loading buses…</p></div>`;
 function wireLiveToggle() {} // (the live-buses switch was removed; kept so existing calls stay harmless)
