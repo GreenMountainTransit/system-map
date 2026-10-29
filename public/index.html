@@ -1898,12 +1898,34 @@ async function refreshBuses() {
     map.getSource("buses")?.setData(data);
     if (followState) followBus();
     const n = visibleRoutes().reduce((sum, id) => sum + (liveCounts[id] || 0), 0);
-    if (status) { status.textContent = `${n} bus${n === 1 ? "" : "es"} running now ∙ updated ${clock(Date.now() / 1000)}`; status.classList.remove("problem"); }
+    if (status) {
+      const feed = data.meta?.feed || GMTLive.liveStatus?.().vehicles;
+      const newest = data.meta?.newestObservation;
+      const gpsAge = newest ? Math.max(0, Math.round((Date.now() - newest) / 1000)) : null;
+      const feedAge = feed?.ageSeconds;
+      if (feed?.state === "delayed" || feed?.state === "unavailable") {
+        status.textContent = `Live locations delayed · ${n} buses reporting` +
+          (feedAge != null ? ` · feed ${feedAge}s old` : "");
+        status.classList.add("problem");
+      } else {
+        status.textContent = `${n} bus${n === 1 ? "" : "es"} reporting` +
+          (gpsAge != null ? ` · latest GPS ${gpsAge}s ago` : " · no recent GPS");
+        status.classList.remove("problem");
+      }
+    }
     document.querySelectorAll("[data-live]").forEach((el) => {
       const c = liveCounts[el.dataset.live]; el.innerHTML = c ? ` ∙ <span class="lv">${c} live</span>` : "";
     });
-  } catch {
-    if (status) { status.textContent = "Live bus locations are unavailable right now. Showing scheduled times."; status.classList.add("problem"); }
+  } catch (e) {
+    lastBuses = { type: "FeatureCollection", features: [] };
+    liveCounts = {};
+    map.getSource("buses")?.setData(lastBuses);
+    document.querySelectorAll("[data-live]").forEach((el) => { el.innerHTML = ""; });
+    if (status) {
+      status.textContent = "Live bus locations unavailable · scheduled service remains available";
+      status.classList.add("problem");
+    }
+    console.warn("GMT live vehicle update failed:", e);
   }
 }
 
@@ -2341,8 +2363,17 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
   // Say where the times come from, so riders (and staff) can tell live predictions from the timetable.
   const source = arrivals === null || arrivals === "error" ? ""
     : !liveReady ? `<p class="src-line">${PREVIEW ? "Scheduled times from the test schedule (preview)." : "Scheduled times. Live predictions aren’t connected yet."}</p>`
-    : feedLive ? `<p class="src-line live"><span class="dot"></span>Live predictions ∙ updated ${clock(Date.now() / 1000)}</p>`
-    : `<p class="src-line">Live predictions are unavailable right now, so these are scheduled times.</p>`;
+    : feedLive ? (() => {
+        const feed = GMTLive.liveStatus?.().tripUpdates;
+        const age = feed?.ageSeconds;
+        return `<p class="src-line live"><span class="dot"></span>Live predictions${age != null ? ` · feed updated ${age}s ago` : ""}</p>`;
+      })()
+    : (() => {
+        const feed = GMTLive.liveStatus?.().tripUpdates;
+        return `<p class="src-line">${feed?.state === "delayed"
+          ? "Live predictions are delayed. Showing scheduled times."
+          : "Live predictions are unavailable. Showing scheduled times."}</p>`;
+      })();
   const closedBy = (detourInfo.closedStops[s.stop_id] || []).filter((r) => !routeParam || r === routeParam);
   const temps = detourInfo.tempStops.filter((t) => closedBy.includes(t.route));
   const closedNote = closedBy.length ? `<div class="closed-note">${ICON.warn}<div><strong>Stop closed for a detour</strong>
