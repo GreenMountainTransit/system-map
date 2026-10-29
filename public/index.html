@@ -1573,7 +1573,7 @@ function addOverlay() {
     layout: { "icon-image": ["concat", "bus-", ["get", "route_id"]], "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
       "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop],
       // Where the bus is headed, under its badge once zoomed in a little (hidden if it would overlap another label).
-      "text-field": ["step", ["zoom"], "", 12, ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]],
+      "text-field": ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon", ["step", ["zoom"], "", 12, ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
       "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25], "text-optional": true, "text-max-width": 14 },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top"); // local buses drawn last (on top)
   // Detours (from Swiftly Service Adjustments):
@@ -1845,7 +1845,10 @@ map.on("click", (e) => {
   if (f.layer.id === "buses" && three.on) { openPopup?.remove(); startFollow(p); return; }
   if (f.layer.id === "buses") {
     const r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
+    const leaving = p.service_status === "leaving_soon" && Number.isFinite(Number(p.departure_time));
+    const depLabel = leaving ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(Number(p.departure_time))) : "";
     html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
+      ${leaving ? `<p class="sub"><strong>Leaving soon · scheduled ${esc(depLabel)}</strong> (bus laying over; not yet boarding)</p>` : ""}
       <p class="sub">Bus ${esc(p.label)} ∙ location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`;
   } else if (f.layer.id === "route-lines") {
     const r = routes[p.route_id];
@@ -1879,6 +1882,96 @@ function tick(force) {
 }
 setInterval(() => tick(), REFRESH_MS);
 
+// Smooth only the 2D map display between Swiftly GPS updates.
+// Never extrapolate beyond reported coordinates or alter the underlying GPS positions.
+const bus2D = { shown: new Map(), targets: new Map(), raf: 0, lastPaint: 0 };
+const BUS_2D_GLIDE_MS = 12000;
+const BUS_2D_MAX_JUMP_METERS = 350;
+function stopBus2DAnimation() {
+  if (bus2D.raf) cancelAnimationFrame(bus2D.raf);
+  bus2D.raf = 0;
+  bus2D.shown.clear();
+  bus2D.targets.clear();
+  bus2D.lastPaint = 0;
+}
+function bus2DFrame(now) {
+  bus2D.raf = 0;
+  if (document.hidden || !onScreen || !map.getSource("buses")) return;
+  if (now - bus2D.lastPaint < 100) {
+    bus2D.raf = requestAnimationFrame(bus2DFrame);
+    return;
+  }
+  bus2D.lastPaint = now;
+  const features = [];
+  let moving = false;
+  for (const f of lastBuses.features) {
+    const id = String(f.properties.id);
+    const target = bus2D.targets.get(id);
+    if (!target) { features.push(f); continue; }
+    const fraction = Math.min(1, Math.max(0, (now - target.started) / BUS_2D_GLIDE_MS));
+    // Linear time interpolation: the marker never runs beyond its last actual GPS report.
+    const c = [
+      target.from[0] + (target.to[0] - target.from[0]) * fraction,
+      target.from[1] + (target.to[1] - target.from[1]) * fraction
+    ];
+    bus2D.shown.set(id, c);
+    if (fraction < 1) moving = true;
+    features.push({ ...f, geometry: { ...f.geometry, coordinates: c } });
+  }
+  map.getSource("buses")?.setData({ type: "FeatureCollection", features });
+  if (moving && !reduceMotion) bus2D.raf = requestAnimationFrame(bus2DFrame);
+}
+function updateBus2D(data) {
+  const now = performance.now();
+  const incoming = new Set();
+  let moving = false;
+  for (const f of data.features) {
+    const id = String(f.properties.id), to = f.geometry.coordinates;
+    incoming.add(id);
+    const old = bus2D.targets.get(id);
+    const from = bus2D.shown.get(id) || old?.to || to;
+    const changedGps = !old || old.gps !== f.properties.time;
+    if (old && !changedGps) {
+      // A cache hit is not a new ping: continue the current glide instead of restarting it.
+      if (now - old.started < BUS_2D_GLIDE_MS && meters(old.from, old.to) > 1) moving = true;
+      continue;
+    }
+    const jump = meters(from, to);
+    const animate = !reduceMotion && changedGps && old &&
+      f.properties.service_status !== "leaving_soon" &&
+      jump > 1 && jump <= BUS_2D_MAX_JUMP_METERS;
+    bus2D.targets.set(id, {
+      from: animate ? [...from] : [...to], to: [...to],
+      started: now, gps: f.properties.time
+    });
+    if (!animate) bus2D.shown.set(id, [...to]);
+    else moving = true;
+  }
+  for (const id of bus2D.targets.keys()) if (!incoming.has(id)) {
+    bus2D.targets.delete(id);
+    bus2D.shown.delete(id);
+  }
+  if (bus2D.raf) cancelAnimationFrame(bus2D.raf);
+  bus2D.raf = 0;
+  // Draw immediately, then animate only when new GPS observations actually move a bus.
+  bus2DFrame(now);
+  if (!moving && bus2D.raf) { cancelAnimationFrame(bus2D.raf); bus2D.raf = 0; }
+}
+// When the map becomes visible again, restore the actual latest GPS position rather
+// than replaying movement that occurred while the tab was hidden.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (bus2D.raf) cancelAnimationFrame(bus2D.raf);
+    bus2D.raf = 0;
+  } else {
+    for (const target of bus2D.targets.values()) {
+      target.from = [...target.to];
+      target.started = performance.now() - BUS_2D_GLIDE_MS;
+    }
+    if (map.getSource("buses")) map.getSource("buses").setData(lastBuses);
+  }
+});
+
 // "to Downtown Burlington", "to Essex Junction"… shown under each live bus.
 const niceDest = (h) => String(h || "").replace(/^Downtown Transit Center.*$/i, "Downtown Burlington").replace(/\s+(Bay|Berth)\s*\w*$/i, "");
 async function refreshBuses() {
@@ -1895,7 +1988,7 @@ async function refreshBuses() {
       liveCounts[r.route_id] = (liveCounts[r.route_id] || 0) + 1;
     }
     lastBuses = data;
-    map.getSource("buses")?.setData(data);
+    updateBus2D(data);
     if (followState) followBus();
     const n = visibleRoutes().reduce((sum, id) => sum + (liveCounts[id] || 0), 0);
     if (status) {
@@ -1909,6 +2002,7 @@ async function refreshBuses() {
         status.classList.add("problem");
       } else {
         status.textContent = `${n} bus${n === 1 ? "" : "es"} reporting` +
+          (data.meta?.leavingSoon ? ` · ${data.meta.leavingSoon} leaving soon` : "") +
           (gpsAge != null ? ` · latest GPS ${gpsAge}s ago` : " · no recent GPS");
         status.classList.remove("problem");
       }
@@ -1917,6 +2011,7 @@ async function refreshBuses() {
       const c = liveCounts[el.dataset.live]; el.innerHTML = c ? ` ∙ <span class="lv">${c} live</span>` : "";
     });
   } catch (e) {
+    stopBus2DAnimation();
     lastBuses = { type: "FeatureCollection", features: [] };
     liveCounts = {};
     map.getSource("buses")?.setData(lastBuses);
