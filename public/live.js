@@ -71,7 +71,7 @@
     // (and be reused by every later request). On a timeout the map falls back to scheduled times and retries next update.
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
     const timer = ctl && setTimeout(() => ctl.abort(), RELAY_TIMEOUT_MS);
-    const promise = fetch(RELAY + path, ctl ? { signal: ctl.signal } : undefined)
+    const promise = fetch(RELAY + path, { ...(ctl ? { signal: ctl.signal } : {}), cache: "no-store" })
       .then(async (r) => {
         if (!r.ok) throw new Error(`Relay ${r.status}`);
         const body = await r.json();

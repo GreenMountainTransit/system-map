@@ -1484,10 +1484,11 @@ function nearestStop(c, maxM = 3000) {
 }
 
 
-// Only poll while someone can see the map.
+// Keep the feed current whenever the PAGE is visible. On mobile the sheet can cover
+// the Mapbox canvas even while the rider is actively using stop/route information.
+// Using an IntersectionObserver for GPS polling made vehicles freeze in that case.
 let onScreen = true;
-new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; if (onScreen) tick(); }).observe(document.getElementById("map"));
-document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(true); });
 
 // ---------- data ----------
 // A preview of a test schedule: if the test was built for another date (e.g. a summer feed), the map behaves as if it
@@ -2017,18 +2018,43 @@ map.on("click", (e) => {
 
 // ---------- live data ----------
 let lastTick = 0;
+let lastBusPollAt = 0;
+let busRefreshInFlight = false;
 function tick(force) {
+  if (document.hidden) return;
+  // Poll even while the map style is transitioning; the incoming snapshot can be
+  // applied once the layers are ready. Never gate GPS retrieval on a Mapbox layer.
   if (!map.getLayer("buses")) ensureBusLayer();
-  if (!map.getSource("buses") || (!force && Date.now() - lastTick < 5000)) return;
-  if (!onScreen || document.hidden) return;
+  if (!force && Date.now() - lastTick < 5000) return;
   lastTick = Date.now();
-  refreshBuses();
+  if (!busRefreshInFlight) {
+    busRefreshInFlight = true;
+    lastBusPollAt = Date.now();
+    Promise.resolve().then(() => refreshBuses())
+      .catch((err) => console.warn("GMT bus polling failed:", err))
+      .finally(() => { busRefreshInFlight = false; });
+  }
   if (routeParam) refreshRouteArrivals();
   if (openStopId) refreshPopup();
   if (view === "plan" && planState.result?.options?.length) checkLive(true);
-  refreshDetours(); refreshAlerts();
+  // Non-vehicle overlays should not generate uncaught promise rejections.
+  Promise.resolve().then(() => refreshDetours()).catch((err) => console.warn("GMT detour refresh failed:", err));
+  Promise.resolve().then(() => refreshAlerts()).catch((err) => console.warn("GMT alert refresh failed:", err));
 }
 setInterval(() => tick(), REFRESH_MS);
+// Console diagnostic: GMTMapGPS.status() reports polling and feed age without
+// making a separate network request. Use to pinpoint browser vs relay problems.
+window.GMTMapGPS = Object.freeze({
+  status: () => ({
+    pageVisible: !document.hidden,
+    lastPollSecondsAgo: lastBusPollAt ? Math.round((Date.now() - lastBusPollAt) / 1000) : null,
+    requestInFlight: busRefreshInFlight,
+    relay: GMTLive.liveStatus?.().vehicles || null,
+    visibleBuses: lastBuses.features.length,
+    newestGpsSecondsAgo: lastBuses.meta?.newestObservation ? Math.round((Date.now() - lastBuses.meta.newestObservation) / 1000) : null
+  }),
+  refresh: () => tick(true)
+});
 
 // Smooth only the 2D map display between Swiftly GPS updates.
 // Never extrapolate beyond reported coordinates or alter the underlying GPS positions.
@@ -2123,7 +2149,8 @@ document.addEventListener("visibilitychange", () => {
 // "to Downtown Burlington", "to Essex Junction"… shown under each live bus.
 const niceDest = (h) => String(h || "").replace(/^Downtown Transit Center.*$/i, "Downtown Burlington").replace(/\s+(Bay|Berth)\s*\w*$/i, "");
 async function refreshBuses() {
-  markRoutes(); // keep legend warning marks after the list is redrawn
+  // Legend issues must never interrupt the GPS network poll.
+  try { markRoutes(); } catch (err) { console.warn("GMT route legend update failed:", err); }
   const status = document.getElementById("status");
   if (!liveReady) { setBusStatus(PREVIEW ? "Preview: scheduled times from the test schedule (no live buses)." : "Live buses aren’t connected yet. Showing scheduled times."); return; }
   try {
@@ -2891,7 +2918,7 @@ function markRoutes() {
     let mark = row.querySelector(".rwarn");
     if (!n) { mark?.remove(); return; }
     if (!mark) { mark = document.createElement("span"); mark.className = "rwarn"; row.querySelector(".rname").after(mark); }
-    mark.innerHTML = ICON.warn; mark.title = routeAlerts.length && actualDetour ? "Service alert and mapped detour" : actualDetour ? "Mapped detour (check active service)" : "Service alert";
+    mark.innerHTML = ICON.warn; mark.title = "Service alert";
     mark.setAttribute("aria-label", mark.title); mark.setAttribute("role", "img");
   });
 }
