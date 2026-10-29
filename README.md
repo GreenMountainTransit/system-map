@@ -1,10 +1,9 @@
-# GMT System Map Update
+# GMT 3D Restore + Route Choice Fix
 
-Replace `public/index.html` and `public/live.js` with the files in this ZIP. `live.js` is included unchanged to keep a complete matching pair.
+Replace `public/index.html` and `public/planner.js` in the GitHub repository.
 
-- Preserve live bus status across mobile tray/route panel rebuilds.
-- Service near you resets route visibility filters (on the system map).
-- Both location and map-pin options list up to 16 nearest stops by distance, then next arrivals within each stop by departure time.
-- Reuses existing GTFS and Swiftly relay data; no new API endpoints or Cloudflare Worker changes.
+- 3D control now remains available regardless of touchscreen / pointer classification and screen width. It preserves the existing 3D bus models, follow camera and 3D buildings.
+- `planner.js` is the latest route-choice improvement with walking transfers and no same-route direction reversals.
+- No changes to `public/live.js` or Cloudflare.
 
-Note: On a dedicated `?route=` page, its page-wide route scope remains in effect for the map; open the system map for the full-network view.
+The 3D button in the previous HTML was explicitly hidden on coarse-pointer devices, including touchscreen computers and all phones. This fix removes that gate. If 3D still does not appear, inspect browser console for an initialization exception; a running map may have an older cached HTML version. Test 3D on your target mobile devices for performance before public launch.
