@@ -11,7 +11,7 @@
   const WALK_MPS = 1.25;          // walking speed, meters per second (about 2.8 mph)
   const DETOUR = 1.3;             // streets aren't straight lines: straight-line distance x 1.3
   const ACCESS_M = 800;           // farthest walk to the first stop / from the last stop (about 10 minutes)
-  const TRANSFER_M = 400;         // farthest walk between stops when transferring
+  const TRANSFER_M = 900;         // allow realistic cross-stop transfers (e.g. UVMMC); about 12 min at walking speed
   const TRANSFER_BUFFER = 120;    // at least 2 minutes to change buses
   const MAX_RIDES = 3;            // at most 3 buses (2 transfers)
   const DIRECT_WALK_M = 1600;     // also offer "just walk" if it's under about 20 minutes
@@ -66,7 +66,10 @@
     });
     const patterns = [], byKey = new Map();
     for (const r of meta.routes) {
-      const sched = await L().data(`sched/${encodeURIComponent(r.route_id)}.json`);
+      let sched;
+      try { sched = await L().data(`sched/${encodeURIComponent(r.route_id)}.json`); }
+      catch (err) { console.warn(`[GMT planner] Missing schedule for route ${r.route_id}; skipping`, err); continue; }
+      if (!Array.isArray(sched)) continue;
       for (const day of days) for (const trip of sched) {
         if (!day.on.has(trip.s)) continue;
         const key = r.route_id + "|" + trip.st.map((x) => x[0]).join(",");
@@ -531,7 +534,7 @@
     const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides || walkTotal(a) - walkTotal(b),
       walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive || a.rides - b.rides,
       transfers: (a, b) => a.rides - b.rides || a.arrive - b.arrive || walkTotal(a) - walkTotal(b) }[sort] || ((a, b) => a.arrive - b.arrive || a.rides - b.rides);
-    return options.slice().sort(by).slice(0, 1).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
+    return options.filter(sensibleBusSequence).slice().sort(by).slice(0, 1).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
   }
   function collect(n, from, to, depart, opt, options, seen) {
     // Search from the requested time, then again just after each option's first bus, to offer later choices too.
@@ -546,7 +549,18 @@
       t = Math.min(...found.map((o) => o.legs.find((l) => l.kind === "ride").dep)) + 60;
     }
   }
+  // Never recommend getting off one bus and boarding the SAME route again as a
+  // connection. In particular, outbound-to-inbound backtracking is confusing and
+  // unnecessary for a public trip planner. A through ride is represented by one leg.
+  function sensibleBusSequence(option) {
+    const rides = (option.legs || []).filter(l => l.kind === "ride");
+    for (let i = 1; i < rides.length; i++) {
+      if (String(rides[i - 1].route) === String(rides[i].route)) return false;
+    }
+    return true;
+  }
   function finish(options, from, to) {
+    options = options.filter(sensibleBusSequence);
     // Drop options another option beats: leaving no earlier, arriving no later, with no more buses and no more walking.
     const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.arrive <= o.arrive && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) &&
       (x.depart > o.depart || x.arrive < o.arrive || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
@@ -560,7 +574,8 @@
   function planArriveBy(n, from, to, arriveBy, runs = [{}]) {
     const options = [], seen = new Set();
     for (const opt of runs) arriveByRun(n, from, to, arriveBy, opt, options, seen);
-    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
+    const validOptions = options.filter(sensibleBusSequence);
+    const keep = validOptions.filter((o) => !validOptions.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
     keep.sort((a, b) => b.depart - a.depart || a.rides - b.rides);
     const direct = meters(from, to);
     return { options: keep, walkOnly: direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null, arriveBy };
