@@ -56,6 +56,27 @@ const stopTimes = read("stop_times.txt");
 const shapes = read("shapes.txt", true);
 const calendar = read("calendar.txt", true);
 const calendarDates = read("calendar_dates.txt", true);
+const transfers = read("transfers.txt", true);
+
+// Explicit GTFS transfers take precedence over the trip planner's DTC bay shortcut.
+// Transfer type 3 forbids a transfer; type 2 provides a minimum time in seconds.
+const transferRules = {};
+
+for (const t of transfers) {
+  if (!t.from_stop_id || !t.to_stop_id) continue;
+
+  const type = Number(t.transfer_type || 0);
+
+  transferRules[`${t.from_stop_id}|${t.to_stop_id}`] = {
+    type,
+    ...(type === 2 && Number.isFinite(Number(t.min_transfer_time))
+      ? { seconds: Math.max(0, Number(t.min_transfer_time)) }
+      : {})
+  };
+}
+
+write("transfers.json", transferRules);
+
 const routeInfo = fs.existsSync(path.join(ROOT, "route-info.json")) ? JSON.parse(fs.readFileSync(path.join(ROOT, "route-info.json"), "utf8")) : { groups: [], routes: {} };
 
 // ---------- stop times per trip, with timepoints and interpolation ----------
