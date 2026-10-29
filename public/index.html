@@ -1111,8 +1111,9 @@ async function ensureFleetModel(p) {
     entry.url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "" });
     while (!basemapReady()) await new Promise((res) => setTimeout(res, 150));
     map.addModel(entry.id, entry.url); entry.ready = true;
-    // The layer picks each bus's model by name, and only knows models that existed when it was made, so remake it.
-    if (map.getLayer("fleet3d")) { map.removeLayer("fleet3d"); addFleetLayer(); }
+    // Keep the layer stable; model-id is feature driven and does not need a rebuild.
+    // Rebuilding a live model layer can cause buses to vanish during a zoom transition.
+    if (fleet.on && !map.getLayer("fleet3d") && basemapReady()) addFleetLayer();
   } catch { fleet.models.delete(key); }
 }
 function addFleetLayer() {
@@ -1122,7 +1123,7 @@ function addFleetLayer() {
   fleet.sig = ""; // send data again to a new layer
   if (!map.getLayer("fleet3d")) {
     const scale = BUS_LEN / GMTBus3D.LENGTH_M;
-    map.addLayer({ id: "fleet3d", type: "model", source: "fleet3d", minzoom: 14, layout: { "model-id": ["get", "model"] },
+    map.addLayer({ id: "fleet3d", type: "model", source: "fleet3d", minzoom: 0, layout: { "model-id": ["get", "model"] },
       paint: { "model-scale": [scale, scale, scale], "model-rotation": ["get", "r"], "model-type": "common-3d" },
       ...((map.getStyle().imports || []).length ? { slot: "top" } : {}) });
   }
@@ -1146,6 +1147,12 @@ function fleetFrame(now) {
   if (now - fleet.last < 160) return;
   const dt = Math.min(0.5, (now - (fleet.last || now)) / 1000); fleet.last = now;
   if (!map.getLayer("fleet3d")) { if (basemapReady()) addFleetLayer(); return; }
+  // Models may be evicted on a basemap/style reload. Restore without replacing the layer.
+  for (const m of fleet.models.values()) {
+    if (m.ready && m.url && !map.hasModel?.(m.id)) {
+      try { map.addModel(m.id, m.url); } catch (e) { console.warn("GMT 3D model recovery", e); }
+    }
+  }
   const vis = visibleRoutes(), k = 1 - Math.exp(-dt / 1.5), feats = [], seen = new Set();
   for (const f of lastBuses.features) {
     const p = f.properties;
@@ -2816,11 +2823,15 @@ function renderAlertBanner() {
 // Warning mark next to routes in the legend that have an alert or a detour today.
 function markRoutes() {
   document.querySelectorAll(".route-row").forEach((row) => {
-    const id = row.dataset.route, n = (detourInfo.byRoute[id] ? 1 : 0) + alertsList.filter((a) => a.routes.includes(id)).length;
+    const id = row.dataset.route;
+    const routeAlerts = alertsList.filter((a) => a.routes.includes(id));
+    const actualDetour = (detourGeo.features || []).some((f) =>
+      f.properties.route_id === id && ["path", "closed", "closedstop", "temp"].includes(f.properties.kind));
+    const n = routeAlerts.length + (actualDetour ? 1 : 0);
     let mark = row.querySelector(".rwarn");
     if (!n) { mark?.remove(); return; }
     if (!mark) { mark = document.createElement("span"); mark.className = "rwarn"; row.querySelector(".rname").after(mark); }
-    mark.innerHTML = ICON.warn; mark.title = detourInfo.byRoute[id] ? "Detour or service alert today" : "Service alert";
+    mark.innerHTML = ICON.warn; mark.title = actualDetour ? "Active detour or service alert" : "Service alert";
     mark.setAttribute("aria-label", mark.title); mark.setAttribute("role", "img");
   });
 }
