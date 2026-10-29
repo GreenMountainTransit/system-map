@@ -1502,8 +1502,7 @@ dataReady.then(() => {
 
 // The live-bus overlay must not depend on other route/stop layers succeeding.
 // Restores both the GeoJSON source and symbol layer after any basemap style reset.
-// Independent live-vehicle drawing path: basic dots do not depend on badge images.
-// Keeps buses visible even if one of the optional overlay layers fails.
+// One bus symbol layer only: route-number badges, never fallback circles.
 function ensureBusLayer() {
   try {
     // addSource/addLayer are safe once the style object exists. The style may
@@ -1514,21 +1513,10 @@ function ensureBusLayer() {
     if (!map.getSource("buses")) {
       map.addSource("buses", { type: "geojson", data: lastBuses });
     }
-    if (!map.getLayer("bus-location-dots")) {
-      const dotLayer = {
-        id: "bus-location-dots", type: "circle", source: "buses",
-        layout: { visibility: liveBusesOn ? "visible" : "none" },
-        paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 7, 15, 12],
-          "circle-color": ["coalesce", ["get", "color"], "#267c58"],
-          "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
-          "circle-opacity": 0.95
-        }
-      };
-      if (basemap.standard) dotLayer.slot = "top";
-      map.addLayer(dotLayer);
-    }
-    // Optional custom bus badges. Failure must not remove the dot layer.
+    // Remove the temporary troubleshooting dots. Only route-number bus badges
+    // should be visible, including after route filtering and basemap changes.
+    if (map.getLayer("bus-location-dots")) map.removeLayer("bus-location-dots");
+    // Register route badge images before creating the bus symbol layer.
     try {
       for (const r of Object.values(routes)) {
         const id = `bus-${r.route_id}`;
@@ -1560,11 +1548,11 @@ function ensureBusLayer() {
       }
     } catch (badgeError) {
       if (!ensureBusLayer.lastBadgeError || Date.now() - ensureBusLayer.lastBadgeError > 10000) {
-        console.warn("GMT: custom bus badges unavailable; fallback location dots remain visible", badgeError);
+        console.warn("GMT: bus badge layer not ready; will retry", badgeError);
         ensureBusLayer.lastBadgeError = Date.now();
       }
     }
-    return !!map.getLayer("bus-location-dots");
+    return !!map.getLayer("buses");
   } catch (error) {
     if (!ensureBusLayer.lastError || Date.now() - ensureBusLayer.lastError > 10000) {
       console.warn("GMT: bus layer not ready; will retry", error);
@@ -1577,10 +1565,10 @@ function ensureBusLayer() {
 // Styles can finish asynchronously, especially on mobile and when basemaps switch.
 // Retry locally; these checks do not call Swiftly or Cloudflare.
 map.on("styledata", () => {
-  if (Object.keys(routes).length && !map.getLayer("bus-location-dots")) ensureBusLayer();
+  if (Object.keys(routes).length && !map.getLayer("buses")) ensureBusLayer();
 });
 setInterval(() => {
-  if (!document.hidden && Object.keys(routes).length && !map.getLayer("bus-location-dots")) {
+  if (!document.hidden && Object.keys(routes).length && !map.getLayer("buses")) {
     if (ensureBusLayer() && map.getSource("buses")) {
       map.getSource("buses").setData(lastBuses);
       if (map.getLayer("route-lines")) applyFilters();
@@ -1600,9 +1588,8 @@ map.on("style.load", async () => {
     console.error("GMT: route overlay setup failed; bus layer kept available", error);
   }
   ensureBusLayer();
-  // Keep the always-available dots above route lines and stop symbols.
-  try { if (map.getLayer("bus-location-dots")) map.moveLayer("bus-location-dots");
-    if (map.getLayer("buses")) map.moveLayer("buses"); } catch {}
+  // Place the route-number badges over the map overlays.
+  try { if (map.getLayer("buses")) map.moveLayer("buses"); } catch {}
   if (!addOverlay.built) { addOverlay.built = true; animateBuild(); } // first load only
   if (!addOverlay.fitted && routeParam && routes[routeParam]) {
     fitTo(linesData.features.filter((f) => f.properties.route_id === routeParam));
@@ -1812,7 +1799,6 @@ function applyFilters() {
   const atStop = vis.length ? ["any", ...vis.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : ["==", ["get", "stop_id"], "__none__"];
   ["route-casing", "route-lines", "route-arrows"].forEach((l) => map.setFilter(l, onRoute));
   if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", liveBusesOn ? "visible" : "none");
-  if (map.getLayer("bus-location-dots")) map.setLayoutProperty("bus-location-dots", "visibility", liveBusesOn ? "visible" : "none");
   map.setFilter("route-glow", ["all", onRoute, ["in", ["get", "route_id"], ["literal", highlighted]]]);
   const stopFilter = atStop;
   map.setFilter("stops", stopFilter);
@@ -1831,11 +1817,9 @@ function applyFilters() {
     DETOUR_LAYERS.forEach((l) => map.setLayoutProperty(l, "visibility", view === "routes" || routeParam ? "visible" : "none"));
   }
   if (map.getLayer("buses")) map.setFilter("buses", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
-  if (map.getLayer("bus-location-dots")) map.setFilter("bus-location-dots", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
   if (view === "plan" && !routeParam) { // trip planner: only buses on the chosen trip's routes
     const tripRoutes = selectedOption()?.legs?.filter((l) => l.kind === "ride").map((l) => l.route) || [];
     if (map.getLayer("buses")) map.setFilter("buses", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
-    if (map.getLayer("bus-location-dots")) map.setFilter("bus-location-dots", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
   }
   // While a route is hovered, everything else steps back: other lines, their casings and their buses.
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
@@ -1974,7 +1958,7 @@ map.on("click", (e) => {
 // ---------- live data ----------
 let lastTick = 0;
 function tick(force) {
-  if (!map.getLayer("bus-location-dots")) ensureBusLayer();
+  if (!map.getLayer("buses")) ensureBusLayer();
   if (!map.getSource("buses") || (!force && Date.now() - lastTick < 5000)) return;
   if (!onScreen || document.hidden) return;
   lastTick = Date.now();
