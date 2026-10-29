@@ -1917,11 +1917,11 @@ function buildSystemPanel() {
     <div class="scroll freq-legend">
       <div class="periods" role="radiogroup" aria-label="Time of day">${FREQ_PERIODS.map((x) =>
         `<button type="button" role="radio" data-period="${x.id}" aria-checked="${x.id === freqPeriod}">${x.short}</button>`).join("")}</div>
-      <p class="freq-intro">How often a local bus comes on each street, <strong>${per.note}</strong>. Where routes share a street, like Main Street in Burlington or Market Street in South Burlington, their buses add up.</p>
+      <p class="freq-intro">Estimated scheduled corridor frequency, <strong>${per.note}</strong>. Local routes sharing a street are combined; buses may arrive unevenly.</p>
       <ul class="tiers" aria-label="Filter by frequency">${FREQ.map((t) => `<li><button type="button" data-tier="${t.tier}" aria-pressed="${freqTiers.has(t.tier)}">
         <span class="swatch ${t.dashed ? "dashed" : ""}" style="--c:${t.color};--w:${[0, 7, 5, 3.5, 2.5][t.tier]}px"></span><span>${t.label}</span>
         <span class="tick" aria-hidden="true">${ICON.check}</span></button></li>`).join("")}</ul>
-      <p class="freq-note">Based on how often buses leave the Downtown Transit Center (Route 4: the Essex Junction Amtrak station) in each period, as GMT schedules service. Streets served by more than one route add their buses together. Click a frequency to show or hide it. Weekday local routes only; commuter, express, school and shopping routes aren’t included.</p>
+      <p class="freq-note">This is a scheduled corridor average, not a guaranteed interval between buses at a particular stop. The calculation groups trips by when they pass the Downtown Transit Center (or an origin terminal), combines shared routes, and does not show direction-specific waiting or bunching. For an actual trip use stop departures or Trip planner. Local weekday service only; commuter, school and shopping routes excluded.</p>
     </div>` : `
     <div class="scroll">
       <div class="legend-bar"><span id="vis-count" aria-live="polite"></span>
@@ -1980,6 +1980,7 @@ function buildSystemPanel() {
     const id = e.target.dataset.route;
     if (id) {
       if (!picking) { hidden = new Set(Object.keys(routes).filter((x) => x !== id)); picking = true; } // first tap: just this route
+      else if (visibleRoutes().length === 1 && !hidden.has(id) && !e.target.checked) { hidden.clear(); picking = false; } // tapping the sole route again returns to all
       else e.target.checked ? hidden.delete(id) : hidden.add(id);                                       // then: add or remove routes
     } else if (e.target.dataset.groupCb) {
       const g = byGroup.find((x) => x.id === e.target.dataset.groupCb);
@@ -2100,6 +2101,25 @@ function summary(list) {
 const stopPanel = document.getElementById("stop-panel");
 stopPanel.addEventListener("click", (e) => e.stopPropagation());
 stopPanel.addEventListener("pointerup", (e) => e.stopPropagation());
+// From a stop's About routes panel, show the currently reporting buses on that route.
+stopPanel.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-stop-route]");
+  if (!btn) return;
+  const rid = btn.dataset.stopRoute;
+  if (!routes[rid]) return;
+  if (!routeParam && view === "routes") {
+    hidden = new Set(Object.keys(routes).filter((id) => id !== rid)); picking = true;
+    stopFocus = null; buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
+  }
+  const vehicles = (lastBuses?.features || []).filter((f) => f.properties?.route_id === rid &&
+    f.geometry?.type === "Point" && Number.isFinite(f.geometry.coordinates?.[0]) && Number.isFinite(f.geometry.coordinates?.[1]));
+  const features = [...(linesData?.features || []).filter((f) => f.properties?.route_id === rid), ...vehicles];
+  if (features.length) fitTo(features, true);
+  document.getElementById("announce").textContent = vehicles.length
+    ? `Showing Route ${routes[rid].short_name} and ${vehicles.length} currently reporting bus${vehicles.length===1?"":"es"}.`
+    : `Showing Route ${routes[rid].short_name}; no live buses currently reporting on this route.`;
+});
+
 // Clicking a stop (main Routes view) shows just the routes serving it and their live buses; closing the stop puts the
 // route list back exactly as it was. Changing the route list while a stop is open keeps that change instead.
 let stopNav = [], suppressStopNav = false;
@@ -2312,11 +2332,11 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
   const featHtml = feats.length ? `<ul class="feats" aria-label="At and near this stop">${feats.map(([icon, label, no]) =>
     `<li class="${no ? "no" : ""}"><span class="ico" aria-hidden="true">${ICON[icon]}</span>${esc(label)}</li>`).join("")}</ul>` : "";
 
-  const rs = (routeParam ? [routeParam] : s.routes).map((id) => routes[id]).filter(Boolean);
+  const rs = (routeParam ? [routeParam] : (todayStopRoutesCache.get(s.stop_id) || s.routes)).map((id) => routes[id]).filter(Boolean);
   const rider = ridershipHtml(s);
   const sv = s.sv ? `<details class="sv-box" id="sv-box" ${svOpen ? "open" : ""}><summary>Street View</summary><div class="sv-body"></div></details>` : "";
   const about = `<details><summary>About ${rs.length === 1 ? "this route" : `these ${rs.length} routes`}</summary><div class="about">${rs.map((r) =>
-    `${chip(r)}<p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
+    `<button type="button" class="sp-route-focus" data-stop-route="${esc(r.route_id)}" title="Find a live bus on Route ${esc(r.short_name)}">${chip(r)} Find live bus</button><p><strong>${esc(r.long_name)}</strong>${r.description ? `. ${esc(r.description)}` : ""}<span class="f">${esc(freqText(r))}</span></p>`).join("")}</div></details>`;
   const seeAll = arrivals === "error" ? "" : `<button type="button" id="see-all" class="see-all" aria-expanded="${showAllTimes}">${showAllTimes ? "Hide all times" : "See all times today"}</button>${showAllTimes ? allTimesHtml(allTimes) : ""}`;
   // Say where the times come from, so riders (and staff) can tell live predictions from the timetable.
   const source = arrivals === null || arrivals === "error" ? ""
@@ -3076,10 +3096,10 @@ function stepsHtml(o) {
       const spare = Math.round((l.dep - prev.arr - walk) / 60), liveBoth = prev.live && l.live;
       transfer = `<span class="st-transfer ${spare < 3 ? "tight" : ""}">${spare < 3 ? "Tight connection: " : ""}${Math.max(0, spare)} min to make this transfer${liveBoth ? " (live)" : ""}</span>`;
     }
-    if (l.scheduledInterline) transfer = `<span class="st-stay">Scheduled same-bus continuation from Route ${esc(l.scheduledInterline.fromRoute)} to Route ${esc(l.short)} at ${esc(l.fromName)} (same GTFS block). Confirm with GMT/driver whether riders may stay aboard.</span>`;
+    if (l.scheduledInterline) transfer = `<span class="st-stay">Scheduled same-vehicle continuation (Route ${esc(l.scheduledInterline.fromRoute)} → ${esc(l.short)}) at ${esc(l.fromName)}. A new farebox payment is required for the continuing route; ask the driver whether you may remain aboard.</span>`;
     return `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
         <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${(l.stayOn?.firstHeadsign || l.headsign) ? ` toward ${esc(l.stayOn?.firstHeadsign || l.headsign)}` : ""} at ${esc(l.fromName)}
-        ${l.stayOn ? `<span class="st-stay">Stay on board at ${esc(l.stayOn.name)}: the same bus turns around there and continues toward ${esc(l.headsign)}. No transfer needed.</span>` : ""}
+        ${l.stayOn ? `<span class="st-stay">Scheduled continuation at ${esc(l.stayOn.name)} toward ${esc(l.headsign)}. Ask the driver whether to remain aboard; another farebox payment may be required for the next trip.</span>` : ""}
         <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span>
         ${planState.dayOffset ? "" : `<span class="st-livestat ${l.live ? "live" : ""}">${l.live ? `<span class="dot"></span>Live time` : "Scheduled"}</span>`}</span></li>`;
   }).join("");
@@ -3778,7 +3798,10 @@ function when(epoch) {
 const clock = (epoch) => new Date(epoch * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
 function fitTo(features, animate) {
   const b = new mapboxgl.LngLatBounds();
-  features.forEach((f) => f.geometry.coordinates.forEach(([lon, lat]) => { if (lon > -75 && lon < -70 && lat > 42 && lat < 46) b.extend([lon, lat]); }));
+  features.forEach((f) => {
+    const coords = f.geometry?.type === "Point" ? [f.geometry.coordinates] : f.geometry?.coordinates || [];
+    coords.forEach(([lon, lat]) => { if (lon > -75 && lon < -70 && lat > 42 && lat < 46) b.extend([lon, lat]); });
+  });
   if (!b.isEmpty()) map.fitBounds(b, { padding: panelPad(), duration: animate && !reduceMotion ? 700 : 0 });
 }
 function esc(v) { return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

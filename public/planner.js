@@ -116,7 +116,6 @@
         for (const i of grid.get(`${x}:${y}`) || []) { const m = meters(c, stops[i].c); if (m <= maxM) out.push([i, m]); }
       return out;
     };
-    
     // Within the Downtown Transit Center, changing bays requires no walking-time estimate.
     // This does NOT eliminate the boarding/connection buffer. GTFS transfer rules take precedence.
     const dtc = (s) => /downtown transit center|\bdtc\b/i.test(s.name || "");
@@ -127,7 +126,6 @@
       const inDtc = dtc(s) && dtc(stops[j]) && m <= 250;
       return [[j, rule?.seconds != null ? rule.seconds : inDtc ? 0 : walkSecs(m)]];
     }));
-
     net = { stops, idx, patterns, stopPatterns, footpaths, near, routes: Object.fromEntries(meta.routes.map((r) => [r.route_id, r])) };
     netDay = target.ymd;
     return net;
@@ -234,15 +232,11 @@
       if (l.kind === "ride") { t = l.arr; continue; }
       l.start = l === legs[0] ? firstRide.dep - l.secs : t; l.end = l.start + l.secs; t = l.end;
     }
-    
     // A common GTFS block is evidence of a planned vehicle continuation, not proof of
     // an operator-approved through ride. Flag it explicitly as a scheduled possibility.
     let previousRide = null, betweenWalk = false;
     for (const leg of legs) {
-      if (leg.kind !== "ride") {
-        if (previousRide && leg.secs > 30) betweenWalk = true;
-        continue;
-      }
+      if (leg.kind !== "ride") { if (previousRide && leg.secs > 30) betweenWalk = true; continue; }
       if (previousRide && !betweenWalk) {
         const a = previousRide._trip, b = leg._trip;
         const aEnd = a?.src?.st?.length - 1;
@@ -253,7 +247,6 @@
       }
       previousRide = leg; betweenWalk = false;
     }
-
     const arrive = legs[legs.length - 1].end;
     return { legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind !== "ride" ? legs[0].start : firstRide.dep, arrive,
       rides: legs.filter((l) => l.kind === "ride").length, leaveBy: start };
@@ -411,7 +404,21 @@
       t = Math.min(...found.map((o) => o.legs.find((l) => l.kind === "ride").dep)) + 60;
     }
   }
+  // Bike-plus-bus is an optional mobility tool, not a requirement to ride a bus.
+  // Discard itineraries where bus legs make no useful progress toward the destination.
+  // The direct cycling alternative remains available through the map's street router.
+  function usefulBikeBus(o, destination) {
+    if (!o.legs.some((l) => l.kind === "bike")) return true;
+    const rides = o.legs.filter((l) => l.kind === "ride");
+    if (!rides.length) return false;
+    const routeProgress = rides.reduce((sum, l) => sum +
+      (l.path?.length >= 2 ? meters(l.path[0], destination) - meters(l.path[l.path.length - 1], destination) : 0), 0);
+    const bikeTime = o.legs.filter((l) => l.kind === "bike").reduce((sum, l) => sum + l.secs, 0);
+    const rideTime = rides.reduce((sum, l) => sum + Math.max(0, l.arr - l.dep), 0);
+    return routeProgress >= 250 && rideTime >= 120 && rideTime >= bikeTime * 0.15;
+  }
   function finish(options, from, to) {
+    options = options.filter((o) => usefulBikeBus(o, to));
     // Drop options another option beats: leaving no earlier, arriving no later, with no more buses and no more walking.
     const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.arrive <= o.arrive && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) &&
       (x.depart > o.depart || x.arrive < o.arrive || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
@@ -425,7 +432,8 @@
   function planArriveBy(n, from, to, arriveBy, runs = [{}]) {
     const options = [], seen = new Set();
     for (const opt of runs) arriveByRun(n, from, to, arriveBy, opt, options, seen);
-    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
+    const usefulOptions = options.filter((o) => usefulBikeBus(o, to));
+    const keep = usefulOptions.filter((o) => !usefulOptions.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
     keep.sort((a, b) => b.depart - a.depart || a.rides - b.rides);
     const direct = meters(from, to);
     return { options: keep, walkOnly: direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null, arriveBy };
