@@ -2275,19 +2275,29 @@ function buildSystemPanel() {
     if (e.target.dataset.route || e.target.dataset.groupCb) stopFocus = null; // the rider's own choice: keep it after the stop closes
     const id = e.target.dataset.route;
     if (id) {
-      if (!picking) { hidden = new Set(Object.keys(routes).filter((x) => x !== id)); picking = true; } // first tap: just this route
-      else if (visibleRoutes().length === 1 && !hidden.has(id) && !e.target.checked) { hidden.clear(); picking = false; } // tapping the sole route again returns to all
-      else e.target.checked ? hidden.delete(id) : hidden.add(id);                                       // then: add or remove routes
+      if (!picking) {
+        // First choice is a SELECT action, not the checkbox's default uncheck action.
+        // Checkboxes begin checked when all routes are visible; on touch the first tap
+        // otherwise looks like it simply switches the route off.
+        hidden = new Set(Object.keys(routes).filter((x) => x !== id));
+        picking = true;
+        e.target.checked = true;
+      } else if (visibleRoutes().length === 1 && !hidden.has(id) && !e.target.checked) {
+        hidden.clear(); picking = false; // tapping the sole route again returns to all
+      } else {
+        e.target.checked ? hidden.delete(id) : hidden.add(id); // add or remove routes
+      }
     } else if (e.target.dataset.groupCb) {
       const g = byGroup.find((x) => x.id === e.target.dataset.groupCb);
       g.ids.forEach((x) => (e.target.checked ? hidden.delete(x) : hidden.add(x)));
       picking = true;
     } else return;
     if (hidden.size === Object.keys(routes).length) picking = true;
-    if (isPhone() && visibleRoutes().length) setSheet(false); // show the map: collapse the list before zooming to the route
+    // Keep the legend open on phones, just as on desktop, so subsequent taps can add
+    // routes or turn individual routes off without reopening the bottom sheet.
     buildSystemPanel.sync(); applyFilters(); refreshBuses(); fitVisible();
   });
-  document.getElementById("show-all").onclick = () => { stopFocus = null; hidden = new Set(); picking = false; if (isPhone()) setSheet(false); buildSystemPanel.sync(); applyFilters(); refreshBuses(); goHome(); };
+  document.getElementById("show-all").onclick = () => { stopFocus = null; hidden = new Set(); picking = false; buildSystemPanel.sync(); applyFilters(); refreshBuses(); goHome(); };
   document.getElementById("hide-all").onclick = () => { stopFocus = null; hidden = new Set(Object.keys(routes)); picking = true; buildSystemPanel.sync(); applyFilters(); refreshBuses(); };
   scroll.addEventListener("click", (e) => {
     const t = e.target.closest(".group-toggle"); if (!t) return;
