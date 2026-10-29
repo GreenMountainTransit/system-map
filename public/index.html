@@ -338,6 +338,8 @@
   .near-opt:hover { background: var(--hover); }
   .near-dir { font-weight: 700; font-size: .84rem; } .near-stop { font-size: .76rem; color: var(--muted); }
   .near-next { font-size: .82rem; font-variant-numeric: tabular-nums; } .near-next .now { color: var(--live); }
+  .near-service { display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 2px 7px 2px 0; }
+  .near-times { display: inline; white-space: normal; }
   .temp-tag { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: .8rem; color: #7c2d12; background: #fff7ef; border-radius: 4px; padding: 7px 9px; }
   .temp-tag svg { width: 16px; height: 16px; color: #ea580c; flex: none; }
   .rwarn { display: inline-flex; vertical-align: -2px; margin-left: 5px; color: #ea580c; } .rwarn svg { width: 14px; height: 14px; }
@@ -1352,9 +1354,7 @@ geolocate.on("geolocate", (e) => {
   if (view === "plan") { planState.from = { c: here, label: "My location" }; buildSystemPanel(); planTrip(); return; }
   setTimeout(() => showNearby(here, "Service near you", null), 400); // after the map moves to the rider
 });
-// "Next service near you": for each nearby route, the closest stop in EACH direction (one stop for loop
-// routes), the walk there, and the next departures that way. Used by the locate button and, on route
-// pages, by address search.
+// "Service near you": a short list of the closest walkable stops, with no duplicate routes.
 const WALK = { mps: 1.25, detour: 1.3, maxM: 8000 }; // show the nearest stops up to ~5 miles away; beyond that, "no service nearby"
 // "4 min walk (300 m)", or for long distances "1.8 mi away (about 45 min walk)".
 const walkText = (m) => m < 1600 ? `${walkMin(m)} min walk (${Math.round(m / 10) * 10} m)` : `${(m / 1609).toFixed(1)} mi away (about ${walkMin(m)} min walk)`;
@@ -1372,20 +1372,31 @@ async function showNearby(here, title, onlyRoutes, place) {
   if (place?.label && !routeParam) planState.to = { c: here, label: place.label };
   rememberStopNavigation();
   closeStop();
-  const maxStops = 16;
-  const near = Object.values(stopsById)
+  // A compact public-facing list: within approximately a 10-minute walk, at most five
+  // physical stops, and each route appears just once at its closest stop.
+  const maxStops = 5;
+  const maxWalkMinutes = 10;
+  const maxDistanceM = maxWalkMinutes * 60 * WALK.mps / WALK.detour;
+  const candidates = Object.values(stopsById)
     .map(st => ({ st, m: meters(here, st.coords) }))
-    .filter(o => o.m <= WALK.maxM && (o.st.routes || []).some(rid => routes[rid]))
-    .sort((a, b) => a.m - b.m)
-    .slice(0, maxStops);
-  // Each physical stop appears once, regardless of how many routes or directions serve it.
-  const routeIds = [...new Set(near.flatMap(o => o.st.routes || []))].filter(rid => routes[rid]);
+    .filter(o => o.m <= maxDistanceM && (o.st.routes || []).some(rid => routes[rid]))
+    .sort((a, b) => a.m - b.m);
+  const seenRoutes = new Set();
+  const near = [];
+  for (const o of candidates) {
+    const newRoutes = [...new Set(o.st.routes || [])].filter(rid => routes[rid] && !seenRoutes.has(rid));
+    if (!newRoutes.length) continue;
+    near.push({ ...o, displayRoutes: newRoutes });
+    newRoutes.forEach(rid => seenRoutes.add(rid));
+    if (near.length >= maxStops) break;
+  }
+  const routeIds = [...seenRoutes];
   const nearbyKey = "near:" + here.join(",");
   openStopId = nearbyKey;
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}<h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
       <button type="button" class="sp-close" aria-label="Close">×</button></div>
     <div class="sp-body">${place?.label ? `<div class="near-actions"><button type="button" class="dir-btn" id="near-dir">${ICON.directions}Directions</button></div>` : ""}
-      <div class="pop" id="near-list">${near.length ? "<p class='none'>Loading upcoming arrivals…</p>" : `<p class="none">There are no GMT stops within about 5 miles of here.</p>`}</div></div>`;
+      <div class="pop" id="near-list">${near.length ? "<p class='none'>Loading upcoming arrivals…</p>" : `<p class="none">No GMT stops are within about a 10-minute walk of this location.</p>`}</div></div>`;
   stopPanel.hidden = false; document.getElementById("wrap").classList.add("stop-open"); map.resize();
   wireStopNavigation();
   stopPanel.querySelector(".sp-close").onclick = () => { stopNav = []; closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
@@ -1411,19 +1422,32 @@ async function showNearby(here, title, onlyRoutes, place) {
       if (openStopId !== nearbyKey) return;
       const area = document.getElementById("near-list");
       if (!area) return;
-      area.innerHTML = near.map(({st, m}, i) => {
-        const arrivals = (st.routes || []).flatMap(rid => {
+      area.innerHTML = near.map(({st, m, displayRoutes}) => {
+        const services = displayRoutes.map(rid => {
           const byDirection = result[rid]?.[st.stop_id] || {};
-          return Object.values(byDirection).flat().filter(a => a && Number.isFinite(a.time));
-        }).sort((a, b) => a.time - b.time);
-        const unique = [...new Map(arrivals.map(a => [a.route_id + ":" + a.trip + ":" + a.time, a])).values()];
+          const upcoming = Object.values(byDirection).flat()
+            .filter(a => a && Number.isFinite(a.time) && a.time >= Date.now() / 1000 - 90)
+            .sort((a, b) => a.time - b.time);
+          // Direction-grouped results may repeat a trip; only count each arrival once.
+          const seenTrips = new Set();
+          const nextThree = upcoming.filter(a => {
+            const key = `${a.trip || a.trip_id || ""}:${a.time}`;
+            if (seenTrips.has(key)) return false;
+            seenTrips.add(key);
+            return true;
+          }).slice(0, 3);
+          const times = nextThree.length
+            ? nextThree.map(a => `<span class="${a.live ? "now" : ""}">${when(a.time)}</span>`).join(" · ")
+            : "No upcoming trips";
+          return `<span class="near-service">${chip(routes[rid])} <span class="near-times">${times}</span></span>`;
+        });
         return `<div class="near-route">
           <button type="button" class="near-opt" data-stop="${esc(st.stop_id)}">
-            <span class="near-dir">${i + 1}. ${esc(st.name)}</span>
+            <span class="near-dir">${esc(st.name)}</span>
             <span class="near-stop">${walkText(m)}</span>
-            <span class="near-next">${unique.length ? unique.slice(0, 5).map(a => `${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })} <b class="${a.live ? "now" : ""}">${when(a.time)}</b>`).join(" &nbsp;·&nbsp; ") : "No more trips today"}</span>
+            <span class="near-next">${services.join("")}</span>
           </button></div>`;
-      }).join("") + `<p class="src">Stops are ordered by distance from the selected location; arrivals at each stop are ordered by time. Walking times are estimates. Tap any stop for full departures.</p>`;
+      }).join("") + `<p class="src">Closest stops first · One stop per route · Next three arrivals · About a 10-minute walk or less. Tap a stop for all departures.</p>`;
       area.querySelectorAll(".near-opt").forEach(btn => btn.onclick = () => showStop(btn.dataset.stop, true));
     } finally { fetching = false; }
   };
