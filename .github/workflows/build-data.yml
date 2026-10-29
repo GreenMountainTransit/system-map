@@ -51,6 +51,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22   # long-term support release (Node.js 20 reached end of life in April 2026)
+      - name: Validate staff-editable content
+        run: |
+          node -e 'const fs=require("fs"); const c=JSON.parse(fs.readFileSync("route-info.json","utf8")); if(!c.routes || typeof c.routes!=="object") throw Error("Missing routes in route-info.json"); for(const [id,desc] of Object.entries(c.routes)) if(typeof desc!=="string") throw Error(`Route ${id}: description must be text`); console.log("route-info.json valid");'
       - name: Download GTFS
         run: |
           get() { # get URL FOLDER VARIABLE: download a feed and note the folder that holds routes.txt
