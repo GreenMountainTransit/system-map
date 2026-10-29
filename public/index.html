@@ -3324,7 +3324,10 @@ function planResultsHtml() {
   entries.sort((x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : (!!x.extra - !!y.extra) || (x.bus ? byPref(x, y) : byArrival(x, y))));
   const busEntries = entries.filter((e) => e.bus), bestBus = busEntries.length ? busEntries.reduce((a, b) => (byArrival(a, b) <= 0 ? a : b)) : null;
   const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
-  const cards = entries.map((e, i) => {
+  // One recommended BUS itinerary per selected optimization. Other bus
+  // candidates remain in the planner's result only for internal comparisons.
+  const visibleEntries = entries.filter((e) => !e.bus || e === busEntries[0]);
+  const cards = visibleEntries.map((e, i) => {
     const tag = e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
     return e.html.replace("@@BADGE@@", tag ? `<span class="pl-fast-tag">${tag}</span>` : "");
   }).join("");
@@ -3429,7 +3432,13 @@ function stepsHtml(o) {
 function wirePlanResults() {
   document.querySelectorAll(".pl-sort [data-sort]").forEach((b) => (b.onclick = () => {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), sort: b.dataset.sort })); } catch {}
-    const el = document.getElementById("pl-results"); if (el && planState.result) { planState.selected = 0; el.innerHTML = planResultsHtml(); wirePlanResults(); drawPlan(true); }
+    // Different preferences use different searches (not merely different sorting).
+    // In particular, Least walking uses a multi-criteria search that retains
+    // later-arriving, shorter-walk itineraries.
+    planState.selected = 0;
+    planState.alt = null;
+    if (planState.from && planState.to) planTrip(true);
+    else { const el = document.getElementById("pl-results"); if (el) { el.innerHTML = planResultsHtml(); wirePlanResults(); } }
   }));
   document.querySelectorAll("[data-alt]").forEach((b) => (b.onclick = () => {
     if (isPhone()) snapSheet(document.getElementById("panel"), "half");

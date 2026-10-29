@@ -528,9 +528,10 @@
   const walkTotal = (o) => o._walkSecs ?? o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
   const bikeTotal = (o) => o.legs.filter((l) => l.kind === "bike").reduce((a, l) => a + l.secs, 0);
   function sortByPref(options, sort) {
-    const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides, walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive,
-      transfers: (a, b) => a.rides - b.rides || a.arrive - b.arrive }[sort] || ((a, b) => a.arrive - b.arrive || a.rides - b.rides);
-    return options.slice().sort(by).slice(0, 4).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
+    const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides || walkTotal(a) - walkTotal(b),
+      walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive || a.rides - b.rides,
+      transfers: (a, b) => a.rides - b.rides || a.arrive - b.arrive || walkTotal(a) - walkTotal(b) }[sort] || ((a, b) => a.arrive - b.arrive || a.rides - b.rides);
+    return options.slice().sort(by).slice(0, 1).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
   }
   function collect(n, from, to, depart, opt, options, seen) {
     // Search from the requested time, then again just after each option's first bus, to offer later choices too.
