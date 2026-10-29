@@ -187,18 +187,138 @@
       marked = newly;
     }
 
-    // Best arrival at the destination for each number of buses; keep only options that are faster
-    // than every option with fewer buses.
+    // Preserve more than just the earliest-arrival stop. Nearby alternatives can save
+    // a substantial walk for a small increase in journey time. The preference selector
+    // cannot select options that have already been discarded here.
     const results = [];
-    let bestSoFar = INF;
     for (let k = 1; k < tau.length; k++) {
-      let bestStop = -1, bestArr = INF;
-      for (const [i, w] of egress) if (tau[k][i] + w < bestArr) { bestArr = tau[k][i] + w; bestStop = i; }
-      if (bestStop < 0 || bestArr >= bestSoFar) continue;
-      bestSoFar = bestArr;
-      results.push(reconstruct(n, label, k, bestStop, egress.get(bestStop), from, to, depart, opt));
+      const ends = [...egress].filter(([i, w]) => isFinite(tau[k][i]) && isFinite(w))
+        .map(([i, w]) => ({ i, w, arrival: tau[k][i] + w }))
+        .sort((a, b) => a.arrival - b.arrival);
+      if (!ends.length) continue;
+      const fastest = ends[0].arrival;
+      // Walking-first must not impose an arrival-time penalty. Keep the closest
+      // destination stops even when their bus arrives much later. For fastest,
+      // retain the existing bounded window to control candidate count.
+      const candidates = opt.preferWalking
+        ? ends.sort((a, b) => a.w - b.w || a.arrival - b.arrival).slice(0, 100)
+        : ends.filter(e => e.arrival <= fastest + 20 * 60).slice(0, 25);
+      for (const e of candidates) {
+        const option = reconstruct(n, label, k, e.i, e.w, from, to, depart, opt);
+        if (option && isFinite(option.arrive) && option.depart >= depart - 60) results.push(option);
+      }
     }
     return results;
+  }
+
+  // Walking-first multi-criteria label search. Preserve BOTH time and walking cost at
+  // every stop, rather than suppressing later arrivals just because an earlier bus exists.
+  // Exact for the enumerated stop/footpath/timetable graph *within the stated horizon*
+  // when no safety cap is reached; pedestrian walking times are still estimates.
+  function walkingPareto(n, from, to, depart, opt = {}) {
+    const horizon = depart + 14 * 3600; // permit long, low-walking journeys in winter
+    const maxLabels = 180000;           // bound browser memory if source data is pathological
+    const maxPerStop = 64;              // bound highly repetitive terminal patterns
+    const accessible = i => !opt.accessible || n.stops[i].acc !== "no";
+    const egress = n.near(to, ACCESS_M).filter(([i]) => accessible(i));
+    const ending = new Map(egress.map(([i,m]) => [i, walkSecs(m)]));
+    const perRound = Array.from({length: MAX_RIDES+1}, () => Array.from({length:n.stops.length}, () => []));
+    const options = [];
+    let nodes = 0, capped = false;
+    function put(k, node) {
+      if (nodes >= maxLabels) { capped = true; return false; }
+      const bag = perRound[k][node.stop];
+      if (bag.some(x => x.ready <= node.ready && x.walk <= node.walk)) return false;
+      // Keep all non-dominated alternatives. Only cap genuinely excessive labels.
+      for (let i=bag.length-1; i>=0; i--) if (node.ready <= bag[i].ready && node.walk <= bag[i].walk) bag.splice(i,1);
+      if (bag.length >= maxPerStop) {
+        capped = true;
+        const worst = bag.reduce((a,b) => a.walk>b.walk ? a : b);
+        if (worst.walk <= node.walk) return false;
+        bag.splice(bag.indexOf(worst),1);
+      }
+      bag.push(node); nodes++;
+      return true;
+    }
+    for (const [i,m] of n.near(from,ACCESS_M)) if (accessible(i)) {
+      const seconds=walkSecs(m);
+      put(0,{stop:i,ready:depart+seconds,walk:seconds,prev:null,kind:'access',seconds});
+    }
+    const candidateSet = new Set();
+    const addResult = node => {
+      const w=ending.get(node.stop);
+      if (w === undefined || node.ready+w > horizon) return;
+      const total=node.walk+w;
+      // Retain the low-walking frontier, even when a journey arrives much later.
+      const option=walkingReconstruct(n,node,w,from,to,depart,opt);
+      if (!option || !Number.isFinite(option.arrive)) return;
+      const key=option.legs.filter(l=>l.kind==='ride').map(l=>l.trip+':'+l.fromStop+':'+l.toStop).join('>');
+      if (!candidateSet.has(key)) { candidateSet.add(key); options.push(option); }
+    };
+    for (let k=1; k<=MAX_RIDES; k++) {
+      const prev=perRound[k-1], current=perRound[k];
+      // Scan every active boarding label. Enumerating later departures is necessary:
+      // a later bus may reduce a subsequent transfer walk substantially.
+      for (let s=0;s<prev.length;s++) for (const state of prev[s]) {
+        for (const [pi,pos] of n.stopPatterns[s]) {
+          const pattern=n.patterns[pi];
+          if (pos>=pattern.stops.length-1) continue;
+          const earliest=state.ready+(k>1?TRANSFER_BUFFER:0);
+          for (const trip of pattern.trips) {
+            const dep=trip.times[pos];
+            if (!Number.isFinite(dep) || dep<earliest || dep>horizon) continue;
+            for (let a=pos+1;a<pattern.stops.length;a++) {
+              const stop=pattern.stops[a], arr=trip.times[a];
+              if (stop==null || !accessible(stop) || !Number.isFinite(arr) || arr<dep || arr>horizon) continue;
+              put(k,{stop,ready:arr,walk:state.walk,prev:state,kind:'ride',pattern:pi,trip,b:pos,a});
+            }
+          }
+        }
+      }
+      // Transfer walking edges: maintain walking cost, time, and provenance.
+      // Multi-hop walks are valid but bounded by per-transfer walking distance.
+      const queue=[];
+      for (const bag of current) for (const x of bag) queue.push(x);
+      for (let qi=0;qi<queue.length;qi++) {
+        const x=queue[qi];
+        if (!current[x.stop].includes(x)) continue; // dominated during expansion
+        for (const [j, seconds] of n.footpaths[x.stop]) {
+          if (!accessible(j) || seconds>walkSecs(TRANSFER_M) || x.ready+seconds>horizon) continue;
+          const node={stop:j,ready:x.ready+seconds,walk:x.walk+seconds,prev:x,kind:'walk',seconds};
+          if (put(k,node)) queue.push(node);
+        }
+      }
+      for (const [stop] of ending) for (const node of current[stop]) addResult(node);
+      if (capped && nodes>=maxLabels) break;
+    }
+    return { options, capped, labels:nodes, horizonHours:14 };
+  }
+
+  function walkingReconstruct(n, end, egressSecs, from, to, depart, opt={}) {
+    const chain=[];
+    for (let node=end;node;node=node.prev) chain.push(node);
+    chain.reverse();
+    if (!chain.length || chain[0].kind!=='access') return null;
+    const firstStop=n.stops[chain[0].stop];
+    const legs=[{kind:'walk',from,to:firstStop.c,toName:firstStop.name,secs:chain[0].seconds}];
+    for (let i=1;i<chain.length;i++) {
+      const step=chain[i], prior=chain[i-1];
+      if (step.kind==='walk') {
+        legs.push({kind:'walk',from:n.stops[prior.stop].c,to:n.stops[step.stop].c,fromName:n.stops[prior.stop].name,toName:n.stops[step.stop].name,secs:step.seconds});
+        continue;
+      }
+      const p=n.patterns[step.pattern],r=n.routes[p.route],t=step.trip;
+      const leg={kind:'ride',route:p.route,short:r.short_name,color:r.color,text:r.text_color,trip:t.id,
+        fromStop:n.stops[prior.stop].id,fromName:n.stops[prior.stop].name,toStop:n.stops[step.stop].id,toName:n.stops[step.stop].name,
+        dep:t.times[step.b],arr:t.times[step.a],stopsCount:step.a-step.b,
+        path:p.stops.slice(step.b,step.a+1).filter(x=>x!=null).map(x=>n.stops[x].c),
+        live:!!t.live,depDelay:t.times[step.b]-t.sched[step.b],arrDelay:t.times[step.a]-t.sched[step.a],
+        _p:p,_trip:t,_b:step.b,_a:step.a,_n:n};
+      rideDetails(leg,n,p,t,step.b,step.a);
+      legs.push(leg);
+    }
+    legs.push({kind:'walk',from:n.stops[end.stop].c,to,fromName:n.stops[end.stop].name,secs:egressSecs});
+    return finalizeLegs(n,legs,from,to,depart,opt);
   }
 
   function reconstruct(n, label, k, stop, egressSecs, from, to, depart, opt = {}) {
@@ -222,6 +342,10 @@
       s = lb.from; k--;
     }
     legs.push({ kind: opt.bike ? "bike" : "walk", from: n.stops[stop].c, to, fromName: n.stops[stop].name, secs: egressSecs });
+    return finalizeLegs(n,legs,from,to,depart,opt);
+  }
+
+  function finalizeLegs(n,legs,from,to,depart,opt={}) {
     shortenWalks(n, legs, from, to, depart, opt);
     mergeEndLegs(legs);
     // Times: walking legs are placed right before / after the rides they connect.
@@ -248,7 +372,8 @@
       previousRide = leg; betweenWalk = false;
     }
     const arrive = legs[legs.length - 1].end;
-    return { legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind !== "ride" ? legs[0].start : firstRide.dep, arrive,
+    const trueWalkingSecs = legs.filter(l => l.kind === "walk").reduce((a,l) => a+l.secs,0);
+    return { _walkSecs: trueWalkingSecs, legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind !== "ride" ? legs[0].start : firstRide.dep, arrive,
       rides: legs.filter((l) => l.kind === "ride").length, leaveBy: start };
   }
 
@@ -278,7 +403,11 @@
         const sIdx = first._p.stops[pos]; if (!ok(sIdx)) continue;
         const w = firstSecs(legs[0], sIdx, meters(from, n.stops[sIdx].c)), leave = first._trip.times[pos] - w;
         if (!isFinite(leave) || leave < depart - 60) continue;
-        if (leave > bestLeave + 30 || (leave >= bestLeave - 30 && w < bestW)) { best = pos; bestW = w; bestLeave = leave; }
+        if (opt.preferWalking
+          ? (w < bestW - 1 || (Math.abs(w - bestW) <= 1 && leave > bestLeave))
+          : (leave > bestLeave + 30 || (leave >= bestLeave - 30 && w < bestW))) {
+          best = pos; bestW = w; bestLeave = leave;
+        }
       }
       if (best !== first._b) { set(first, best, first._a); legs[0].to = n.stops[first._p.stops[best]].c; legs[0].toName = first.fromName; legs[0].secs = bestW; }
     }
@@ -291,7 +420,11 @@
         const sIdx = last._p.stops[pos]; if (!ok(sIdx)) continue;
         const w = lastSecs(lastWalk, sIdx, meters(n.stops[sIdx].c, to)), arrive = last._trip.times[pos] + w;
         if (!isFinite(arrive)) continue;
-        if (arrive < bestArrive - 30 || (arrive <= bestArrive + 30 && w < bestW)) { best = pos; bestW = w; bestArrive = arrive; }
+        if (opt.preferWalking
+          ? (w < bestW - 1 || (Math.abs(w - bestW) <= 1 && arrive < bestArrive))
+          : (arrive < bestArrive - 30 || (arrive <= bestArrive + 30 && w < bestW))) {
+          best = pos; bestW = w; bestArrive = arrive;
+        }
       }
       if (best !== last._a) { set(last, last._b, best); lastWalk.from = n.stops[last._p.stops[best]].c; lastWalk.fromName = last.toName; lastWalk.secs = bestW; }
     }
@@ -333,7 +466,8 @@
 
   // ---------- public: plan a trip ----------
   // Preferences: sort = "fastest" | "walk" (least walking) | "transfers" (fewest); accessible = avoid stops marked
-  // not wheelchair accessible. Least-walking also searches with shorter walking limits, for options that walk less.
+  // not wheelchair accessible. Least walking ranks total walking seconds before all travel-time or transfer costs.
+  // This is a walking-first heuristic over feasible RAPTOR candidates, not a globally exact pedestrian-network optimum.
   // Live predictions for every trip and stop (GTFS-realtime through the relay), laid over the timetable before
   // searching, so every leg and every transfer is timed live -- as Google Maps and Transit do. A canceled trip or
   // skipped stop can't be used. Trips without live data keep their timetable times.
@@ -373,18 +507,25 @@
     const live = dayOffset === 0 ? await applyLive(n) : (n.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; })), { feed: false, trips: 0 });
     // (applyLive handles through trips too: each half gets its own trip's live times.)
     // elev (bike mode): { from, to: meters above sea level, stops: Map(stop id -> meters) }, looked up by the page.
-    const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike, elev: prefs.bike ? elev || null : null };
-    const runs = prefs.sort === "walk" ? [opt, { ...opt, accessM: 450, transferM: 200 }] : [opt];
-    let result;
-    if (arriveBy) result = planArriveBy(n, from, to, arriveBy, runs);
+    const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike, preferWalking: prefs.sort === "walk", elev: prefs.bike ? elev || null : null };
+    const runs = [opt];
+    let result, searchAudit = null;
+    if (prefs.sort === "walk" && !prefs.bike) {
+      const searchDepart = arriveBy ? arriveBy - 14 * 3600 : depart;
+      searchAudit = walkingPareto(n, from, to, searchDepart, opt);
+      const options = arriveBy ? searchAudit.options.filter(o=>o.arrive <= arriveBy) : searchAudit.options;
+      result = finish(options,from,to);
+      if (arriveBy) result.arriveBy = arriveBy;
+    } else if (arriveBy) result = planArriveBy(n, from, to, arriveBy, runs);
     else {
       const options = [], seen = new Set();
       for (const o of runs) collect(n, from, to, depart, o, options, seen);
       result = finish(options, from, to);
     }
-    return { ...result, options: sortByPref(result.options, prefs.sort), prefs, live };
+    return { ...result, options: sortByPref(result.options, prefs.sort), prefs, live,
+      searchAudit: searchAudit && { mode:'walking-pareto', capped:searchAudit.capped, labels:searchAudit.labels, horizonHours:searchAudit.horizonHours, walkingModel:'straight-line × 1.3' } };
   }
-  const walkTotal = (o) => o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
+  const walkTotal = (o) => o._walkSecs ?? o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
   const bikeTotal = (o) => o.legs.filter((l) => l.kind === "bike").reduce((a, l) => a + l.secs, 0);
   function sortByPref(options, sort) {
     const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides, walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive,
@@ -398,27 +539,13 @@
       const found = raptor(n, from, to, t, opt);
       if (!found.length) break;
       for (const o of found) {
-        const key = o.legs.filter((l) => l.kind === "ride").map((l) => l.trip).join(">");
+        const key = o.legs.filter((l) => l.kind === "ride").map((l) => `${l.trip}:${l.fromStop}:${l.toStop}`).join(">");
         if (!seen.has(key)) { seen.add(key); options.push(o); }
       }
       t = Math.min(...found.map((o) => o.legs.find((l) => l.kind === "ride").dep)) + 60;
     }
   }
-  // Bike-plus-bus is an optional mobility tool, not a requirement to ride a bus.
-  // Discard itineraries where bus legs make no useful progress toward the destination.
-  // The direct cycling alternative remains available through the map's street router.
-  function usefulBikeBus(o, destination) {
-    if (!o.legs.some((l) => l.kind === "bike")) return true;
-    const rides = o.legs.filter((l) => l.kind === "ride");
-    if (!rides.length) return false;
-    const routeProgress = rides.reduce((sum, l) => sum +
-      (l.path?.length >= 2 ? meters(l.path[0], destination) - meters(l.path[l.path.length - 1], destination) : 0), 0);
-    const bikeTime = o.legs.filter((l) => l.kind === "bike").reduce((sum, l) => sum + l.secs, 0);
-    const rideTime = rides.reduce((sum, l) => sum + Math.max(0, l.arr - l.dep), 0);
-    return routeProgress >= 250 && rideTime >= 120 && rideTime >= bikeTime * 0.15;
-  }
   function finish(options, from, to) {
-    options = options.filter((o) => usefulBikeBus(o, to));
     // Drop options another option beats: leaving no earlier, arriving no later, with no more buses and no more walking.
     const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.arrive <= o.arrive && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) &&
       (x.depart > o.depart || x.arrive < o.arrive || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
@@ -432,8 +559,7 @@
   function planArriveBy(n, from, to, arriveBy, runs = [{}]) {
     const options = [], seen = new Set();
     for (const opt of runs) arriveByRun(n, from, to, arriveBy, opt, options, seen);
-    const usefulOptions = options.filter((o) => usefulBikeBus(o, to));
-    const keep = usefulOptions.filter((o) => !usefulOptions.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
+    const keep = options.filter((o) => !options.some((x) => x !== o && x.depart >= o.depart && x.rides <= o.rides && walkTotal(x) <= walkTotal(o) && (x.depart > o.depart || x.rides < o.rides || walkTotal(x) < walkTotal(o))));
     keep.sort((a, b) => b.depart - a.depart || a.rides - b.rides);
     const direct = meters(from, to);
     return { options: keep, walkOnly: direct <= DIRECT_WALK_M ? { walkOnly: true, secs: walkSecs(direct), meters: Math.round(direct * DETOUR) } : null, arriveBy };
@@ -447,7 +573,7 @@
       for (const o of found) {
         if (o.arrive > arriveBy) continue;
         anyInTime = true;
-        const key = o.legs.filter((l) => l.kind === "ride").map((l) => l.trip).join(">");
+        const key = o.legs.filter((l) => l.kind === "ride").map((l) => `${l.trip}:${l.fromStop}:${l.toStop}`).join(">");
         if (!seen.has(key)) { seen.add(key); options.push(o); }
       }
       const nextT = Math.min(...found.map((o) => o.legs.find((l) => l.kind === "ride").dep)) + 60;
