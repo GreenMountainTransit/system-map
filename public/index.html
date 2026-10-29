@@ -1499,13 +1499,58 @@ dataReady.then(() => {
   routeParam ? buildRoutePanel() : buildSystemPanel();
 }).catch(() => panel(`<header><h1>Map data is missing</h1><p class="status problem">Run the build workflow and try again.</p></header>`));
 
+// The live-bus overlay must not depend on other route/stop layers succeeding.
+// Restores both the GeoJSON source and symbol layer after any basemap style reset.
+function ensureBusLayer() {
+  if (!map.isStyleLoaded()) return false;
+  try {
+    if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
+    for (const r of Object.values(routes)) {
+      const id = `bus-${r.route_id}`;
+      if (!map.hasImage(id)) map.addImage(id, busBadge(r), { pixelRatio: 2 });
+    }
+    if (!map.getLayer("buses")) {
+      const sat = basemap.id === "satellite";
+      const layer = {
+        id: "buses", type: "symbol", source: "buses",
+        layout: {
+          "icon-image": ["concat", "bus-", ["get", "route_id"]],
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
+          "icon-allow-overlap": true, "icon-ignore-placement": true,
+          "text-field": ["case", ["==", ["get", "service_status"], "leaving_soon"],
+            "Leaving soon", ["step", ["zoom"], "", 12,
+              ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
+          "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25],
+          "text-optional": true, "text-max-width": 14
+        },
+        paint: {
+          "text-color": sat ? "#fff" : "#1c2a22",
+          "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff",
+          "text-halo-width": 1.6
+        }
+      };
+      if (basemap.standard) layer.slot = "top";
+      map.addLayer(layer);
+    }
+    return !!map.getLayer("buses");
+  } catch (error) {
+    console.error("GMT: failed to restore live bus layer", error);
+    return false;
+  }
+}
+
 // Overlay layers are re-added whenever the basemap changes.
 map.on("style.load", async () => {
   if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: three.on, showTransitLabels: false, lightPreset: "day" }))
     try { map.setConfigProperty("basemap", k, v); } catch {}
   await dataReady.catch(() => {});
   if (!linesData) return;
-  addOverlay();
+  // Create buses first, independently of any other overlay errors.
+  ensureBusLayer();
+  try { addOverlay(); } catch (error) {
+    console.error("GMT: route overlay setup failed; bus layer kept available", error);
+  }
+  ensureBusLayer();
   if (!addOverlay.built) { addOverlay.built = true; animateBuild(); } // first load only
   if (!addOverlay.fitted && routeParam && routes[routeParam]) {
     fitTo(linesData.features.filter((f) => f.properties.route_id === routeParam));
@@ -1711,7 +1756,7 @@ function applyFilters() {
   const onRoute = ["in", ["get", "route_id"], ["literal", vis]];
   const atStop = vis.length ? ["any", ...vis.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : ["==", ["get", "stop_id"], "__none__"];
   ["route-casing", "route-lines", "route-arrows"].forEach((l) => map.setFilter(l, onRoute));
-  map.setLayoutProperty("buses", "visibility", liveBusesOn ? "visible" : "none");
+  if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", liveBusesOn ? "visible" : "none");
   map.setFilter("route-glow", ["all", onRoute, ["in", ["get", "route_id"], ["literal", highlighted]]]);
   const stopFilter = atStop;
   map.setFilter("stops", stopFilter);
@@ -1729,10 +1774,10 @@ function applyFilters() {
     for (const [l, k] of Object.entries(kinds)) map.setFilter(l, ["all", ["==", ["get", "kind"], k], onDetourRoute]);
     DETOUR_LAYERS.forEach((l) => map.setLayoutProperty(l, "visibility", view === "routes" || routeParam ? "visible" : "none"));
   }
-  map.setFilter("buses", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
+  if (map.getLayer("buses")) map.setFilter("buses", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
   if (view === "plan" && !routeParam) { // trip planner: only buses on the chosen trip's routes
     const tripRoutes = selectedOption()?.legs?.filter((l) => l.kind === "ride").map((l) => l.route) || [];
-    map.setFilter("buses", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
+    if (map.getLayer("buses")) map.setFilter("buses", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
   }
   // While a route is hovered, everything else steps back: other lines, their casings and their buses.
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
@@ -1740,8 +1785,8 @@ function applyFilters() {
   map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
   // In 3D view the flat badges fade out as the 3D buses take over up close; highlighting still dims other routes.
   const zoomFade = ["interpolate", ["linear"], ["zoom"], 14, any ? ["case", isHl, 1, 0.3] : 1, 15, 0];
-  map.setPaintProperty("buses", "icon-opacity", fleet.on ? zoomFade : any ? ["case", isHl, 1, 0.3] : 1);
-  if (fleet.on) map.setPaintProperty("buses", "text-opacity", ["interpolate", ["linear"], ["zoom"], 14, 1, 15, 0]);
+  if (map.getLayer("buses")) map.setPaintProperty("buses", "icon-opacity", fleet.on ? zoomFade : any ? ["case", isHl, 1, 0.3] : 1);
+  if (fleet.on && map.getLayer("buses")) map.setPaintProperty("buses", "text-opacity", ["interpolate", ["linear"], ["zoom"], 14, 1, 15, 0]);
   const arrowFade = ["interpolate", ["linear"], ["zoom"], 12, 0, 12.6, 0.95, 16.3, 0.95, 17, 0];
   // Zoom must be the outer expression; the highlighted/not choice goes inside each zoom stop.
   const arrowOn = any ? ["case", isHl, 0.95, 0] : 0.95;
@@ -1762,7 +1807,7 @@ map.on("mousemove", (e) => {
   if (!map.getLayer("route-lines")) return;
   const b = 6, box = [[e.point.x - b, e.point.y - b], [e.point.x + b, e.point.y + b]];
   const layers = view === "frequency" && !routeParam ? ["buses", "freq-lines", "freq-low"] : ["buses", "stops", "route-lines"];
-  const f = map.queryRenderedFeatures(box, { layers })[0];
+  const f = map.queryRenderedFeatures(box, { layers: layers.filter((id) => map.getLayer(id)) })[0];
   map.getCanvas().style.cursor = f ? "pointer" : "";
   if (!f) { hideTip(); if (!openStopId) highlight([]); return; }
   const p = f.properties;
@@ -1871,6 +1916,7 @@ map.on("click", (e) => {
 // ---------- live data ----------
 let lastTick = 0;
 function tick(force) {
+  if (!map.getSource("buses")) ensureBusLayer();
   if (!map.getSource("buses") || (!force && Date.now() - lastTick < 5000)) return;
   if (!onScreen || document.hidden) return;
   lastTick = Date.now();
