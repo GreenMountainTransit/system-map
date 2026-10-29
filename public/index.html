@@ -495,6 +495,12 @@
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
+
+<style>
+.near-service { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; margin: 5px 0; }
+.near-direction { font-size: 0.83em; font-weight: 600; }
+.near-times { font-variant-numeric: tabular-nums; }
+</style>
 </head>
 <body>
 <div id="wrap">
@@ -1354,7 +1360,7 @@ geolocate.on("geolocate", (e) => {
   if (view === "plan") { planState.from = { c: here, label: "My location" }; buildSystemPanel(); planTrip(); return; }
   setTimeout(() => showNearby(here, "Service near you", null), 400); // after the map moves to the rider
 });
-// "Service near you": a short list of the closest walkable stops, with no duplicate routes.
+// "Service near you": nearby stops with one closest stop per route and direction.
 const WALK = { mps: 1.25, detour: 1.3, maxM: 8000 }; // show the nearest stops up to ~5 miles away; beyond that, "no service nearby"
 // "4 min walk (300 m)", or for long distances "1.8 mi away (about 45 min walk)".
 const walkText = (m) => m < 1600 ? `${walkMin(m)} min walk (${Math.round(m / 10) * 10} m)` : `${(m / 1609).toFixed(1)} mi away (about ${walkMin(m)} min walk)`;
@@ -1372,25 +1378,36 @@ async function showNearby(here, title, onlyRoutes, place) {
   if (place?.label && !routeParam) planState.to = { c: here, label: place.label };
   rememberStopNavigation();
   closeStop();
-  // A compact public-facing list: within approximately a 10-minute walk, at most five
-  // physical stops, and each route appears just once at its closest stop.
-  const maxStops = 5;
+  // One nearby stop for each ROUTE + DIRECTION (not merely one per route).
+  // Select the closest stop actually served in that direction, then group cards by
+  // physical stop to avoid duplicate cards. Both directions can be at different stops.
+  const maxStops = 6;
   const maxWalkMinutes = 10;
   const maxDistanceM = maxWalkMinutes * 60 * WALK.mps / WALK.detour;
-  const candidates = Object.values(stopsById)
+  const allStops = Object.values(stopsById)
     .map(st => ({ st, m: meters(here, st.coords) }))
-    .filter(o => o.m <= maxDistanceM && (o.st.routes || []).some(rid => routes[rid]))
+    .filter(o => o.m <= maxDistanceM)
     .sort((a, b) => a.m - b.m);
-  const seenRoutes = new Set();
-  const near = [];
-  for (const o of candidates) {
-    const newRoutes = [...new Set(o.st.routes || [])].filter(rid => routes[rid] && !seenRoutes.has(rid));
-    if (!newRoutes.length) continue;
-    near.push({ ...o, displayRoutes: newRoutes });
-    newRoutes.forEach(rid => seenRoutes.add(rid));
-    if (near.length >= maxStops) break;
+  const chosen = new Map();
+  for (const {st, m} of allStops) {
+    for (const rid of [...new Set(st.routes || [])]) {
+      if (!routes[rid]) continue;
+      for (const [dir, pattern] of Object.entries(routeStops[rid] || {})) {
+        if (!(pattern.stops || []).includes(st.stop_id)) continue;
+        const key = `${rid}|${dir}`;
+        if (!chosen.has(key)) chosen.set(key, {rid, dir, headsign: pattern.headsign || "", st, m});
+      }
+    }
   }
-  const routeIds = [...seenRoutes];
+  // Closest unique physical stops; keep each route-direction pair only once.
+  const nearByStop = new Map();
+  for (const entry of chosen.values()) {
+    const id = String(entry.st.stop_id);
+    if (!nearByStop.has(id)) nearByStop.set(id, {st: entry.st, m: entry.m, services: []});
+    nearByStop.get(id).services.push(entry);
+  }
+  const near = [...nearByStop.values()].sort((a, b) => a.m - b.m).slice(0, maxStops);
+  const routeIds = [...new Set(near.flatMap(o => o.services.map(e => e.rid)))];
   const nearbyKey = "near:" + here.join(",");
   openStopId = nearbyKey;
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}<h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
@@ -1422,13 +1439,13 @@ async function showNearby(here, title, onlyRoutes, place) {
       if (openStopId !== nearbyKey) return;
       const area = document.getElementById("near-list");
       if (!area) return;
-      area.innerHTML = near.map(({st, m, displayRoutes}) => {
-        const services = displayRoutes.map(rid => {
+      area.innerHTML = near.map(({st, m, services: directions}) => {
+        const services = directions.map(({rid, dir, headsign}) => {
           const byDirection = result[rid]?.[st.stop_id] || {};
-          const upcoming = Object.values(byDirection).flat()
+          // GMTLive.arrivals groups each stop's arrivals by GTFS direction ID.
+          const upcoming = (byDirection[dir] || [])
             .filter(a => a && Number.isFinite(a.time) && a.time >= Date.now() / 1000 - 90)
             .sort((a, b) => a.time - b.time);
-          // Direction-grouped results may repeat a trip; only count each arrival once.
           const seenTrips = new Set();
           const nextThree = upcoming.filter(a => {
             const key = `${a.trip || a.trip_id || ""}:${a.time}`;
@@ -1439,7 +1456,7 @@ async function showNearby(here, title, onlyRoutes, place) {
           const times = nextThree.length
             ? nextThree.map(a => `<span class="${a.live ? "now" : ""}">${when(a.time)}</span>`).join(" · ")
             : "No upcoming trips";
-          return `<span class="near-service">${chip(routes[rid])} <span class="near-times">${times}</span></span>`;
+          return `<span class="near-service">${chip(routes[rid])} <span class="near-direction">To ${esc(headsign || nextThree[0]?.headsign || `direction ${dir}`)}</span> <span class="near-times">${times}</span></span>`;
         });
         return `<div class="near-route">
           <button type="button" class="near-opt" data-stop="${esc(st.stop_id)}">
@@ -1447,7 +1464,7 @@ async function showNearby(here, title, onlyRoutes, place) {
             <span class="near-stop">${walkText(m)}</span>
             <span class="near-next">${services.join("")}</span>
           </button></div>`;
-      }).join("") + `<p class="src">Closest stops first · One stop per route · Next three arrivals · About a 10-minute walk or less. Tap a stop for all departures.</p>`;
+      }).join("") + `<p class="src">Nearest stops · Next three arrivals in each direction. Tap a stop for details.</p>`;
       area.querySelectorAll(".near-opt").forEach(btn => btn.onclick = () => showStop(btn.dataset.stop, true));
     } finally { fetching = false; }
   };
@@ -2016,7 +2033,7 @@ setInterval(() => tick(), REFRESH_MS);
 // Smooth only the 2D map display between Swiftly GPS updates.
 // Never extrapolate beyond reported coordinates or alter the underlying GPS positions.
 const bus2D = { shown: new Map(), targets: new Map(), raf: 0, lastPaint: 0 };
-const BUS_2D_GLIDE_MS = 12000;
+const BUS_2D_GLIDE_MS = REFRESH_MS - 750;
 const BUS_2D_MAX_JUMP_METERS = 350;
 function stopBus2DAnimation() {
   if (bus2D.raf) cancelAnimationFrame(bus2D.raf);
@@ -2027,7 +2044,7 @@ function stopBus2DAnimation() {
 }
 function bus2DFrame(now) {
   bus2D.raf = 0;
-  if (document.hidden || !onScreen || !map.getSource("buses")) return;
+  if (document.hidden || !map.getSource("buses")) return;
   if (now - bus2D.lastPaint < 100) {
     bus2D.raf = requestAnimationFrame(bus2DFrame);
     return;
@@ -2061,7 +2078,7 @@ function updateBus2D(data) {
     incoming.add(id);
     const old = bus2D.targets.get(id);
     const from = bus2D.shown.get(id) || old?.to || to;
-    const changedGps = !old || old.gps !== f.properties.time;
+    const changedGps = !old || old.gps !== f.properties.time || meters(old.to, to) > 0.4;
     if (old && !changedGps) {
       // A cache hit is not a new ping: continue the current glide instead of restarting it.
       if (now - old.started < BUS_2D_GLIDE_MS && meters(old.from, old.to) > 1) moving = true;
