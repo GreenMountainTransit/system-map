@@ -362,7 +362,14 @@
     });
     const routeById = Object.fromEntries(meta.routes.map((r) => [r.route_id, r]));
     const result = {};
-    const scheds = await Promise.all(routeIds.map((rid) => data(`sched/${encodeURIComponent(rid)}.json`).then((s) => [rid, s])));
+    const scheds = (await Promise.all(routeIds.map(async (rid) => {
+      try {
+        return [rid, await data(`sched/${encodeURIComponent(rid)}.json`)];
+      } catch (err) {
+        console.warn(`[GMT] Schedule unavailable for route ${rid}; continuing with other routes`, err);
+        return null;
+      }
+    }))).filter(Boolean);
     for (const [rid, sched] of scheds) {
       for (const day of days) for (const trip of sched) {
         if (all && day.midnight > clock.midnight) continue; // "all times today" doesn't need tomorrow

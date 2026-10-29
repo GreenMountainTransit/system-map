@@ -1538,8 +1538,8 @@ function ensureBusLayer() {
             "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
             "icon-allow-overlap": true, "icon-ignore-placement": true,
             "text-field": ["step", ["zoom"],
-              ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon", ""],
-              12, ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon",
+              ["match", ["get", "service_status"], "now_boarding", "Now boarding", "leaving_soon", "Leaving soon", ""],
+              12, ["match", ["get", "service_status"], "now_boarding", "Now boarding", "leaving_soon", "Leaving soon",
                 ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
             "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25],
             "text-optional": true, "text-max-width": 14
@@ -1665,8 +1665,8 @@ function addOverlay() {
       "icon-allow-overlap": true, "icon-ignore-placement": true, "symbol-sort-key": ["-", 1, onTop],
       // Where the bus is headed, under its badge once zoomed in a little (hidden if it would overlap another label).
       "text-field": ["step", ["zoom"],
-              ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon", ""],
-              12, ["case", ["==", ["get", "service_status"], "leaving_soon"], "Leaving soon",
+              ["match", ["get", "service_status"], "now_boarding", "Now boarding", "leaving_soon", "Leaving soon", ""],
+              12, ["match", ["get", "service_status"], "now_boarding", "Now boarding", "leaving_soon", "Leaving soon",
                 ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
       "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25], "text-optional": true, "text-max-width": 14 },
     paint: { "text-color": sat ? "#fff" : "#1c2a22", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 1.6 } }, "top"); // local buses drawn last (on top)
@@ -1939,10 +1939,11 @@ map.on("click", (e) => {
   if (f.layer.id === "buses" && three.on) { openPopup?.remove(); startFollow(p); return; }
   if (f.layer.id === "buses") {
     const r = routes[p.route_id] || {}, ago = Math.max(0, Math.round((Date.now() - p.time) / 1000));
-    const leaving = p.service_status === "leaving_soon" && Number.isFinite(Number(p.departure_time));
+    const leaving = ["leaving_soon", "now_boarding"].includes(p.service_status) && Number.isFinite(Number(p.departure_time));
+    const boarding = p.service_status === "now_boarding";
     const depLabel = leaving ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(Number(p.departure_time))) : "";
     html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
-      ${leaving ? `<p class="sub"><strong>Leaving soon · scheduled ${esc(depLabel)}</strong> (bus laying over; not yet boarding)</p>` : ""}
+      ${leaving ? `<p class="sub"><strong>${boarding ? "Now boarding" : "Leaving soon"} · scheduled ${esc(depLabel)}</strong>${boarding ? " · Downtown Transit Center" : " (bus laying over; not yet boarding)"}</p>` : ""}
       <p class="sub">Bus ${esc(p.label)} ∙ location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`;
   } else if (f.layer.id === "route-lines") {
     const r = routes[p.route_id];
@@ -2077,8 +2078,15 @@ async function refreshBuses() {
     const data = await GMTLive.vehicles();
     data.features = data.features.filter((f) => routes[f.properties.route_id]);
     liveCounts = {};
+    const dtcStops = Object.values(stopsById).filter(s => /^Downtown Transit Center\b/i.test(s.name || ""));
     for (const f of data.features) {
       const r = routes[f.properties.route_id];
+      // GMT permits boarding during the final 3 minutes of a DTC departure.
+      // Require the bus to actually be at DTC; other layovers remain "Leaving soon".
+      const p = f.properties, msRemaining = Number(p.departure_time) - Date.now();
+      const atDtc = dtcStops.some(s => meters(f.geometry.coordinates, s.coords) <= 110);
+      if (p.service_status === "leaving_soon" && atDtc && msRemaining >= 0 && msRemaining <= 180000)
+        p.service_status = "now_boarding";
       Object.assign(f.properties, { color: r.color, short_name: r.short_name, group: r.group, dest: niceDest(f.properties.headsign) });
       liveCounts[r.route_id] = (liveCounts[r.route_id] || 0) + 1;
     }
@@ -2363,7 +2371,10 @@ async function routesServingStopToday(s) {
   const cal = await GMTLive.data("calendar.json"), on = GMTLive.servicesOn(cal, today, GMTLive.shiftYmd(today, 0).dow);
   const candidates = (s.routes || []).filter((rid) => routes[rid]);
   const found = (await Promise.all(candidates.map(async (rid) => {
-    const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`);
+    const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch((err) => {
+      console.warn(`[GMT] No published schedule for route ${rid}`, err);
+      return [];
+    });
     return sched.some((t) => on.has(t.s) && t.st.some((x) => String(x[0]) === String(s.stop_id))) ? rid : null;
   }))).filter(Boolean);
   todayStopRoutesCache.set(s.stop_id, found); return found;
@@ -2604,10 +2615,10 @@ async function refreshDetours() {
       // Swiftly sends the WHOLE shape of a detoured trip; draw only the stretches that leave the route's
       // normal path, so the rest of the route keeps its usual solid line.
       if (sel.path?.length > 1) for (const piece of offRoutePieces(sel.path, rid)) {
-        feats.push({ type: "Feature", properties: { kind: "path", route_id: rid, color }, geometry: { type: "LineString", coordinates: piece } });
+        feats.push({ type: "Feature", properties: { kind: "path", route_id: rid, color, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "LineString", coordinates: piece } });
         // The stretch of the regular route the detour bypasses, between where it leaves and rejoins.
         const closedPart = routeBetween(rid, piece[0], piece[piece.length - 1]);
-        if (closedPart) feats.push({ type: "Feature", properties: { kind: "closed", route_id: rid, color }, geometry: { type: "LineString", coordinates: closedPart } });
+        if (closedPart) feats.push({ type: "Feature", properties: { kind: "closed", route_id: rid, color, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "LineString", coordinates: closedPart } });
       }
       // Closed stops: the stops between each change's start and end on one of the affected trips.
       const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch(() => []);
@@ -2619,7 +2630,7 @@ async function refreshDetours() {
           if (a >= 0 && b >= a) for (const [sid] of trip.st.slice(a, b + 1)) {
             const st = stopsById[sid]; if (!st) continue;
             (closedStops[sid] ??= new Set()).add(rid);
-            feats.push({ type: "Feature", properties: { kind: "closedstop", route_id: rid, stop_id: sid }, geometry: { type: "Point", coordinates: st.coords } });
+            feats.push({ type: "Feature", properties: { kind: "closedstop", route_id: rid, stop_id: sid, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "Point", coordinates: st.coords } });
           }
         }
         // Temporary stops. Their times are measured from the stop just before the detour starts.
@@ -2628,7 +2639,7 @@ async function refreshDetours() {
         for (const rs of c.replacement || []) {
           const ts = d.stops[rs.stop]; if (!ts?.c) continue;
           if (!tempStops.some((t) => t.id === rs.stop && t.route === rid)) tempStops.push({ id: rs.stop, name: ts.name, route: rid, c: ts.c, refStop, travel: rs.t || 0, trips: new Set(sel.trips) });
-          feats.push({ type: "Feature", properties: { kind: "temp", route_id: rid, name: ts.name, temp_id: rs.stop, color }, geometry: { type: "Point", coordinates: ts.c } });
+          feats.push({ type: "Feature", properties: { kind: "temp", route_id: rid, name: ts.name, temp_id: rs.stop, color, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "Point", coordinates: ts.c } });
         }
       }
     }
@@ -2825,13 +2836,13 @@ function markRoutes() {
   document.querySelectorAll(".route-row").forEach((row) => {
     const id = row.dataset.route;
     const routeAlerts = alertsList.filter((a) => a.routes.includes(id));
-    const actualDetour = (detourGeo.features || []).some((f) =>
-      f.properties.route_id === id && ["path", "closed", "closedstop", "temp"].includes(f.properties.kind));
-    const n = routeAlerts.length + (actualDetour ? 1 : 0);
+    // A trip modification can outlive a deleted Swiftly Rider Alert.
+    // Only current Rider Alerts trigger the route-list warning icon.
+    const n = routeAlerts.length;
     let mark = row.querySelector(".rwarn");
     if (!n) { mark?.remove(); return; }
     if (!mark) { mark = document.createElement("span"); mark.className = "rwarn"; row.querySelector(".rname").after(mark); }
-    mark.innerHTML = ICON.warn; mark.title = actualDetour ? "Active detour or service alert" : "Service alert";
+    mark.innerHTML = ICON.warn; mark.title = routeAlerts.length && actualDetour ? "Service alert and mapped detour" : actualDetour ? "Mapped detour (check active service)" : "Service alert";
     mark.setAttribute("aria-label", mark.title); mark.setAttribute("role", "img");
   });
 }
