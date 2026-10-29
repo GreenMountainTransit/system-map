@@ -1474,6 +1474,7 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
     freqData = await fetch(DIR + "frequency.geojson").then((r) => (r.ok ? r.json() : null)).catch(() => null) || { type: "FeatureCollection", features: [] };
     fetch(DIR + "ridership.json").then((r) => (r.ok ? r.json() : null)).then((d) => (ridershipData = d)).catch(() => {}); // optional
     meta.routes.forEach((r) => (routes[r.route_id] = r));
+    ensureBusLayer();
     tripCosts = meta.tripCosts || null;
     groups = meta.groups.length ? meta.groups : [{ id: "local", name: "Routes", default: "on" }];
     routeStops = meta.stops;
@@ -1501,56 +1502,104 @@ dataReady.then(() => {
 
 // The live-bus overlay must not depend on other route/stop layers succeeding.
 // Restores both the GeoJSON source and symbol layer after any basemap style reset.
+// Independent live-vehicle drawing path: basic dots do not depend on badge images.
+// Keeps buses visible even if one of the optional overlay layers fails.
 function ensureBusLayer() {
-  if (!map.isStyleLoaded()) return false;
   try {
-    if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
-    for (const r of Object.values(routes)) {
-      const id = `bus-${r.route_id}`;
-      if (!map.hasImage(id)) map.addImage(id, busBadge(r), { pixelRatio: 2 });
+    // addSource/addLayer are safe once the style object exists. The style may
+    // still be loading tiles, which is why isStyleLoaded() is not required.
+    if (!map.getStyle()) return false;
+    if (!map.getSource("buses")) {
+      map.addSource("buses", { type: "geojson", data: lastBuses });
     }
-    if (!map.getLayer("buses")) {
-      const sat = basemap.id === "satellite";
-      const layer = {
-        id: "buses", type: "symbol", source: "buses",
-        layout: {
-          "icon-image": ["concat", "bus-", ["get", "route_id"]],
-          "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
-          "icon-allow-overlap": true, "icon-ignore-placement": true,
-          "text-field": ["case", ["==", ["get", "service_status"], "leaving_soon"],
-            "Leaving soon", ["step", ["zoom"], "", 12,
-              ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
-          "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25],
-          "text-optional": true, "text-max-width": 14
-        },
+    if (!map.getLayer("bus-location-dots")) {
+      const dotLayer = {
+        id: "bus-location-dots", type: "circle", source: "buses",
+        layout: { visibility: liveBusesOn ? "visible" : "none" },
         paint: {
-          "text-color": sat ? "#fff" : "#1c2a22",
-          "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff",
-          "text-halo-width": 1.6
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 7, 15, 12],
+          "circle-color": ["coalesce", ["get", "color"], "#267c58"],
+          "circle-stroke-color": "#ffffff", "circle-stroke-width": 2,
+          "circle-opacity": 0.95
         }
       };
-      if (basemap.standard) layer.slot = "top";
-      map.addLayer(layer);
+      if (basemap.standard) dotLayer.slot = "top";
+      map.addLayer(dotLayer);
     }
-    return !!map.getLayer("buses");
+    // Optional custom bus badges. Failure must not remove the dot layer.
+    try {
+      for (const r of Object.values(routes)) {
+        const id = `bus-${r.route_id}`;
+        if (!map.hasImage(id)) map.addImage(id, busBadge(r), { pixelRatio: 2 });
+      }
+      if (!map.getLayer("buses") && Object.keys(routes).length) {
+        const sat = basemap.id === "satellite";
+        const layer = {
+          id: "buses", type: "symbol", source: "buses",
+          layout: {
+            "icon-image": ["concat", "bus-", ["get", "route_id"]],
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.8, 14, 1],
+            "icon-allow-overlap": true, "icon-ignore-placement": true,
+            "text-field": ["case", ["==", ["get", "service_status"], "leaving_soon"],
+              "Leaving soon", ["step", ["zoom"], "", 12,
+                ["case", ["==", ["get", "dest"], ""], "", ["concat", "to ", ["get", "dest"]]]]],
+            "text-size": 11, "text-anchor": "top", "text-offset": [0, 1.25],
+            "text-optional": true, "text-max-width": 14
+          },
+          paint: {
+            "text-color": sat ? "#fff" : "#1c2a22",
+            "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff",
+            "text-halo-width": 1.6
+          }
+        };
+        if (basemap.standard) layer.slot = "top";
+        map.addLayer(layer);
+      }
+    } catch (badgeError) {
+      if (!ensureBusLayer.lastBadgeError || Date.now() - ensureBusLayer.lastBadgeError > 10000) {
+        console.warn("GMT: custom bus badges unavailable; fallback location dots remain visible", badgeError);
+        ensureBusLayer.lastBadgeError = Date.now();
+      }
+    }
+    return !!map.getLayer("bus-location-dots");
   } catch (error) {
-    console.error("GMT: failed to restore live bus layer", error);
+    if (!ensureBusLayer.lastError || Date.now() - ensureBusLayer.lastError > 10000) {
+      console.warn("GMT: bus layer not ready; will retry", error);
+      ensureBusLayer.lastError = Date.now();
+    }
     return false;
   }
 }
+
+// Styles can finish asynchronously, especially on mobile and when basemaps switch.
+// Retry locally; these checks do not call Swiftly or Cloudflare.
+map.on("styledata", () => {
+  if (Object.keys(routes).length && !map.getLayer("bus-location-dots")) ensureBusLayer();
+});
+setInterval(() => {
+  if (!document.hidden && Object.keys(routes).length && !map.getLayer("bus-location-dots")) {
+    if (ensureBusLayer() && map.getSource("buses")) {
+      map.getSource("buses").setData(lastBuses);
+      if (map.getLayer("route-lines")) applyFilters();
+    }
+  }
+}, 3000);
 
 // Overlay layers are re-added whenever the basemap changes.
 map.on("style.load", async () => {
   if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: three.on, showTransitLabels: false, lightPreset: "day" }))
     try { map.setConfigProperty("basemap", k, v); } catch {}
   await dataReady.catch(() => {});
-  if (!linesData) return;
+  if (!linesData) { ensureBusLayer(); return; }
   // Create buses first, independently of any other overlay errors.
   ensureBusLayer();
   try { addOverlay(); } catch (error) {
     console.error("GMT: route overlay setup failed; bus layer kept available", error);
   }
   ensureBusLayer();
+  // Keep the always-available dots above route lines and stop symbols.
+  try { if (map.getLayer("bus-location-dots")) map.moveLayer("bus-location-dots");
+    if (map.getLayer("buses")) map.moveLayer("buses"); } catch {}
   if (!addOverlay.built) { addOverlay.built = true; animateBuild(); } // first load only
   if (!addOverlay.fitted && routeParam && routes[routeParam]) {
     fitTo(linesData.features.filter((f) => f.properties.route_id === routeParam));
@@ -1757,6 +1806,7 @@ function applyFilters() {
   const atStop = vis.length ? ["any", ...vis.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : ["==", ["get", "stop_id"], "__none__"];
   ["route-casing", "route-lines", "route-arrows"].forEach((l) => map.setFilter(l, onRoute));
   if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", liveBusesOn ? "visible" : "none");
+  if (map.getLayer("bus-location-dots")) map.setLayoutProperty("bus-location-dots", "visibility", liveBusesOn ? "visible" : "none");
   map.setFilter("route-glow", ["all", onRoute, ["in", ["get", "route_id"], ["literal", highlighted]]]);
   const stopFilter = atStop;
   map.setFilter("stops", stopFilter);
@@ -1775,9 +1825,11 @@ function applyFilters() {
     DETOUR_LAYERS.forEach((l) => map.setLayoutProperty(l, "visibility", view === "routes" || routeParam ? "visible" : "none"));
   }
   if (map.getLayer("buses")) map.setFilter("buses", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
+  if (map.getLayer("bus-location-dots")) map.setFilter("bus-location-dots", followState ? ["all", onRoute, ["!=", ["get", "id"], followState.id]] : onRoute);
   if (view === "plan" && !routeParam) { // trip planner: only buses on the chosen trip's routes
     const tripRoutes = selectedOption()?.legs?.filter((l) => l.kind === "ride").map((l) => l.route) || [];
     if (map.getLayer("buses")) map.setFilter("buses", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
+    if (map.getLayer("bus-location-dots")) map.setFilter("bus-location-dots", ["in", ["get", "route_id"], ["literal", tripRoutes]]);
   }
   // While a route is hovered, everything else steps back: other lines, their casings and their buses.
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
@@ -1916,7 +1968,7 @@ map.on("click", (e) => {
 // ---------- live data ----------
 let lastTick = 0;
 function tick(force) {
-  if (!map.getSource("buses")) ensureBusLayer();
+  if (!map.getLayer("bus-location-dots")) ensureBusLayer();
   if (!map.getSource("buses") || (!force && Date.now() - lastTick < 5000)) return;
   if (!onScreen || document.hidden) return;
   lastTick = Date.now();
