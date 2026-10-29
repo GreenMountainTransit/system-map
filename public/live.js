@@ -18,12 +18,76 @@
   let KEY = "", DATA = "data/", RELAY = ""; // RELAY: the GMT relay (Cloudflare Worker); when set, the Swiftly key isn't used in the page
   const memo = new Map();
 
-  async function data(file) {
-    if (!memo.has(file)) memo.set(file, fetch(DATA + file).then((r) => {
-      if (!r.ok) throw new Error(`Missing ${file}`);
-      return r.json();
-    }).catch((e) => { memo.delete(file); throw e; }));
-    return memo.get(file);
+
+  // Vehicles currently eligible to appear on the public map.
+  // Uses the existing Cloudflare relay; no additional Swiftly requests.
+  async function vehicles() {
+    const body = RELAY
+      ? await relay("/v1/vehicles")
+      : await swiftly("/vehicles", "json");
+
+    const now = Date.now() / 1000;
+    const maxAge = 90; // seconds
+
+    const allVehicles = body?.data?.vehicles || [];
+
+    const visibleVehicles = allVehicles.filter((v) => {
+      // Require a valid position and a route assignment.
+      if (!v.loc || !v.routeId || !v.tripId) return false;
+
+      // Swiftly explicitly identifies vehicles in layover.
+      if (v.layover === true) return false;
+
+      // Require a valid and recent GPS observation.
+      const timestamp = Number(v.loc.time);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        return false;
+      }
+
+      const age = now - timestamp;
+      if (age < -30 || age > maxAge) return false;
+
+      // Reject invalid geographic coordinates.
+      const lat = Number(v.loc.lat);
+      const lon = Number(v.loc.lon);
+
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lon) ||
+        Math.abs(lat) > 90 ||
+        Math.abs(lon) > 180
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return {
+      type: "FeatureCollection",
+      features: visibleVehicles.map((v) => ({
+        type: "Feature",
+        properties: {
+          id: v.id,
+          label: v.id,
+          route_id: v.routeId,
+          trip_id: v.tripId,
+          headsign: v.headsign || "",
+          heading: v.loc.heading ?? null,
+          time: Number(v.loc.time) * 1000,
+          speed: v.loc.speed ?? null,
+          layover: false,
+          service_status: "operating_candidate",
+        },
+        geometry: {
+          type: "Point",
+          coordinates: [
+            Number(v.loc.lon),
+            Number(v.loc.lat),
+          ],
+        },
+      })),
+    };
   }
 
   // ---------- Swiftly requests ----------
