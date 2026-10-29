@@ -116,7 +116,18 @@
         for (const i of grid.get(`${x}:${y}`) || []) { const m = meters(c, stops[i].c); if (m <= maxM) out.push([i, m]); }
       return out;
     };
-    const footpaths = stops.map((s, i) => near(s.c, TRANSFER_M).filter(([j]) => j !== i).map(([j, m]) => [j, walkSecs(m)]));
+    
+    // Within the Downtown Transit Center, changing bays requires no walking-time estimate.
+    // This does NOT eliminate the boarding/connection buffer. GTFS transfer rules take precedence.
+    const dtc = (s) => /downtown transit center|\bdtc\b/i.test(s.name || "");
+    const [rules] = await Promise.all([L().data("transfers.json").catch(() => ({}))]);
+    const footpaths = stops.map((s, i) => near(s.c, TRANSFER_M).filter(([j]) => j !== i).flatMap(([j, m]) => {
+      const rule = rules[`${s.id}|${stops[j].id}`];
+      if (rule?.type === 3) return [];
+      const inDtc = dtc(s) && dtc(stops[j]) && m <= 250;
+      return [[j, rule?.seconds != null ? rule.seconds : inDtc ? 0 : walkSecs(m)]];
+    }));
+
     net = { stops, idx, patterns, stopPatterns, footpaths, near, routes: Object.fromEntries(meta.routes.map((r) => [r.route_id, r])) };
     netDay = target.ymd;
     return net;
@@ -161,7 +172,7 @@
             }
           }
           // Can we catch an earlier bus here than the one we're on?
-          const ready = tau[k - 1][s] + (k > 1 && label[k - 1][s]?.kind === "ride" ? TRANSFER_BUFFER : 0);
+          const ready = tau[k - 1][s] + (k > 1 ? TRANSFER_BUFFER : 0);
           if (ready < INF && usable(s) && pos < p.stops.length - 1 && (!trip || ready <= trip.times[pos])) {
             let t = null; // the trip that actually leaves soonest (live delays can reorder buses)
             for (const x of p.trips) { const d = x.times[pos]; if (d >= ready && isFinite(d) && (!t || d < t.times[pos])) t = x; }
@@ -223,6 +234,26 @@
       if (l.kind === "ride") { t = l.arr; continue; }
       l.start = l === legs[0] ? firstRide.dep - l.secs : t; l.end = l.start + l.secs; t = l.end;
     }
+    
+    // A common GTFS block is evidence of a planned vehicle continuation, not proof of
+    // an operator-approved through ride. Flag it explicitly as a scheduled possibility.
+    let previousRide = null, betweenWalk = false;
+    for (const leg of legs) {
+      if (leg.kind !== "ride") {
+        if (previousRide && leg.secs > 30) betweenWalk = true;
+        continue;
+      }
+      if (previousRide && !betweenWalk) {
+        const a = previousRide._trip, b = leg._trip;
+        const aEnd = a?.src?.st?.length - 1;
+        const sameBlock = !!a?.src?.b && a.src.b === b?.src?.b && a.ymd === b.ymd;
+        const terminals = aEnd >= 0 && previousRide._a === aEnd && leg._b === 0 && String(previousRide.toStop) === String(leg.fromStop);
+        if (sameBlock && terminals && b.sched[0] - a.sched[aEnd] >= 0 && b.sched[0] - a.sched[aEnd] <= 1800)
+          leg.scheduledInterline = { fromRoute: previousRide.short, toRoute: leg.short, stop: leg.fromName };
+      }
+      previousRide = leg; betweenWalk = false;
+    }
+
     const arrive = legs[legs.length - 1].end;
     return { legs: legs.filter((l) => l.kind === "ride" || l.secs > 30), depart: legs[0].kind !== "ride" ? legs[0].start : firstRide.dep, arrive,
       rides: legs.filter((l) => l.kind === "ride").length, leaveBy: start };
