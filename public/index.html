@@ -3312,6 +3312,45 @@ function liveLine(o) {
   return `Scheduled times${r?.live?.feed === false ? " (live predictions unavailable)" : ""}`;
 }
 const dur = (secs) => { const m = Math.round(secs / 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr ${m % 60 ? (m % 60) + " min" : ""}`.trim(); };
+// Bike + bus must be a genuinely useful alternative to simply cycling there.
+// Compare the complete itinerary with cycling directly *from the time the first bus departs*,
+// not against a rider waiting at home for a bus. This also rejects tiny bus rides followed
+// by most of the original bike journey.
+function bikeBusValue(o) {
+  if (!loadPrefs().bike || !o?.legs?.some(l => l.kind === "bike")) return { useful: true };
+  const direct = planState.from && planState.to && altInfo.get(altKey())?.bike;
+  if (!direct?.secs || !Number.isFinite(direct.secs)) return { useful: true, pending: true };
+  const rides = o.legs.filter(l => l.kind === "ride");
+  if (!rides.length) return { useful: false, reason: "No bus segment" };
+  const first = rides[0];
+  const bikeLegs = o.legs.filter(l => l.kind === "bike");
+  const bikeTime = bikeLegs.reduce((v,l) => v + (walkInfo.get(walkKey(l))?.secs ?? l.secs), 0);
+  const lastRide = rides[rides.length - 1];
+  const last = o.legs[o.legs.length - 1];
+  const lastSecs = last?.kind === "bike" ? (walkInfo.get(walkKey(last))?.secs ?? last.secs) : 0;
+  const finish = Math.max(o.arrive, lastRide.arr + lastSecs);
+  const busElapsedFromBoarding = finish - first.dep;
+  // If you start cycling when the bus leaves, you should still be slower than the bus itinerary.
+  // Require a meaningful reduction in time spent pedaling as well.
+  const savesCycling = bikeTime <= direct.secs * .65;
+  const winsTime = busElapsedFromBoarding + 60 < direct.secs;
+  return { useful: savesCycling && winsTime, savesCycling, winsTime,
+    bikeTime, directSecs: direct.secs, busSecs: busElapsedFromBoarding,
+    timeSaved: Math.max(0, Math.round((direct.secs - busElapsedFromBoarding) / 60)) };
+}
+function bikeBusIntro(o) {
+  const firstBus = o.legs.find(l => l.kind === "ride");
+  if (!firstBus || !o.legs.some(l => l.kind === "bike")) return "";
+  const first = o.legs[0];
+  const firstSecs = first?.kind === "bike" ? (walkInfo.get(walkKey(first))?.secs ?? first.secs) : 0;
+  const leave = firstBus.dep - firstSecs;
+  const minutes = Math.ceil((leave - Date.now() / 1000) / 60);
+  const whenLeave = !planState.dayOffset && planState.when === "now"
+    ? minutes > 0 ? `Leave in ${minutes} min` : minutes >= -1 ? "Leave now" : `Departure already passed`
+    : `Leave at ${clock(leave)}`;
+  const value = bikeBusValue(o);
+  return `<p class="pl-climb">${ICON.bike}${esc(whenLeave)} to bike to Route ${esc(firstBus.short)} (${clock(firstBus.dep)}).${value.timeSaved ? ` About ${value.timeSaved} min quicker than cycling the full trip if you started when the bus leaves.` : ""}</p>`;
+}
 function planResultsHtml() {
   const r = planState.result;
   if (!r) return "";
@@ -3319,7 +3358,7 @@ function planResultsHtml() {
     : r.prefs?.accessible ? "No trips found using wheelchair-accessible stops within about a 10-minute walk at that time. Try another time, or turn off the accessible-stops option to see all trips."
     : "No bus trips found for that time. Try a later time, or a starting point closer to a GMT route."}</p>`;
   const sort = loadPrefs().sort || "fastest", start = planDepart();
-  const entries = r.options.map((o, i) => {
+  const entries = r.options.filter(o => bikeBusValue(o).useful).map((o, i) => {
     const chips = o.legs.map((l) => l.kind !== "ride" ? `<span class="pl-walk">${l.kind === "bike" ? ICON.bike : ICON.walk}${Math.max(1, Math.round(l.secs / 60))}</span>`
       : `<span class="chip" style="background:${esc(l.color)};color:${esc(l.text)}">${esc(l.short)}</span>`).join(`<span class="pl-sep">›</span>`);
     const open = !planState.alt && i === planState.selected;
@@ -3332,7 +3371,7 @@ function planResultsHtml() {
           o.walkSecs ? `${Math.max(1, Math.round(o.walkSecs / 60))} min walking` : o.bikeSecs ? "" : "No walking"].filter(Boolean).join(" ∙ ")}</span>
         ${r.prefs?.accessible ? accessNote(o) : ""}
         <span class="pl-live src-line ${o.legs.find((l) => l.kind === "ride")?.live ? "live" : ""}">${liveLine(o)}</span>
-        @@BADGE@@</button>${open ? `<ol class="pl-steps">${stepsHtml(o)}</ol>${bikeClimbHtml(o)}${costHtml(o)}` : ""}</li>`;
+        @@BADGE@@</button>${open ? `${bikeBusIntro(o)}<ol class="pl-steps">${stepsHtml(o)}</ol>${bikeClimbHtml(o)}${costHtml(o)}` : ""}</li>`;
     return { bus: true, arrive: o.arrive, depart: o.depart, walk: o.walkSecs || 0, rides: o.rides, html };
   });
   // Walk / Bike the whole way: arriving at start + travel time (or, for "Arrive by", leaving that long before).
@@ -3557,7 +3596,7 @@ async function fetchAlternatives() {
   const key = altKey(); if (altInfo.has(key)) return;
   const out = {}; altInfo.set(key, out);
   await Promise.all(["walk", "bike"].map(async (k) => { const r = await streetRoute(k, planState.from.c, planState.to.c); if (r) out[k] = r; }));
-  if (altKey() === key) { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); } }
+  if (altKey() === key) { const el = document.getElementById("pl-results"); if (el && planState.result) { el.innerHTML = planResultsHtml(); wirePlanResults(); drawPlan(false); } }
 }
 // Walking (and, with the bike option on, cycling) beats every bus trip when it gets you there sooner, counting
 // the wait for the bus: then it's listed first, marked Fastest.
@@ -3617,7 +3656,7 @@ function bikeClimbHtml(o) {
   }
   if (got === "pending" || got === "none") return "";
   const ft = (m) => Math.round((m * 3.281) / 10) * 10, saved = got.all - got.combo;
-  return ft(saved) >= 30 ? `<p class="pl-climb">${ICON.mountain}Avoids about ${ft(saved)} ft of climbing compared with biking the whole way (${ft(got.combo)} ft vs. ${ft(got.all)} ft uphill).</p>` : "";
+  return ft(saved) >= 50 ? `<p class="pl-climb">${ICON.mountain}Avoids about ${ft(saved)} ft of climbing compared with biking the whole way (${ft(got.combo)} ft vs. ${ft(got.all)} ft uphill).</p>` : "";
 }
 function altCard(k) { // "Walk" / "Bike" for the whole trip, or "" if not available
   const a = planState.from && planState.to ? altInfo.get(altKey()) : null, info = a?.[k];
@@ -3630,7 +3669,7 @@ function altCard(k) { // "Walk" / "Bike" for the whole trip, or "" if not availa
 }
 function altCardsHtml() { return altCard("walk") + altCard("bike"); }
 function planGeo() {
-  const f = [], o = planState.alt ? null : selectedOption();
+  const f = [], candidate = planState.alt ? null : selectedOption(), o = candidate && bikeBusValue(candidate).useful ? candidate : null;
   const alt = planState.alt && planState.from && planState.to ? altInfo.get(altKey())?.[planState.alt] : null;
   if (alt) f.push({ type: "Feature", properties: { kind: planState.alt }, geometry: { type: "LineString", coordinates: alt.coords } });
   if (o) for (const l of o.legs) {
