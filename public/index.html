@@ -907,7 +907,7 @@ function startFollow(p) {
   let bar = document.getElementById("follow-bar");
   if (!bar) { bar = document.createElement("div"); bar.id = "follow-bar"; document.getElementById("map").appendChild(bar); }
   const r = routes[p.route_id] || {};
-  bar.innerHTML = `${chip(r)}<span>Following bus ${esc(p.label || p.id)}${p.headsign ? ` to ${esc(niceDest(p.headsign))}` : ""}</span>
+  bar.innerHTML = `${chip(r)}<span>Following bus ${esc(p.label || p.id)}${p.headsign ? ` · ${esc(niceDest(p.headsign))}` : ""}</span>
     <span class="follow-speed" id="follow-speed">${speedText(p.speed)}</span><span class="follow-note">about 15 s behind live</span><button type="button" id="follow-stop">Stop</button>`;
   bar.hidden = false;
   document.getElementById("follow-stop").onclick = stopFollow;
@@ -1931,7 +1931,7 @@ map.on("mousemove", (e) => {
   } else if (f.layer.id === "buses") {
     const r = routes[p.route_id];
     highlight([p.route_id]);
-    showTip(e.point, `<h3>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h3><p class="t-freq" style="margin:0">Bus ${esc(p.label)} ∙ live location</p>`);
+    showTip(e.point, `<h3>${chip(r)} ${esc(p.headsign ? niceDest(p.headsign) : r.long_name)}</h3><p class="t-freq" style="margin:0">Bus ${esc(p.label)} ∙ live location</p>`);
   } else {
     const r = routes[p.route_id];
     highlight([p.route_id]);
@@ -1996,7 +1996,7 @@ map.on("click", (e) => {
     const leaving = ["leaving_soon", "now_boarding"].includes(p.service_status) && Number.isFinite(Number(p.departure_time));
     const boarding = p.service_status === "now_boarding";
     const depLabel = leaving ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(Number(p.departure_time))) : "";
-    html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? "To " + p.headsign : r.long_name)}</h2>
+    html = `<div class="pop"><h2>${chip(r)} ${esc(p.headsign ? niceDest(p.headsign) : r.long_name)}</h2>
       ${leaving ? `<p class="sub"><strong>${boarding ? "Now boarding" : "Leaving soon"} · scheduled ${esc(depLabel)}</strong>${boarding ? " · Downtown Transit Center" : " (bus laying over; not yet boarding)"}</p>` : ""}
       <p class="sub">Bus ${esc(p.label)} ∙ location from ${ago < 60 ? ago + " sec" : Math.round(ago / 60) + " min"} ago</p></div>`;
   } else if (f.layer.id === "route-lines") {
@@ -2148,7 +2148,23 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // "to Downtown Burlington", "to Essex Junction"… shown under each live bus.
-const niceDest = (h) => String(h || "").replace(/^Downtown Transit Center.*$/i, "Downtown Burlington").replace(/\s+(Bay|Berth)\s*\w*$/i, "");
+// Preserve the exact GTFS trip headsign. Do not turn "Downtown Transit Center"
+// into the non-GTFS label "Downtown Burlington".
+const niceDest = (h) => String(h || "").trim();
+const gtfsHeadsignCache = new Map();
+async function gtfsHeadsignsForRoute(rid) {
+  const key = String(rid);
+  if (!gtfsHeadsignCache.has(key)) {
+    gtfsHeadsignCache.set(key,
+      GMTLive.data(`sched/${encodeURIComponent(key)}.json`)
+        .then(trips => new Map((Array.isArray(trips) ? trips : [])
+          .filter(t => t?.t != null && t?.h)
+          .map(t => [String(t.t), String(t.h)])))
+        .catch(err => { console.warn(`[GMT] GTFS headsign lookup unavailable for route ${key}`, err); return new Map(); })
+    );
+  }
+  return gtfsHeadsignCache.get(key);
+}
 async function refreshBuses() {
   // Legend issues must never interrupt the GPS network poll.
   try { markRoutes(); } catch (err) { console.warn("GMT route legend update failed:", err); }
@@ -2157,6 +2173,17 @@ async function refreshBuses() {
   try {
     const data = await GMTLive.vehicles();
     data.features = data.features.filter((f) => routes[f.properties.route_id]);
+    // GTFS trip_headsign is authoritative for live bus destinations. Swiftly's
+    // vehicle headsign is only a fallback if the published trip cannot be matched.
+    const headsignByRoute = new Map(await Promise.all(
+      [...new Set(data.features.map(f => String(f.properties.route_id)))].map(
+        async rid => [rid, await gtfsHeadsignsForRoute(rid)]
+      )
+    ));
+    for (const f of data.features) {
+      const gtfsHead = headsignByRoute.get(String(f.properties.route_id))?.get(String(f.properties.trip_id));
+      if (gtfsHead) f.properties.headsign = gtfsHead;
+    }
     liveCounts = {};
     const dtcStops = Object.values(stopsById).filter(s => /^Downtown Transit Center\b/i.test(s.name || ""));
     for (const f of data.features) {
@@ -2184,7 +2211,6 @@ async function refreshBuses() {
           (feedAge != null ? ` · feed ${feedAge}s old` : ""), true);
       } else {
         setBusStatus(`${n} bus${n === 1 ? "" : "es"} reporting` +
-          (data.meta?.leavingSoon ? ` · ${data.meta.leavingSoon} leaving soon` : "") +
           (gpsAge != null ? ` · latest GPS ${gpsAge}s ago` : " · no recent GPS"));
       }
     }
