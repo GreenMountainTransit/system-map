@@ -836,8 +836,8 @@ function ctrlHint(text, selector = ".expand-ctrl:not([hidden]) .expand-btn", kee
 const tapOrClick = () => (matchMedia("(hover: none) and (pointer: coarse)").matches ? "Tap" : "Click");
 // ---------- 3D mode (desktop only): tilted map with 3D buildings; click a bus to ride along behind it ----------
 const three = { on: false, follow: null, misses: 0 };
-// Keep 3D available on touchscreens and phones too; pointer type does not determine Mapbox 3D support.
-const canThreeD = () => true;
+// 3D is for computers: hidden on phones and tablets (touch screens), where it's heavy and hard to control.
+const canThreeD = () => !isPhone() && !matchMedia("(hover: none) and (pointer: coarse)").matches;
 map.addControl({
   onAdd() {
     const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group three-ctrl";
@@ -1558,11 +1558,18 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
     if (routeParam && !routes[routeParam]) routeParam = meta.routes.find((r) => r.short_name === routeParam)?.route_id || routeParam;
     // A route number that isn't in the current schedule: say so, and show the full system map behind it.
     if (routeParam && !routes[routeParam]) { missingRoute = routeParam; routeParam = null; }
-    for (const r of meta.routes) {
-      const g = groups.find((x) => x.id === r.group);
-      if (g && (g.default === "off" || (g.default === "sundays" && !isSunday))) hidden.add(r.route_id);
-    }
+    hidden = defaultHidden();
   });
+// The routes hidden when the map opens: groups set "off" (school trippers, Shopping Specials) and Sunday-only routes
+// on other days. Also where the route list returns when the only route shown is tapped again.
+function defaultHidden() {
+  const out = new Set();
+  for (const r of Object.values(routes)) {
+    const g = groups.find((x) => x.id === r.group);
+    if (g && (g.default === "off" || (g.default === "sundays" && !isSunday))) out.add(r.route_id);
+  }
+  return out;
+}
 // Full-page tab: open where the embedded map was (once the map and its data are ready).
 Promise.all([dataReady, mapLoaded]).then(() => setTimeout(() => restoreViewState(), 300));
 
@@ -2325,7 +2332,7 @@ function buildSystemPanel() {
         picking = true;
         e.target.checked = true;
       } else if (visibleRoutes().length === 1 && !hidden.has(id) && !e.target.checked) {
-        hidden.clear(); picking = false; // tapping the sole route again returns to all
+        hidden = defaultHidden(); picking = false; // tapping the only route shown returns to the map's starting routes
       } else {
         e.target.checked ? hidden.delete(id) : hidden.add(id); // add or remove routes
       }
@@ -2368,8 +2375,8 @@ function setView(v) {
 function focusRoute(id) {
   if (view === "frequency") setView("routes");
   hidden = new Set(Object.keys(routes).filter((x) => x !== id)); picking = true;
+  if (isPhone()) snapSheet(document.getElementById("panel"), "half"); // same as choosing it in the route list
   buildSystemPanel.sync?.(); applyFilters(); refreshBuses(); fitVisible();
-  if (isPhone()) setSheet(false);
   document.getElementById("announce").textContent = `Showing only Route ${routes[id].short_name}, ${routes[id].long_name}.`;
 }
 // Pan and zoom to whatever routes are showing (the home view when everything is on).
