@@ -171,7 +171,7 @@
       tau[k] = new Float64Array(S).fill(INF); label[k] = new Array(S);
       const queue = new Map();
       for (const s of marked) for (const [pi, pos] of n.stopPatterns[s]) if (!queue.has(pi) || pos < queue.get(pi)) queue.set(pi, pos);
-      const newly = new Set(), cutoff = targetBest();
+      const newly = new Set(), cutoff = opt.reachUntil || targetBest(); // reach(): every stop up to a time limit
       for (const [pi, start] of queue) {
         const p = n.patterns[pi];
         let trip = null, boardPos = -1, boardStop = -1;
@@ -205,6 +205,7 @@
       marked = newly;
     }
 
+    if (opt.reachUntil) return { bestRide }; // reach(): earliest bus arrival at every stop
     // Preserve more than just the earliest-arrival stop. Nearby alternatives can save
     // a substantial walk for a small increase in journey time. The preference selector
     // cannot select options that have already been discarded here.
@@ -671,5 +672,18 @@
     } catch { return { live: false, feed: false }; }
   }
 
-  globalThis.GMTPlanner = { plan, liveFirstBus, dayAt, settings: { WALK_MPS, ACCESS_M, TRANSFER_M, TRANSFER_BUFFER, MAX_RIDES } };
+  // ---------- public: everywhere reachable (the "Travel time" map) ----------
+  // From one place at one time, the earliest arrival BY BUS at every stop within maxSecs (same engine, transfers and
+  // GTFS calendar as the trip planner: only the chosen day's service), plus the speeds for finishing on foot or by bike.
+  // The page turns this into 30/45/60-minute areas: min(direct walk/bike, bus to a stop + walk/bike from it).
+  async function reach({ from, depart, dayOffset = 0, mode = "walk", maxSecs = 3600, accessible = false }) {
+    const n = await network(dayOffset);
+    if (dayOffset === 0) await applyLive(n); else n.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; }));
+    const bike = mode === "bike", { bestRide } = raptor(n, from, from, depart, { bike, accessible, reachUntil: depart + maxSecs });
+    const stops = [];
+    for (let i = 0; i < n.stops.length; i++) if (bestRide[i] <= depart + maxSecs) stops.push([n.stops[i].c[0], n.stops[i].c[1], Math.round(bestRide[i] - depart)]);
+    // Speeds over the ground in meters per second (streets aren't straight lines), and a minute to lock or load a bike.
+    return { stops, mps: (bike ? BIKE_MPS : WALK_MPS) / DETOUR, startSecs: bike ? 60 : 0, maxSecs, bike };
+  }
+  globalThis.GMTPlanner = { plan, reach, liveFirstBus, dayAt, settings: { WALK_MPS, ACCESS_M, TRANSFER_M, TRANSFER_BUFFER, MAX_RIDES } };
 })();
