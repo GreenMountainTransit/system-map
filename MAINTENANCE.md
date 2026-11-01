@@ -142,6 +142,16 @@ If the nightly update fails, **the live map stays up** with its last good data, 
 
 To see what went wrong: open the link in the issue, click the step with the red X, and read the last lines of its log. The most common cause is an expired GTFS feed (GMT's current feed ends January 1, 2027); the build refuses to publish a feed with no service in the next 7 days, so the map keeps its old data until Trillium publishes the new feed.
 
+### Trip planner: transfers and staying on board
+- **Timed transfers:** GMT's GTFS (`transfers.txt`) marks the Downtown Transit Center bays, Montpelier Shaw's and Berlin Walmart as timed transfers: the departing bus is scheduled to wait for the arriving one. The planner treats these as guaranteed 0-minute connections, as Transit and Google Maps do, and shows "Timed transfer: Route X is scheduled to wait for Route Y". Changing bays shows as "Change to … (same station)". The rules come from the GTFS each night; nothing to maintain here.
+- **Staying on board:** when the same bus (same GTFS block) continues within 30 minutes:
+  - **as another route** (interlining, about 180 times a weekday, mostly at the transit center): "Stay on board … the same bus continues as Route 1 … Tap the Ride Ready app or smartcard (or pay your fare) at the farebox as the route changes. With the Ride Ready app or smartcard, fares stop at $4 a day…" The $4 comes from `bus_fare_daily_cap` in `route-info.json`. The trip counts as no transfer; the cost estimate counts the second tap.
+  - **on the same route** (a turnaround, e.g. Route 96 at the St. Albans Park and Ride): "Stay on board … the same bus turns around there and continues…"
+  To change this wording, search `public/index.html` for `Stay on board`.
+- **Stop list:** each bus ride's "Ride N stops" line opens a list of every stop with its time (live when available), marking where to get on and off and where a bus turns around or becomes another route.
+- **Live delays:** a trip's times never run backward, and a late bus stays late after it turns around (less any layover), so a late bus can't produce an impossible "64 stops in 5 minutes" ride.
+- **Trip options:** up to four per search. "Least walking" only suggests trips arriving within 20 to 45 minutes of the fastest (half the fastest trip's length), so it never suggests a trip hours later to save a few steps.
+
 ### Rider problem reports
 At the end of every view, the map says "Times, trip plans and cost savings are estimates" and offers **Report a problem with this map**, which opens an email to **planning@ridegmt.com** with the subject "Problem with the GMT system map". The email includes:
 - **View:** which part of the map they were using (Routes, Trip planner, Frequency map, or a route page; "PREVIEW" if it was the test preview).
@@ -272,6 +282,10 @@ Each section of the code starts with a comment line like `// ---------- stop det
 | The relay itself (refresh intervals, allowed sites) | `src/worker.js` | `FEEDS`, `ALLOWED_ORIGINS` |
 | Trip planner walking limits, transfer time, number of buses | `public/planner.js` | `ACCESS_M`, `TRANSFER_M`, `TRANSFER_BUFFER`, `MAX_RIDES` |
 | Live timing for every bus and transfer in the trip planner | `public/planner.js` | `applyLive` |
+| Transfer rules (timed transfers, transit center bays) and transfer walking distance | `public/planner.js` | `timedSelf`, `TRANSFER_M` |
+| "Least walking" time limit | `public/planner.js` | `Least walking, within reason` |
+| Stay-on-board and interlined-bus wording | `public/index.html` | `Stay on board` |
+| Route badge text color (readable on every route color) | `public/index.html` | `readableOn` |
 | "Stay on board" when a bus turns around and continues (same block, e.g. Route 96 at the St. Albans Park and Ride) | `public/planner.js` | `Stay on board`, `stayAt` |
 | Trip lines drawn along each trip's own GTFS shape | `public/index.html` | `tripPath`, `shapeSlice` |
 | Quickest walking route (several Mapbox options compared) | `public/index.html` | `streetRoute` |
