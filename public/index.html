@@ -107,6 +107,9 @@
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
   .pl-same { font-weight: 700; color: var(--muted); }
+  .pl-nomore { margin: 10px 0; padding: 10px 12px; border-radius: 4px; background: #fff7e6; border: 1px solid #f0d49a; font-size: .84rem; line-height: 1.45; color: var(--ink); }
+  .pl-nomore .pl-nextday { display: block; margin-top: 8px; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; font: inherit; font-weight: 700; padding: 7px 12px; cursor: pointer; }
+  .pl-nomore .pl-nextday:hover, .pl-nomore .pl-nextday:focus-visible { background: #054d2b; color: #fff; }
   .st-stops { margin-top: 2px; font-size: .78rem; color: var(--muted); }
   .st-stops summary { cursor: pointer; list-style: none; } .st-stops summary::-webkit-details-marker { display: none; }
   .st-stops summary::before { content: "▸ "; } .st-stops[open] summary::before { content: "▾ "; }
@@ -3260,6 +3263,11 @@ function startPlanPick() {
 }
 function endPlanPick() { planPick = false; planPickBar(null); }
 // Day choices: Today, Tomorrow, then the next five days by name and date.
+// The weekday name of a day in the day selector: 0 = today... ("Monday"), with the date for days after tomorrow.
+function weekdayOf(o, withDate) {
+  const { ymd } = GMTPlanner.dayAt(o), d = new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8), 12));
+  return d.toLocaleDateString("en-US", withDate ? { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" } : { weekday: "long", timeZone: "UTC" });
+}
 function planDays() {
   return Array.from({ length: 7 }, (_, i) => {
     if (i === 0) return "Today"; if (i === 1) return "Tomorrow";
@@ -3376,10 +3384,22 @@ function bikeBusIntro(o) {
   const value = bikeBusValue(o);
   return `<p class="pl-climb">${ICON.bike}${esc(whenLeave)} to bike to Route ${esc(firstBus.short)} (${clock(firstBus.dep)}).${value.timeSaved ? ` About ${value.timeSaved} min quicker than cycling the full trip if you started when the bus leaves.` : ""}</p>`;
 }
+// No bus trips left on the chosen day: say so plainly, with when buses run again for this trip and a button to see
+// that day's trips -- never mixing in another day's buses or suggesting an overnight wait.
+function noMoreBusesHtml(r) {
+  if (r.options.length || r.error || r.arriveBy) return "";
+  const today = !planState.dayOffset, dayName = planDays()[planState.dayOffset] || "that day";
+  const head = today ? "No more buses today for this trip." : `No buses on ${esc(dayName)} for this trip at that time.`;
+  if (!r.next) return `<div class="pl-nomore" role="status"><strong>${head}</strong> No buses run for this trip in the next few days; check GMT’s schedules at ridegmt.com.</div>`;
+  const nd = r.next.dayOffset - (planState.dayOffset || 0) === 1 && r.next.dayOffset === 1;
+  const when = nd ? `tomorrow (${esc(weekdayOf(1))})` : `on ${esc(weekdayOf(r.next.dayOffset, true))}`;
+  return `<div class="pl-nomore" role="status"><strong>${head}</strong> Buses run again ${when}: the first trip leaves at <strong>${clock(r.next.depart)}</strong>.
+    <button type="button" class="pl-nextday" data-next-day="${r.next.dayOffset}" data-next-time="${new Intl.DateTimeFormat("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(r.next.depart * 1000))}">Show ${esc(weekdayOf(r.next.dayOffset))}’s trips</button></div>`;
+}
 function planResultsHtml() {
   const r = planState.result;
   if (!r) return "";
-  if (!r.options.length && !r.walkOnly && !altCardsHtml().replace(/@@BADGE@@/g, "")) return `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again."
+  if (!r.options.length && !r.walkOnly && !altCardsHtml().replace(/@@BADGE@@/g, "")) return noMoreBusesHtml(r) || `<p class="none">${r.error ? "Something went wrong planning this trip. Please try again."
     : r.prefs?.accessible ? "No trips found using wheelchair-accessible stops within about a 10-minute walk at that time. Try another time, or turn off the accessible-stops option to see all trips."
     : "No bus trips found for that time. Try a later time, or a starting point closer to a GMT route."}</p>`;
   const sort = loadPrefs().sort || "fastest", start = planDepart();
@@ -3428,7 +3448,7 @@ function planResultsHtml() {
     .map(([k, t]) => `<button type="button" role="radio" data-sort="${k}" aria-checked="${sort === k}">${t}</button>`).join("")}</div>` : "";
   const swipeNote = isPhone() ? `<p class="pl-daynote">Swipe the panel down to see the trip on the map; swipe up to come back.</p>` : "";
   const dayNote = planState.dayOffset ? `<p class="pl-daynote">Trips for ${esc(planDays()[planState.dayOffset])}, from the timetable.</p>` : "";
-  return `${dayNote}${swipeNote}${sortNote}<ul class="pl-opts">${cards}</ul>
+  return `${noMoreBusesHtml(r)}${dayNote}${swipeNote}${sortNote}<ul class="pl-opts">${cards}</ul>
     <p class="src">${relayReady && !planState.dayOffset ? "Trips use live bus predictions for every bus and transfer (the timetable where a bus has no live prediction)" : "Trips use GMT’s timetable"}, with walking up to about 10 minutes and at least 2 minutes to transfer.</p>`;
 }
 // Wheelchair mode: say which boarding/alighting stops aren't confirmed accessible (stops marked inaccessible are avoided).
@@ -3537,6 +3557,10 @@ function stepsHtml(o) {
   }).join("");
 }
 function wirePlanResults() {
+  document.querySelectorAll(".pl-nextday").forEach((b) => (b.onclick = () => { // see the next day's trips, from its first one
+    planState.dayOffset = +b.dataset.nextDay; planState.when = "at"; planState.time = b.dataset.nextTime;
+    buildSystemPanel(); planTrip();
+  }));
   document.querySelectorAll(".pl-sort [data-sort]").forEach((b) => (b.onclick = () => {
     try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), sort: b.dataset.sort })); } catch {}
     // Different preferences use different searches (not merely different sorting).

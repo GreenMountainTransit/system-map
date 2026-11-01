@@ -63,8 +63,10 @@
     const stops = stopsGeo.features.map((f) => ({ id: f.properties.stop_id, name: f.properties.name, c: f.geometry.coordinates, acc: acc(f.properties) }));
     const idx = new Map(stops.map((s, i) => [s.id, i]));
 
-    // The day before's late trips, the chosen day's, and the next day's early ones, as real times (seconds since 1970).
-    const days = [-1, 0, 1].map((o) => {
+    // The chosen day's service (its GTFS calendar), plus the day before's late-night trips still running after midnight
+    // -- never the NEXT day's trips: planning "today" must only offer buses that run today (e.g. no Route 6 on Sunday
+    // from Monday's schedule), and never an overnight wait. When today's service is over, plan() says when it resumes.
+    const days = [-1, 0].map((o) => {
       const { ymd, dow } = L().shiftYmd(target.ymd, o);
       return { midnight: localMidnight(ymd), ymd, on: L().servicesOn(cal, ymd, dow) };
     });
@@ -572,7 +574,20 @@
       for (const o of runs) collect(n, from, to, depart, o, options, seen);
       result = finish(options, from, to);
     }
-    return { ...result, options: sortByPref(result.options, prefs.sort), prefs, live,
+    // No bus trips left on this day: find the next day with service for this trip, and its first departure, so the
+    // page can say so plainly ("Buses run again tomorrow (Monday) from 5:42 AM") instead of mixing days.
+    let next = null;
+    if (!result.options.length && !arriveBy) {
+      for (let k = 1; dayOffset + k <= 6 && !next; k++) { // within the days the page offers (today + 6)
+        const o2 = dayOffset + k, n2 = await network(o2), d2 = dayAt(o2);
+        n2.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; }));
+        const found = [], seen = new Set();
+        collect(n2, from, to, d2.midnight + 3 * 3600, { ...opt, preferWalking: false }, found, seen);
+        const first = found.filter((x) => x.depart >= d2.midnight + 3 * 3600).sort((a, b) => a.depart - b.depart)[0];
+        if (first) next = { dayOffset: o2, ymd: d2.ymd, depart: first.depart };
+      }
+    }
+    return { ...result, options: sortByPref(result.options, prefs.sort), prefs, live, next,
       searchAudit: searchAudit && { mode:'walking-pareto', capped:searchAudit.capped, labels:searchAudit.labels, horizonHours:searchAudit.horizonHours, walkingModel:'straight-line × 1.3' } };
   }
   const walkTotal = (o) => o._walkSecs ?? o.legs.filter((l) => l.kind === "walk").reduce((a, l) => a + l.secs, 0);
