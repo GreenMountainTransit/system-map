@@ -116,7 +116,7 @@
       const cal = await data("calendar.json");
       const dates = [-1, 0, 1].map(offset => {
         const date = shiftYmd(dayKey, offset);
-        return { offset, ymd: date.ymd,
+        return { offset, ymd: date.ymd, start: serviceDayStart(date.ymd),
           active: servicesOn(cal, date.ymd, date.dow) };
       });
       await Promise.all(missing.map(async rid => {
@@ -125,7 +125,7 @@
           const sched = await data(`sched/${encodeURIComponent(rid)}.json`);
           for (const day of dates) for (const trip of sched) {
             if (!day.active.has(trip.s) || !trip.st?.length) continue;
-            const start = clock.midnight + day.offset * 86400 + Number(trip.st[0][1]);
+            const start = day.start + Number(trip.st[0][1]);
             const key = String(trip.t);
             if (!result.has(key)) result.set(key, []);
             result.get(key).push(start);
@@ -275,6 +275,18 @@
   }
 
   // ---------- schedule + realtime arrivals ----------
+  // The start of a GTFS service day: schedule times count from NOON MINUS 12 HOURS local time, which is midnight on
+  // most days but 1:00 AM on the day clocks fall back and 11:00 PM the evening before clocks spring forward. Counting
+  // from midnight instead puts every time an hour off on those two days.
+  function serviceDayStart(ymd) {
+    const y = +ymd.slice(0, 4), m = +ymd.slice(4, 6) - 1, d = +ymd.slice(6, 8);
+    for (const h of [16, 17, 15, 18]) { // local noon is 16:00 UTC (summer) or 17:00 UTC (winter)
+      const t = Date.UTC(y, m, d, h) / 1000;
+      const hh = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(t * 1000));
+      if (hh === "12:00") return t - 43200;
+    }
+    return Date.UTC(y, m, d, 17) / 1000 - 43200;
+  }
   function localClock() {
     const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
       timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
@@ -282,7 +294,8 @@
     }).formatToParts(new Date()).map((x) => [x.type, x.value]));
     const secs = +p.hour * 3600 + +p.minute * 60 + +p.second;
     const now = Math.floor(Date.now() / 1000);
-    return { now, midnight: now - secs, ymd: `${p.year}${p.month}${p.day}` };
+    const ymd = `${p.year}${p.month}${p.day}`;
+    return { now, midnight: serviceDayStart(ymd), ymd }; // "midnight" = start of today's GTFS service day
   }
   function shiftYmd(ymd, days) {
     const d = new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8) + days, 12));
@@ -358,7 +371,7 @@
     const clock = localClock();
     const days = [-1, 0, 1].map((offset) => {
       const { ymd, dow } = shiftYmd(clock.ymd, offset);
-      return { ymd, midnight: clock.midnight + offset * 86400, services: servicesOn(cal, ymd, dow) };
+      return { ymd, midnight: serviceDayStart(ymd), services: servicesOn(cal, ymd, dow) };
     });
     const routeById = Object.fromEntries(meta.routes.map((r) => [r.route_id, r]));
     const result = {};
@@ -437,7 +450,7 @@
     detours, alerts,
     vehicles, arrivals, decodeTripUpdates, liveStatus,
     // shared with the trip planner (planner.js): live predictions for EVERY trip and stop, via the relay
-    data, localClock, shiftYmd, servicesOn, applyRealtime,
+    data, localClock, shiftYmd, servicesOn, applyRealtime, serviceDayStart,
     liveTrips: () => (RELAY ? relayTripUpdates() : Promise.resolve(null)),
   };
 })();

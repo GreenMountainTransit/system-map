@@ -39,7 +39,10 @@
 
   // ---------- network: built once per service day from the data/ files ----------
   // Midnight in Vermont at the start of a date (YYYYMMDD), as seconds since 1970 (right across daylight-saving changes).
+  // The start of the GTFS service day (noon minus 12 hours: see serviceDayStart in live.js), so times are right on
+  // the days clocks change, too.
   function localMidnight(ymd) {
+    if (L().serviceDayStart) return L().serviceDayStart(ymd);
     const y = +ymd.slice(0, 4), m = +ymd.slice(4, 6) - 1, d = +ymd.slice(6, 8);
     for (const h of [4, 5, 3, 6]) { // Vermont is UTC-4 (summer) or UTC-5 (winter)
       const t = Date.UTC(y, m, d, h) / 1000;
@@ -468,14 +471,15 @@
     // An interlined bus boarded after it has become the second route is that route.
     const onRoute = thru && trip.thenRoute && b >= trip.stayAt ? trip.thenRoute : p.route, rr = n.routes[onRoute] || {};
     Object.assign(l, { route: onRoute, short: rr.short_name, color: rr.color, text: rr.text_color });
-    l.headsign = thru && a <= trip.stayAt ? trip.firstHeadsign : trip.headsign;
+    const lastName = (k) => n.stops[p.stops[k]]?.name || "";
+    l.headsign = (thru && a <= trip.stayAt ? trip.firstHeadsign || lastName(trip.stayAt) : trip.headsign || lastName(p.stops.length - 1));
     l.shapes = !thru ? [trip.src?.p || null]
       : b >= trip.stayAt ? [trip.parts[1].t.src.p || null]      // only the part after the turnaround
       : a <= trip.stayAt ? [trip.parts[0].t.src.p || null]      // only the part before it
       : trip.parts.map((x) => x.t.src.p || null);
     if (thru && b < trip.stayAt && a > trip.stayAt) {
       const sp = n.stops[p.stops[trip.stayAt]], then = trip.thenRoute && n.routes[trip.thenRoute];
-      l.stayOn = { name: sp?.name || "", c: sp?.c, firstHeadsign: trip.firstHeadsign,
+      l.stayOn = { name: sp?.name || "", c: sp?.c, firstHeadsign: trip.firstHeadsign || sp?.name || "",
         ...(then ? { then: { route: trip.thenRoute, short: then.short_name, color: then.color, text: then.text_color } } : {}) };
     } else delete l.stayOn;
   }
