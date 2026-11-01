@@ -11,7 +11,8 @@
   const WALK_MPS = 1.25;          // walking speed, meters per second (about 2.8 mph)
   const DETOUR = 1.3;             // streets aren't straight lines: straight-line distance x 1.3
   const ACCESS_M = 800;           // farthest walk to the first stop / from the last stop (about 10 minutes)
-  const TRANSFER_M = 900;         // allow realistic cross-stop transfers (e.g. UVMMC); about 12 min at walking speed
+  const TRANSFER_M = 600;         // farthest walk between stops when transferring (about 8 min): allows cross-stop
+                                  // transfers such as at UVM Medical Center without suggesting long transfer walks
   const TRANSFER_BUFFER = 120;    // at least 2 minutes to change buses
   const MAX_RIDES = 3;            // at most 3 buses (2 transfers)
   const DIRECT_WALK_M = 1600;     // also offer "just walk" if it's under about 20 minutes
@@ -87,7 +88,8 @@
     // St. Albans" to "toward Burlington"). Each such pair becomes a through trip, so the search sees one ride.
     {
       const byBlock = new Map();
-      patterns.forEach((p) => p.trips.forEach((t) => { if (t.src.b) { const k = `${p.route}|${t.ymd}|${t.src.b}`; (byBlock.get(k) || byBlock.set(k, []).get(k)).push({ p, t }); } }));
+      // Same route, or INTERLINED (the bus continues as another route, e.g. Route 2 arriving downtown leaves as Route 1).
+      patterns.forEach((p) => p.trips.forEach((t) => { if (t.src.b) { const k = `${t.ymd}|${t.src.b}`; (byBlock.get(k) || byBlock.set(k, []).get(k)).push({ p, t }); } }));
       for (const list of byBlock.values()) {
         list.sort((a, b) => a.t.sched[0] - b.t.sched[0]);
         for (let i = 0; i + 1 < list.length; i++) {
@@ -95,12 +97,13 @@
           const gap = B.t.sched[0] - A.t.sched[aEnd];
           if (A.t.src.st[aEnd][0] !== B.t.src.st[0][0] || gap < 0 || gap > 30 * 60) continue;
           const stopsThru = [...A.p.stops, ...B.p.stops.slice(1)];
-          const key = A.p.route + "|thru|" + [...A.t.src.st.map((x) => x[0]), ...B.t.src.st.slice(1).map((x) => x[0])].join(",");
+          const key = A.p.route + ">" + B.p.route + "|thru|" + [...A.t.src.st.map((x) => x[0]), ...B.t.src.st.slice(1).map((x) => x[0])].join(",");
           if (!byKey.has(key)) { byKey.set(key, patterns.length); patterns.push({ route: A.p.route, stops: stopsThru, trips: [] }); }
           // At the turnaround stop, the time is when the bus leaves again (boarding there means waiting for that).
           const sched = [...A.t.sched.slice(0, aEnd), ...B.t.sched];
           patterns[byKey.get(key)].trips.push({ id: `${A.t.id}+${B.t.id}`, headsign: B.t.headsign, times: sched.slice(), sched, live: false, ymd: A.t.ymd,
-            parts: [{ t: A.t, n: aEnd }, { t: B.t, n: B.t.sched.length }], stayAt: aEnd, firstHeadsign: A.t.headsign });
+            parts: [{ t: A.t, n: aEnd, route: A.p.route }, { t: B.t, n: B.t.sched.length, route: B.p.route }], stayAt: aEnd, firstHeadsign: A.t.headsign,
+            ...(A.p.route !== B.p.route ? { thenRoute: B.p.route } : {}) });
         }
       }
     }
@@ -119,17 +122,21 @@
         for (const i of grid.get(`${x}:${y}`) || []) { const m = meters(c, stops[i].c); if (m <= maxM) out.push([i, m]); }
       return out;
     };
-    // Within the Downtown Transit Center, changing bays requires no walking-time estimate.
-    // This does NOT eliminate the boarding/connection buffer. GTFS transfer rules take precedence.
+    // Transfers. GTFS rules (transfers.txt) come first: GMT marks the Downtown Transit Center bays (and a few other hubs)
+    // as TIMED transfers (type 1: the departing bus waits for the arriving one) -- a guaranteed connection, 0 minutes,
+    // as Transit and Google Maps treat it. Type 2 gives a minimum time; type 3 means not possible. Between transit center
+    // bays without a rule: no walking time, but the usual connection buffer. Elsewhere: walking time.
     const dtc = (s) => /downtown transit center|\bdtc\b/i.test(s.name || "");
     const [rules] = await Promise.all([L().data("transfers.json").catch(() => ({}))]);
+    const timedSelf = new Set(stops.map((s, i) => (rules[`${s.id}|${s.id}`]?.type === 1 ? i : -1)).filter((i) => i >= 0));
     const footpaths = stops.map((s, i) => near(s.c, TRANSFER_M).filter(([j]) => j !== i).flatMap(([j, m]) => {
-      const rule = rules[`${s.id}|${stops[j].id}`];
+      const rule = rules[`${s.id}|${stops[j].id}`], station = dtc(s) && dtc(stops[j]) && m <= 250;
       if (rule?.type === 3) return [];
-      const inDtc = dtc(s) && dtc(stops[j]) && m <= 250;
-      return [[j, rule?.seconds != null ? rule.seconds : inDtc ? 0 : walkSecs(m)]];
+      if (rule?.type === 1) return [[j, 0, true, station]];                 // timed transfer: guaranteed, 0 minutes
+      if (rule?.type === 2 && rule.seconds != null) return [[j, rule.seconds, false, station]];
+      return [[j, station ? TRANSFER_BUFFER : walkSecs(m), false, station]]; // bays: no walking, just the buffer
     }));
-    net = { stops, idx, patterns, stopPatterns, footpaths, near, routes: Object.fromEntries(meta.routes.map((r) => [r.route_id, r])) };
+    net = { stops, idx, patterns, stopPatterns, footpaths, near, timedSelf, routes: Object.fromEntries(meta.routes.map((r) => [r.route_id, r])) };
     netDay = target.ymd;
     return net;
   }
@@ -173,7 +180,7 @@
             }
           }
           // Can we catch an earlier bus here than the one we're on?
-          const ready = tau[k - 1][s] + (k > 1 ? TRANSFER_BUFFER : 0);
+          const ready = tau[k - 1][s] + (k > 1 && label[k - 1][s]?.kind === "ride" && !n.timedSelf.has(s) ? TRANSFER_BUFFER : 0);
           if (ready < INF && usable(s) && pos < p.stops.length - 1 && (!trip || ready <= trip.times[pos])) {
             let t = null; // the trip that actually leaves soonest (live delays can reorder buses)
             for (const x of p.trips) { const d = x.times[pos]; if (d >= ready && isFinite(d) && (!t || d < t.times[pos])) t = x; }
@@ -182,10 +189,13 @@
         }
       }
       // Walk to nearby stops to change buses.
-      for (const s of [...newly]) for (const [j, w] of n.footpaths[s]) {
+      // One walk between buses, starting where you got off: a stop reached on foot never starts another walk, or short
+      // walks could chain into a long one (e.g. five transfer walks joined into a 37-minute walk).
+      const offBus = [...newly].filter((s) => label[k][s]?.kind === "ride").map((s) => [s, tau[k][s]]);
+      for (const [s, rideArr] of offBus) for (const [j, w, timed, station] of n.footpaths[s]) {
         if (!usable(j) || w > walkSecs(transferM)) continue;
-        const arr = tau[k][s] + w;
-        if (arr < bestRide[j]) { tau[k][j] = arr; bestRide[j] = arr; if (arr < best[j]) best[j] = arr; label[k][j] = { kind: "walk", from: s, secs: w }; newly.add(j); }
+        const arr = rideArr + w;
+        if (arr < bestRide[j]) { tau[k][j] = arr; bestRide[j] = arr; if (arr < best[j]) best[j] = arr; label[k][j] = { kind: "walk", from: s, secs: w, timed, station }; newly.add(j); }
       }
       marked = newly;
     }
@@ -195,7 +205,8 @@
     // cannot select options that have already been discarded here.
     const results = [];
     for (let k = 1; k < tau.length; k++) {
-      const ends = [...egress].filter(([i, w]) => isFinite(tau[k][i]) && isFinite(w))
+      // Trips end where you get off the bus (the final walk goes straight from there), never via a walk to another stop.
+      const ends = [...egress].filter(([i, w]) => isFinite(tau[k][i]) && isFinite(w) && label[k][i]?.kind === "ride")
         .map(([i, w]) => ({ i, w, arrival: tau[k][i] + w }))
         .sort((a, b) => a.arrival - b.arrival);
       if (!ends.length) continue;
@@ -219,7 +230,7 @@
   // Exact for the enumerated stop/footpath/timetable graph *within the stated horizon*
   // when no safety cap is reached; pedestrian walking times are still estimates.
   function walkingPareto(n, from, to, depart, opt = {}) {
-    const horizon = depart + 14 * 3600; // permit long, low-walking journeys in winter
+    const horizon = opt.horizon || depart + 3 * 3600; // set by plan() from the fastest trip (see "Least walking, within reason")
     const maxLabels = 180000;           // bound browser memory if source data is pathological
     const maxPerStop = 64;              // bound highly repetitive terminal patterns
     const accessible = i => !opt.accessible || n.stops[i].acc !== "no";
@@ -266,7 +277,7 @@
         for (const [pi,pos] of n.stopPatterns[s]) {
           const pattern=n.patterns[pi];
           if (pos>=pattern.stops.length-1) continue;
-          const earliest=state.ready+(k>1?TRANSFER_BUFFER:0);
+          const earliest=state.ready+(k>1 && state.kind==='ride' && !n.timedSelf.has(s)?TRANSFER_BUFFER:0);
           for (const trip of pattern.trips) {
             const dep=trip.times[pos];
             if (!Number.isFinite(dep) || dep<earliest || dep>horizon) continue;
@@ -284,17 +295,19 @@
       for (const bag of current) for (const x of bag) queue.push(x);
       for (let qi=0;qi<queue.length;qi++) {
         const x=queue[qi];
+        if (x.kind!=='ride') continue; // one walk between buses, starting where you got off (no chains of walks)
         if (!current[x.stop].includes(x)) continue; // dominated during expansion
-        for (const [j, seconds] of n.footpaths[x.stop]) {
+        for (const [j, seconds, timed, station] of n.footpaths[x.stop]) {
           if (!accessible(j) || seconds>walkSecs(TRANSFER_M) || x.ready+seconds>horizon) continue;
-          const node={stop:j,ready:x.ready+seconds,walk:x.walk+seconds,prev:x,kind:'walk',seconds};
+          // In-station changes and timed transfers aren't walking (they don't add to walking cost).
+          const node={stop:j,ready:x.ready+seconds,walk:x.walk+(station||timed?0:seconds),prev:x,kind:'walk',seconds,timed,station};
           if (put(k,node)) queue.push(node);
         }
       }
       for (const [stop] of ending) for (const node of current[stop]) addResult(node);
       if (capped && nodes>=maxLabels) break;
     }
-    return { options, capped, labels:nodes, horizonHours:14 };
+    return { options, capped, labels:nodes, horizonHours:Math.round((horizon-depart)/360)/10 };
   }
 
   function walkingReconstruct(n, end, egressSecs, from, to, depart, opt={}) {
@@ -307,7 +320,8 @@
     for (let i=1;i<chain.length;i++) {
       const step=chain[i], prior=chain[i-1];
       if (step.kind==='walk') {
-        legs.push({kind:'walk',from:n.stops[prior.stop].c,to:n.stops[step.stop].c,fromName:n.stops[prior.stop].name,toName:n.stops[step.stop].name,secs:step.seconds});
+        legs.push({kind:'walk',from:n.stops[prior.stop].c,to:n.stops[step.stop].c,fromName:n.stops[prior.stop].name,toName:n.stops[step.stop].name,secs:step.seconds,
+          ...(step.timed?{timed:true}:{}),...(step.station?{station:true}:{})});
         continue;
       }
       const p=n.patterns[step.pattern],r=n.routes[p.route],t=step.trip;
@@ -331,7 +345,8 @@
       const lb = label[k][s];
       if (!lb) break;
       if (lb.kind === "access") { legs.unshift({ kind: opt.bike ? "bike" : "walk", from, to: n.stops[s].c, toName: n.stops[s].name, secs: lb.secs }); break; }
-      if (lb.kind === "walk") { legs.unshift({ kind: "walk", from: n.stops[lb.from].c, to: n.stops[s].c, fromName: n.stops[lb.from].name, toName: n.stops[s].name, secs: lb.secs }); s = lb.from; continue; }
+      if (lb.kind === "walk") { legs.unshift({ kind: "walk", from: n.stops[lb.from].c, to: n.stops[s].c, fromName: n.stops[lb.from].name, toName: n.stops[s].name, secs: lb.secs,
+        ...(lb.timed ? { timed: true } : {}), ...(lb.station ? { station: true } : {}) }); s = lb.from; continue; }
       const p = n.patterns[lb.pattern], r = n.routes[p.route];
       legs.unshift({
         kind: "ride", route: p.route, short: r.short_name, color: r.color, text: r.text_color, trip: lb.trip.id,
@@ -384,6 +399,9 @@
   // the start (if it still leaves after you could get there), and get off the last bus at whichever of its later
   // stops is the shortest walk to the destination.
   function shortenWalks(n, legs, from, to, depart, opt = {}) {
+    // Only stops within the usual walking (or biking) range of the start/finish: a long trip -- especially one that
+    // continues as another route -- must never "save time" by boarding far down the line after a very long walk.
+    const reach = opt.bike ? BIKE_ACCESS_M : opt.accessM || ACCESS_M;
     const ok = (sIdx) => sIdx != null && (!opt.accessible || n.stops[sIdx].acc !== "no"); // wheelchair mode: never move to an inaccessible stop
     const rides = legs.filter((l) => l.kind === "ride");
     const first = rides[0], last = rides[rides.length - 1];
@@ -403,7 +421,7 @@
     if (legs[0].kind !== "ride" && legs[1] === first) {
       let best = first._b, bestW = legs[0].secs, bestLeave = first._trip.times[first._b] - legs[0].secs;
       for (let pos = 0; pos < first._a; pos++) {
-        const sIdx = first._p.stops[pos]; if (!ok(sIdx)) continue;
+        const sIdx = first._p.stops[pos]; if (!ok(sIdx) || meters(from, n.stops[sIdx].c) > reach) continue;
         const w = firstSecs(legs[0], sIdx, meters(from, n.stops[sIdx].c)), leave = first._trip.times[pos] - w;
         if (!isFinite(leave) || leave < depart - 60) continue;
         if (opt.preferWalking
@@ -420,7 +438,7 @@
     if (lastWalk.kind !== "ride" && legs[legs.length - 2] === last) {
       let best = last._a, bestW = lastWalk.secs, bestArrive = last._trip.times[last._a] + lastWalk.secs;
       for (let pos = last._b + 1; pos < last._p.stops.length; pos++) {
-        const sIdx = last._p.stops[pos]; if (!ok(sIdx)) continue;
+        const sIdx = last._p.stops[pos]; if (!ok(sIdx) || meters(n.stops[sIdx].c, to) > reach) continue;
         const w = lastSecs(lastWalk, sIdx, meters(n.stops[sIdx].c, to)), arrive = last._trip.times[pos] + w;
         if (!isFinite(arrive)) continue;
         if (opt.preferWalking
@@ -444,14 +462,21 @@
   // Recomputed whenever the boarding or drop-off stop changes (e.g. a stop the bus passes before AND after a turnaround).
   function rideDetails(l, n, p, trip, b, a) {
     const thru = trip.parts && trip.stayAt != null;
+    // Every stop on this ride, with its time (live when available), for the expandable stop list: [name, time, note].
+    l.stopList = p.stops.slice(b, a + 1).map((sIdx, k) => [n.stops[sIdx]?.name || "", trip.times[b + k],
+      thru && b + k === trip.stayAt && b < trip.stayAt && a > trip.stayAt ? (trip.thenRoute ? "then" : "turn") : null]);
+    // An interlined bus boarded after it has become the second route is that route.
+    const onRoute = thru && trip.thenRoute && b >= trip.stayAt ? trip.thenRoute : p.route, rr = n.routes[onRoute] || {};
+    Object.assign(l, { route: onRoute, short: rr.short_name, color: rr.color, text: rr.text_color });
     l.headsign = thru && a <= trip.stayAt ? trip.firstHeadsign : trip.headsign;
     l.shapes = !thru ? [trip.src?.p || null]
       : b >= trip.stayAt ? [trip.parts[1].t.src.p || null]      // only the part after the turnaround
       : a <= trip.stayAt ? [trip.parts[0].t.src.p || null]      // only the part before it
       : trip.parts.map((x) => x.t.src.p || null);
     if (thru && b < trip.stayAt && a > trip.stayAt) {
-      const sp = n.stops[p.stops[trip.stayAt]];
-      l.stayOn = { name: sp?.name || "", c: sp?.c, firstHeadsign: trip.firstHeadsign };
+      const sp = n.stops[p.stops[trip.stayAt]], then = trip.thenRoute && n.routes[trip.thenRoute];
+      l.stayOn = { name: sp?.name || "", c: sp?.c, firstHeadsign: trip.firstHeadsign,
+        ...(then ? { then: { route: trip.thenRoute, short: then.short_name, color: then.color, text: then.text_color } } : {}) };
     } else delete l.stayOn;
   }
 
@@ -488,9 +513,20 @@
       const times = t.sched.map((sec, i) => { const r = L().applyRealtime(tu, t.src, i, sec, t.midnight); if (!r) return Infinity; if (r.live) any = true; return r.epoch; });
       return { times, live: any };
     };
+    // Times can never go backward along a trip (a bus can't reach a stop before the previous one). Live delays can
+    // otherwise produce impossible trips, e.g. a late bus "arriving" 64 stops later 5 minutes after boarding.
+    const forward = (times) => { for (let i = 1; i < times.length; i++) if (times[i] < times[i - 1]) times[i] = times[i - 1]; return times; };
     for (const p of n.patterns) for (const t of p.trips) if (t.parts) { // through trip: its two halves
-      const a = liveFor(t.parts[0].t) || { times: t.parts[0].t.sched, live: false }, b = liveFor(t.parts[1].t) || { times: t.parts[1].t.sched, live: false };
-      t.times = [...a.times.slice(0, t.parts[0].n), ...b.times]; t.live = a.live || b.live;
+      const A = t.parts[0], B = t.parts[1];
+      const a = liveFor(A.t) || { times: A.t.sched, live: false };
+      let b = liveFor(B.t);
+      if (!b) {
+        // No live prediction for the second half: it's the same bus, so a late arrival at the turnaround makes it leave
+        // late too (less whatever layover absorbs the delay).
+        const late = Math.max(0, (a.times[A.n] ?? A.t.sched[A.n]) - B.t.sched[0]);
+        b = { times: B.t.sched.map((x) => x + late), live: false };
+      }
+      t.times = forward([...a.times.slice(0, A.n), ...b.times]); t.live = a.live || b.live;
     }
     for (const p of n.patterns) for (const t of p.trips) {
       if (t.parts) continue;
@@ -501,6 +537,7 @@
       if (tu.canceled) { t.times = t.times.map(() => Infinity); continue; }
       let any = false;
       t.times = t.sched.map((sec, i) => { const r = L().applyRealtime(tu, t.src, i, sec, t.midnight); if (!r) return Infinity; if (r.live) any = true; return r.epoch; });
+      forward(t.times);
       t.live = any; if (any) liveTrips++;
     }
     return { feed: !!tus, trips: liveTrips };
@@ -513,12 +550,18 @@
     const opt = { accessible: !!prefs.accessible, bike: !!prefs.bike, preferWalking: prefs.sort === "walk", elev: prefs.bike ? elev || null : null };
     const runs = [opt];
     let result, searchAudit = null;
-    if (prefs.sort === "walk" && !prefs.bike) {
-      const searchDepart = arriveBy ? arriveBy - 14 * 3600 : depart;
-      searchAudit = walkingPareto(n, from, to, searchDepart, opt);
-      const options = arriveBy ? searchAudit.options.filter(o=>o.arrive <= arriveBy) : searchAudit.options;
-      result = finish(options,from,to);
-      if (arriveBy) result.arriveBy = arriveBy;
+    if (prefs.sort === "walk" && !prefs.bike && !arriveBy) {
+      // Least walking, within reason: first find the fastest trips, then search for lower-walking trips that arrive no
+      // more than WALK_PREF_EXTRA later (half the fastest trip's length, between 20 and 45 minutes). Without this bound,
+      // saving a few minutes of walking could mean a trip hours later.
+      const fast = [], seen = new Set();
+      collect(n, from, to, depart, { ...opt, preferWalking: false }, fast, seen);
+      const fastest = fast.reduce((m, o) => Math.min(m, o.arrive), Infinity);
+      const extra = isFinite(fastest) ? Math.min(45 * 60, Math.max(20 * 60, (fastest - depart) * 0.5)) : 3 * 3600;
+      const horizon = isFinite(fastest) ? fastest + extra : depart + 3 * 3600;
+      searchAudit = walkingPareto(n, from, to, depart, { ...opt, horizon });
+      const pool = [...searchAudit.options, ...fast].filter((o) => o.arrive <= horizon);
+      result = finish(pool, from, to);
     } else if (arriveBy) result = planArriveBy(n, from, to, arriveBy, runs);
     else {
       const options = [], seen = new Set();
@@ -534,7 +577,7 @@
     const by = { fastest: (a, b) => a.arrive - b.arrive || a.rides - b.rides || walkTotal(a) - walkTotal(b),
       walk: (a, b) => walkTotal(a) - walkTotal(b) || a.arrive - b.arrive || a.rides - b.rides,
       transfers: (a, b) => a.rides - b.rides || a.arrive - b.arrive || walkTotal(a) - walkTotal(b) }[sort] || ((a, b) => a.arrive - b.arrive || a.rides - b.rides);
-    return options.filter(sensibleBusSequence).slice().sort(by).slice(0, 1).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
+    return options.filter(sensibleBusSequence).slice().sort(by).slice(0, 4).map((o) => ({ ...o, walkSecs: walkTotal(o), bikeSecs: bikeTotal(o) }));
   }
   function collect(n, from, to, depart, opt, options, seen) {
     // Search from the requested time, then again just after each option's first bus, to offer later choices too.

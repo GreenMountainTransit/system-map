@@ -106,6 +106,15 @@
   .pl-fastest { border-color: var(--live) !important; }
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
+  .pl-same { font-weight: 700; color: var(--muted); }
+  .st-stops { margin-top: 2px; font-size: .78rem; color: var(--muted); }
+  .st-stops summary { cursor: pointer; list-style: none; } .st-stops summary::-webkit-details-marker { display: none; }
+  .st-stops summary::before { content: "▸ "; } .st-stops[open] summary::before { content: "▾ "; }
+  .st-stops summary:hover { color: var(--ink); text-decoration: underline; }
+  .st-stops ol { list-style: none; margin: 6px 0 2px; padding: 0 0 0 4px; border-left: 3px solid var(--rc, var(--gmt)); }
+  .pl-steps .st-stops li { display: grid; grid-template-columns: 66px 1fr; gap: 6px; padding: 2px 0 2px 8px; color: var(--ink); line-height: 1.35; } /* not the step icon column */
+  .st-stops li.on, .st-stops li.off { font-weight: 700; } .st-stops em { font-style: normal; color: var(--muted); font-weight: 400; }
+  .st-stops .st-time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
   .st-transfer { display: block; margin-bottom: 3px; font-size: .74rem; font-weight: 700; color: var(--live); } .st-transfer.tight { color: #b45309; }
   .st-livestat { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: .72rem; font-weight: 600; color: var(--muted); }
   .st-livestat.live { color: var(--live); } .st-livestat .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
@@ -554,6 +563,9 @@ let basemap = BASEMAPS[0];
 const liveBusesOn = true; // live buses are always shown
 let view = ["frequency", "plan"].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
 let tripCosts = null; // driving-cost settings from route-info.json (trip_costs)
+const money2 = (x) => `$${Number(x) % 1 ? Number(x).toFixed(2) : Number(x)}`;
+// Stops GMT's GTFS marks as timed transfer points (transfers.txt type 1), for "Timed transfer" wording in trip steps.
+let timedStops = new Set();
 // Trip preferences, remembered on this device: sort = fastest | walk | transfers; accessible = wheelchair-accessible stops.
 const PREFS_KEY = "gmt-plan-prefs";
 const loadPrefs = () => { try { return { sort: "fastest", accessible: false, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; } catch { return { sort: "fastest", accessible: false }; } };
@@ -1537,6 +1549,9 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
     meta.routes.forEach((r) => (routes[r.route_id] = r));
     ensureBusLayer();
     tripCosts = meta.tripCosts || null;
+    fetch(DIR + "transfers.json").then((r) => (r.ok ? r.json() : {})).then((rules) => {
+      timedStops = new Set(Object.entries(rules || {}).filter(([k, v]) => v?.type === 1 && k.split("|")[0] === k.split("|")[1]).map(([k]) => k.split("|")[0]));
+    }).catch(() => {});
     groups = meta.groups.length ? meta.groups : [{ id: "local", name: "Routes", default: "on" }];
     routeStops = meta.stops;
     stops.features.forEach((f) => (stopsById[f.properties.stop_id] = { ...f.properties, coords: f.geometry.coordinates }));
@@ -2320,8 +2335,9 @@ function buildSystemPanel() {
       picking = true;
     } else return;
     if (hidden.size === Object.keys(routes).length) picking = true;
-    // Keep the legend open on phones, just as on desktop, so subsequent taps can add
-    // routes or turn individual routes off without reopening the bottom sheet.
+    // Phones: lower the list to half height, so the chosen routes show on the map while the list stays open for more
+    // taps (adding routes or turning them off) without reopening the bottom sheet.
+    if (isPhone() && sheetState === "open") snapSheet(document.getElementById("panel"), "half");
     buildSystemPanel.sync(); applyFilters(); refreshBuses(); fitVisible();
   });
   document.getElementById("show-all").onclick = () => { stopFocus = null; hidden = new Set(); picking = false; buildSystemPanel.sync(); applyFilters(); refreshBuses(); goHome(); };
@@ -2516,8 +2532,10 @@ function showStop(id, fly) {
   const selectedId = id;
   routesServingStopToday(s).then((todayRoutes) => {
     if (openStopId !== selectedId) return;
-    focusStopRoutes(s, todayRoutes);
-    highlight(todayRoutes.filter((rid) => visibleRoutes().includes(rid)));
+    // No service today (e.g. a weekday-only stop on Sunday): show the routes that serve it, rather than an empty map.
+    const show = todayRoutes.length ? todayRoutes : (s.routes || []).filter((rid) => routes[rid]);
+    focusStopRoutes(s, show);
+    highlight(show.filter((rid) => visibleRoutes().includes(rid)));
   }).catch((err) => console.warn("Today's stop service could not be checked", err));
   if (map.getLayer("stop-selected")) map.setFilter("stop-selected", ["==", ["get", "stop_id"], id]);
   stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}
@@ -3360,7 +3378,8 @@ function planResultsHtml() {
   const sort = loadPrefs().sort || "fastest", start = planDepart();
   const entries = r.options.filter(o => bikeBusValue(o).useful).map((o, i) => {
     const chips = o.legs.map((l) => l.kind !== "ride" ? `<span class="pl-walk">${l.kind === "bike" ? ICON.bike : ICON.walk}${Math.max(1, Math.round(l.secs / 60))}</span>`
-      : `<span class="chip" style="background:${esc(l.color)};color:${esc(l.text)}">${esc(l.short)}</span>`).join(`<span class="pl-sep">›</span>`);
+      : `<span class="chip" style="background:${esc(l.color)};color:${esc(readableOn(l.color, l.text))}">${esc(l.short)}</span>` + (l.stayOn?.then
+        ? `<span class="pl-sep pl-same" title="Same bus" aria-label="then the same bus continues as">→</span><span class="chip" style="background:${esc(l.stayOn.then.color)};color:${esc(readableOn(l.stayOn.then.color, l.stayOn.then.text))}">${esc(l.stayOn.then.short)}</span>` : "")).join(`<span class="pl-sep">›</span>`);
     const open = !planState.alt && i === planState.selected;
     const html = `<li class="pl-opt ${open ? "open" : ""}"><button type="button" class="pl-card" data-opt="${i}" aria-expanded="${open}">
         <span class="pl-times"><strong>${clock(o.depart)} – ${dayTag(o.arrive, o.depart)}${clock(o.arrive)}</strong><span>${dur(o.arrive - o.depart)}</span></span>
@@ -3392,7 +3411,7 @@ function planResultsHtml() {
   const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
   // One recommended BUS itinerary per selected optimization. Other bus
   // candidates remain in the planner's result only for internal comparisons.
-  const visibleEntries = entries.filter((e) => !e.bus || e === busEntries[0]);
+  const visibleEntries = entries; // every bus trip (up to four), then walking and biking
   const cards = visibleEntries.map((e, i) => {
     const tag = e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
     return e.html.replace("@@BADGE@@", tag ? `<span class="pl-fast-tag">${tag}</span>` : "");
@@ -3440,7 +3459,7 @@ function twoWeekHtml(o, paidRides, driveOne, c) {
   const why = `fares stop at ${money(c.bus_fare_daily_cap)} a day${paidRides > 1 ? ", transfers included," : ""} and ${money(c.bus_fare_monthly_cap)} for 30 days`;
   return `<div class="pl-two-weeks">
       <p>${save >= 5 ? `Twice a day for a month (20 days), you’d save about <strong>${money(save)}</strong> compared with driving.` : `Twice a day for a month (20 days):`}</p>
-      <p class="pl-tw-sub">Driving ${money(drive)} vs. <strong>${money(capped)}</strong> with the Ride Ready app or card (${why}). Paying cash or by credit card: ${money(uncapped)}.</p>
+      <p class="pl-tw-sub">Driving ${money(drive)} vs. <strong>${money(capped)}</strong> with the Ride Ready app or smartcard (${why}). Paying cash or by credit card: ${money(uncapped)}.</p>
     </div>`;
 }
 function costHtml(o) {
@@ -3449,7 +3468,10 @@ function costHtml(o) {
   if (miles == null) return `<p class="pl-cost">Working out the cost of driving…</p>`;
   const perMile = c.gas_price / c.mpg + (c.maintenance_cents_per_mile + c.depreciation_cents_per_mile) / 100;
   // Shopping Specials are fare-free; other rides are $2 each, up to the $4 daily cap (Ride Ready app or card).
-  const paidRides = o.legs.filter((l) => l.kind === "ride" && routes[l.route]?.group !== "shopping").length;
+  // A bus that continues as another route: riders tap again as the route changes, so that's a second fare
+  // (with Ride Ready the daily cap still applies, which the comparison below accounts for).
+  const paidRides = o.legs.filter((l) => l.kind === "ride" && routes[l.route]?.group !== "shopping").length
+    + o.legs.filter((l) => l.kind === "ride" && l.stayOn?.then && routes[l.stayOn.then.route]?.group !== "shopping").length;
   const drive = miles * perMile, fare = Math.min(paidRides * c.bus_fare, c.bus_fare_daily_cap || Infinity), save = drive - fare;
   const money = (x) => `$${x.toFixed(2)}`;
   return `<div class="pl-cost">
@@ -3473,6 +3495,10 @@ function stepsHtml(o) {
   const last = o.legs.length - 1;
   const dist = (m) => (m < 1000 ? Math.round(m / 10) * 10 + " m" : (m / 1609).toFixed(1) + " mi");
   return o.legs.map((l, i) => {
+    if (l.kind === "walk" && (l.station || l.timed) && i !== last && i !== 0) {
+      // Changing buses at the Downtown Transit Center (or another timed-transfer point): no walking directions needed.
+      return `<li class="st-walk"><span class="st-ico">${ICON.walk}</span><span>Change to ${esc(l.toName)}${l.station ? " (same station)" : ""}</span></li>`;
+    }
     if (l.kind === "walk" || l.kind === "bike") {
       const info = walkInfo.get(walkKey(l)), bike = l.kind === "bike";
       const where = i === last ? planState.to.label : l.toName;
@@ -3485,13 +3511,21 @@ function stepsHtml(o) {
     if (prev) {
       const walk = o.legs.slice(o.legs.indexOf(prev) + 1, i).filter((x) => x.kind !== "ride").reduce((a, x) => a + x.secs, 0);
       const spare = Math.round((l.dep - prev.arr - walk) / 60), liveBoth = prev.live && l.live;
-      transfer = `<span class="st-transfer ${spare < 3 ? "tight" : ""}">${spare < 3 ? "Tight connection: " : ""}${Math.max(0, spare)} min to make this transfer${liveBoth ? " (live)" : ""}</span>`;
+      // A timed transfer (GMT's GTFS): the departing bus is scheduled to wait, so a short margin isn't "tight".
+      const timed = o.legs.slice(o.legs.indexOf(prev) + 1, i).some((x) => x.timed) || (prev.toStop === l.fromStop && timedStops.has(String(l.fromStop)));
+      transfer = timed
+        ? `<span class="st-transfer">Timed transfer: Route ${esc(l.short)} is scheduled to wait for Route ${esc(prev.short)}${spare > 0 ? ` (${spare} min)` : ""}${liveBoth ? " (live)" : ""}</span>`
+        : `<span class="st-transfer ${spare < 3 ? "tight" : ""}">${spare < 3 ? "Tight connection: " : ""}${Math.max(0, spare)} min to make this transfer${liveBoth ? " (live)" : ""}</span>`;
     }
-    if (l.scheduledInterline) transfer = `<span class="st-stay">Scheduled same-vehicle continuation (Route ${esc(l.scheduledInterline.fromRoute)} → ${esc(l.short)}) at ${esc(l.fromName)}. A new farebox payment is required for the continuing route; ask the driver whether you may remain aboard.</span>`;
+    if (l.scheduledInterline) transfer = `<span class="st-stay">Stay on board at ${esc(l.fromName)}: the same bus continues as Route ${esc(l.short)}. ${`Tap the Ride Ready app or smartcard (or pay your fare) at the farebox as the route changes. With the Ride Ready app or smartcard, fares stop at ${money2(tripCosts?.bus_fare_daily_cap ?? 4)} a day, so a round trip never costs more than that.`}</span>`;
     return `<li class="st-ride" style="--rc:${esc(l.color)}"><span class="st-ico">${chip({ short_name: l.short, color: l.color, text_color: l.text })}</span>
         <span>${transfer}<strong>${dayTag(l.dep, o.depart)}${clock(l.dep)}</strong> board Route ${esc(l.short)}${(l.stayOn?.firstHeadsign || l.headsign) ? ` toward ${esc(l.stayOn?.firstHeadsign || l.headsign)}` : ""} at ${esc(l.fromName)}
-        ${l.stayOn ? `<span class="st-stay">Scheduled continuation at ${esc(l.stayOn.name)} toward ${esc(l.headsign)}. Ask the driver whether to remain aboard; another farebox payment may be required for the next trip.</span>` : ""}
-        <span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span>
+        ${l.stayOn?.then ? `<span class="st-stay">Stay on board at ${esc(l.stayOn.name)}: the same bus continues as <strong>Route ${esc(l.stayOn.then.short)}</strong> toward ${esc(l.headsign)}. ${`Tap the Ride Ready app or smartcard (or pay your fare) at the farebox as the route changes. With the Ride Ready app or smartcard, fares stop at ${money2(tripCosts?.bus_fare_daily_cap ?? 4)} a day, so a round trip never costs more than that.`}</span>`
+          : l.stayOn ? `<span class="st-stay">Stay on board at ${esc(l.stayOn.name)}: the same bus turns around there and continues toward ${esc(l.headsign)}. No transfer needed.</span>` : ""}
+        ${l.stopList?.length > 1 ? `<details class="st-stops"><summary>Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</summary>
+          <ol>${l.stopList.map(([name, t, note], k) => `<li class="${k === 0 ? "on" : k === l.stopList.length - 1 ? "off" : ""}"><span class="st-time">${isFinite(t) ? clock(t) : ""}</span><span>${esc(name)}${
+            note === "then" ? `<em> ∙ the bus becomes Route ${esc(l.stayOn?.then?.short || "")}: stay on</em>` : note === "turn" ? "<em> ∙ the bus turns around: stay on</em>" : k === 0 ? "<em> ∙ get on</em>" : k === l.stopList.length - 1 ? "<em> ∙ get off</em>" : ""}</span></li>`).join("")}</ol></details>`
+        : `<span class="st-sub">Ride ${l.stopsCount} stop${l.stopsCount === 1 ? "" : "s"}, get off at ${esc(l.toName)} at ${dayTag(l.arr, o.depart)}${clock(l.arr)}</span>`}
         ${planState.dayOffset ? "" : `<span class="st-livestat ${l.live ? "live" : ""}">${l.live ? `<span class="dot"></span>Live time` : "Scheduled"}</span>`}</span></li>`;
   }).join("");
 }
@@ -3571,7 +3605,7 @@ async function streetRoute(kind, a, b) {
 }
 async function fetchWalks(o) {
   if (!o) return;
-  const todo = o.legs.filter((l) => (l.kind === "walk" || l.kind === "bike") && !walkInfo.has(walkKey(l)));
+  const todo = o.legs.filter((l) => (l.kind === "walk" || l.kind === "bike") && !l.station && !walkInfo.has(walkKey(l)));
   if (!todo.length) return;
   await Promise.all(todo.map(async (l) => {
     const r = await streetRoute(l.kind, l.from, l.to);
@@ -3677,6 +3711,14 @@ function planGeo() {
     else {
       // Follow this trip's own GTFS shape between the boarding and alighting stops; then the route's best-matching
       // shape; straight lines between stops if neither can be matched.
+      if (l.stayOn?.then && l.stayOn.c && l.shapes?.[1]) { // the same bus continues as another route: two colors
+        const p1 = shapeSlice(l.shapes[0], l.path[0], l.stayOn.c), p2 = shapeSlice(l.shapes[1], l.stayOn.c, l.path[l.path.length - 1]);
+        if (p1 && p2) {
+          f.push({ type: "Feature", properties: { kind: "ride", color: l.color }, geometry: { type: "LineString", coordinates: p1 } });
+          f.push({ type: "Feature", properties: { kind: "ride", color: l.stayOn.then.color }, geometry: { type: "LineString", coordinates: p2 } });
+          continue;
+        }
+      }
       const along = tripPath(l) || routeBetween(l.route, l.path[0], l.path[l.path.length - 1]);
       f.push({ type: "Feature", properties: { kind: "ride", color: l.color }, geometry: { type: "LineString", coordinates: along && along.length >= 2 ? along : l.path } });
       for (const c of [l.path[0], l.path[l.path.length - 1]]) f.push({ type: "Feature", properties: { kind: "stop", color: l.color }, geometry: { type: "Point", coordinates: c } });
@@ -4185,7 +4227,18 @@ const statusRow = () => `<div class="status-row"><p class="status${busStatusProb
 function wireLiveToggle() {} // (the live-buses switch was removed; kept so existing calls stay harmless)
 try { localStorage.removeItem("gmt-live-buses"); } catch {} // forget any old "off" setting
 const toggleBtn = (label) => `<button id="toggle" aria-expanded="true"><span class="grip" aria-hidden="true"></span><span class="t-label">${label}</span><span class="sr-only">Show the list</span></button>`;
-const chip = (r) => `<span class="chip" style="background:${esc(r.color || "#555")};color:${esc(r.text_color || "#fff")}">${esc(r.short_name || "")}</span>`;
+// Route badges keep GMT's route colors, but the number is drawn in white or black, whichever is readable (WCAG AA
+// 4.5:1): some GTFS route colors are too light for white text (e.g. white on #3aa6a0 is 2.9:1).
+function readableOn(bg, fg) {
+  const lum = (h) => { const m = /^#?([0-9a-f]{6})$/i.exec(String(h || "").trim()); if (!m) return null;
+    const c = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16) / 255).map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  const lb = lum(bg), lf = lum(fg || "#ffffff"); if (lb == null) return fg || "#fff";
+  if (lf != null && ratio(lb, lf) >= 4.5) return fg;
+  return ratio(lb, 1) >= ratio(lb, 0) ? "#ffffff" : "#000000";
+}
+const chip = (r) => `<span class="chip" style="background:${esc(r.color || "#555")};color:${esc(readableOn(r.color || "#555", r.text_color || "#fff"))}">${esc(r.short_name || "")}</span>`;
 function when(epoch) {
   const mins = Math.floor((epoch - Date.now() / 1000) / 60);
   if (mins < 1) return "Due";
@@ -4257,7 +4310,7 @@ function busBadge(r) {
   g.fillStyle = r.color || "#555"; g.fill();
   g.lineWidth = stroke; g.strokeStyle = "#fff"; g.stroke();
   // bus pictogram (front view)
-  const fg = r.text_color || "#fff", bx = pad, by = (h - icon) / 2, u = icon / 14;
+  const fg = readableOn(r.color || "#555", r.text_color || "#fff"), bx = pad, by = (h - icon) / 2, u = icon / 14;
   g.fillStyle = fg;
   rr(bx + 1 * u, by, 12 * u, 11.5 * u, 2.5 * u); g.fill();
   g.fillRect(bx + 2.5 * u, by + 11 * u, 2.5 * u, 3 * u); g.fillRect(bx + 9 * u, by + 11 * u, 2.5 * u, 3 * u);
