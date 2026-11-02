@@ -361,6 +361,7 @@
   .rc-from { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin: 8px 0; }
   .rc-btn { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); background: #fff; border-radius: 4px; padding: 5px 9px; font: inherit; font-size: .8rem; cursor: pointer; color: var(--ink); }
   .rc-btn svg { width: 14px; height: 14px; }
+  .rc-time { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; } .rc-time select { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); }
   .rc-when { display: flex; gap: 8px; margin: 8px 0; } .rc-when select { font: inherit; padding: 6px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); max-width: 100%; }
   .rc-mode { display: flex; margin: 10px 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .rc-mode button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; background: #fff; padding: 8px; font: inherit; font-weight: 600; cursor: pointer; color: var(--ink); }
@@ -583,7 +584,10 @@ function setBusStatus(message, problem = false) {
 let openPopup = null, openStopId = null, routeArrivals = {}, routeArrivalsLoaded = false, activeDir = null;
 let basemap = BASEMAPS[0];
 const liveBusesOn = true; // live buses are always shown
-let view = ["frequency", "plan"].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
+// Desktop-only tools (3D and the Travel time map): a computer screen with a mouse or touchpad -- including touchscreen
+// laptops -- but not phones or touch-only tablets.
+function desktopTools() { return innerWidth > 640 && matchMedia("(any-pointer: fine)").matches; }
+let view = ["frequency", "plan", ...(desktopTools() ? ["reach"] : [])].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
 let tripCosts = null; // driving-cost settings from route-info.json (trip_costs)
 const money2 = (x) => `$${Number(x) % 1 ? Number(x).toFixed(2) : Number(x)}`;
 // Stops GMT's GTFS marks as timed transfer points (transfers.txt type 1), for "Timed transfer" wording in trip steps.
@@ -860,7 +864,7 @@ const tapOrClick = () => (matchMedia("(hover: none) and (pointer: coarse)").matc
 const three = { on: false, follow: null, misses: 0 };
 // 3D is for computers: shown wherever there's a mouse or touchpad (including touchscreen laptops such as a Lenovo
 // IdeaPad, which report touch as their main pointer); hidden on phones and touch-only tablets.
-const canThreeD = () => !isPhone() && matchMedia("(any-pointer: fine)").matches; // a mouse or touchpad is present
+const canThreeD = () => desktopTools(); // a mouse or touchpad is present
 map.addControl({
   onAdd() {
     const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group three-ctrl";
@@ -1904,9 +1908,24 @@ function applyView() {
 // biking) at either end, on that day's GTFS service. The planner gives the earliest bus arrival at every stop; each
 // 200 m grid square gets the quickest of walking/biking there directly, or riding to a stop and walking/biking from it.
 const REACH_COLORS = { 30: "#0b6b3a", 45: "#3f9b5f", 60: "#a7d7a0" };
-const reachState = { from: null, dayOffset: 0, time: "now", mode: "walk", busy: false, summary: "" };
+const reachState = { from: null, dayOffset: 0, when: "now", time: "", mode: "walk", busy: false, summary: "" };
+addEventListener("resize", () => { if (view === "reach" && !desktopTools()) setView("routes"); });
 let reachGeo = null;
-function reachTimes() { const out = []; for (let h = 5; h <= 23; h++) for (const m of [0, 30]) out.push(`${String(h).padStart(2, "0")}:${m ? "30" : "00"}`); return out; }
+// Hour, minute (every minute) and AM/PM for the Travel time map.
+function reachTimeSelects(hhmm) {
+  const [H, M] = (hhmm || "08:00").split(":").map(Number), h12 = H % 12 || 12;
+  const opt = (v, t, on) => `<option value="${v}" ${on ? "selected" : ""}>${t}</option>`;
+  return `<label class="sr-only" for="rc-hh">Hour</label><select id="rc-hh">${Array.from({ length: 12 }, (_, i) => opt(i + 1, i + 1, i + 1 === h12)).join("")}</select>
+    <span aria-hidden="true">:</span><label class="sr-only" for="rc-mm">Minute</label><select id="rc-mm">${Array.from({ length: 60 }, (_, i) => opt(i, String(i).padStart(2, "0"), i === M)).join("")}</select>
+    <label class="sr-only" for="rc-ap">AM or PM</label><select id="rc-ap">${opt("AM", "AM", H < 12)}${opt("PM", "PM", H >= 12)}</select>`;
+}
+function readReachTime() {
+  const h = +document.getElementById("rc-hh")?.value, m = +document.getElementById("rc-mm")?.value, ap = document.getElementById("rc-ap")?.value;
+  if (!h) return reachState.time; const H = (h % 12) + (ap === "PM" ? 12 : 0);
+  return `${String(H).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+// The current time, rounded to the minute, as "HH:MM" in Vermont.
+const nowHHMM = () => new Intl.DateTimeFormat("en-GB", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date());
 function reachHtml() {
   const t12 = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
   return `<div class="scroll rc">
@@ -1915,21 +1934,27 @@ function reachHtml() {
       <button type="button" id="rc-locate" class="rc-btn">${ICON.locate || ""}Use my location</button></p>
     <div class="rc-when">
       <label><span class="sr-only">Day</span><select id="rc-day">${planDays().map((d, i) => `<option value="${i}" ${i === reachState.dayOffset ? "selected" : ""}>${esc(d)}</option>`).join("")}</select></label>
-      <label><span class="sr-only">Time</span><select id="rc-time">${reachState.dayOffset ? "" : `<option value="now" ${reachState.time === "now" ? "selected" : ""}>Leave now</option>`}
-        ${reachTimes().map((t) => `<option value="${t}" ${reachState.time === t ? "selected" : ""}>Leave at ${t12(t)}</option>`).join("")}</select></label>
+      ${reachState.dayOffset ? "" : `<label><span class="sr-only">When</span><select id="rc-when"><option value="now" ${reachState.when === "now" ? "selected" : ""}>Leave now</option><option value="at" ${reachState.when === "at" ? "selected" : ""}>Leave at</option></select></label>`}
     </div>
+    ${reachState.when === "at" || reachState.dayOffset ? `<div class="rc-time" role="group" aria-label="Departure time">${reachTimeSelects(reachState.time)}</div>` : ""}
     <div class="rc-mode" role="radiogroup" aria-label="How you get to and from the bus">
       <button type="button" role="radio" data-mode="walk" aria-checked="${reachState.mode === "walk"}">${ICON.walk}Walk + bus</button>
       <button type="button" role="radio" data-mode="bike" aria-checked="${reachState.mode === "bike"}">${ICON.bike}Bike + bus</button>
     </div>
     <ul class="rc-legend" aria-label="Travel time">${[30, 45, 60].map((m) => `<li><span class="sw" style="background:${REACH_COLORS[m]}"></span>${m === 30 ? "Up to" : m === 45 ? "30 to" : "45 to"} ${m} min</li>`).join("")}</ul>
     <p class="rc-summary" id="rc-summary" role="status">${reachState.summary || (reachState.from ? "" : "Choose a starting point to see the areas.")}</p>
-    <p class="rc-note">Times include waiting for the bus, transfers, and walking at about 2.8 mph (or biking at about 9.5 mph, plus a minute to load your bike) along streets. Areas are approximate. ${reachState.dayOffset || reachState.time !== "now" ? "Uses the timetable." : "Uses live bus times where available."}</p>
+    <p class="rc-note">Times include waiting for the bus, transfers, and walking at about 2.8 mph (or biking at about 9.5 mph, plus a minute to load your bike) along streets. Areas are approximate. ${reachState.dayOffset || reachState.when !== "now" ? "Uses the timetable." : "Uses live bus times where available."}</p>
   </div>`;
 }
 function wireReach() {
-  document.getElementById("rc-day").onchange = (e) => { reachState.dayOffset = +e.target.value; if (reachState.dayOffset && reachState.time === "now") reachState.time = "08:00"; buildSystemPanel(); computeReach(); };
-  document.getElementById("rc-time").onchange = (e) => { reachState.time = e.target.value; computeReach(); };
+  document.getElementById("rc-day").onchange = (e) => {
+    reachState.dayOffset = +e.target.value;
+    if (reachState.dayOffset && !reachState.time) reachState.time = "08:00"; // another day: pick a time (no "now")
+    buildSystemPanel(); computeReach();
+  };
+  const when = document.getElementById("rc-when");
+  if (when) when.onchange = () => { reachState.when = when.value; if (reachState.when === "at" && !reachState.time) reachState.time = nowHHMM(); buildSystemPanel(); computeReach(); };
+  document.querySelectorAll("#rc-hh, #rc-mm, #rc-ap").forEach((el) => (el.onchange = () => { reachState.time = readReachTime(); computeReach(); }));
   document.querySelectorAll(".rc-mode [data-mode]").forEach((b) => (b.onclick = () => { reachState.mode = b.dataset.mode; buildSystemPanel(); computeReach(); }));
   document.getElementById("rc-locate").onclick = () => {
     if (!navigator.geolocation) return;
@@ -1945,7 +1970,8 @@ async function computeReach() {
   const say = (t) => { reachState.summary = t; const el = document.getElementById("rc-summary"); if (el) el.textContent = t; };
   say("Working out travel times…");
   const off = reachState.dayOffset, now = Math.floor(Date.now() / 1000);
-  const depart = !off && reachState.time === "now" ? now : GMTPlanner.dayAt(off).midnight + reachState.time.split(":").reduce((a, x, i) => a + (+x) * (i ? 60 : 3600), 0);
+  const leaveNow = !off && reachState.when === "now", hhmm = reachState.time || "08:00";
+  const depart = leaveNow ? now : GMTPlanner.dayAt(off).midnight + hhmm.split(":").reduce((a, x, i) => a + (+x) * (i ? 60 : 3600), 0);
   const ticket = (computeReach.n = (computeReach.n || 0) + 1);
   let r; try { r = await GMTPlanner.reach({ from: reachState.from.c, depart, dayOffset: off, mode: reachState.mode }); } catch (err) { console.error("[GMT map] travel time", err); return say("Couldn’t work out travel times right now. Please try again."); }
   if (ticket !== computeReach.n) return; // a newer request replaced this one
@@ -2414,7 +2440,7 @@ function buildSystemPanel() {
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
         <button type="button" data-view="plan" aria-pressed="${view === "plan"}">Trip planner</button>
         <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
-        <button type="button" data-view="reach" aria-pressed="${view === "reach"}">Travel time</button>
+        ${desktopTools() ? `<button type="button" data-view="reach" aria-pressed="${view === "reach"}">Travel time</button>` : ""}
       </div>
       ${view === "routes" ? searchBox(true) : ""}</header>
     ${view === "plan" ? plannerHtml() : view === "reach" ? reachHtml() : legend}`, view === "routes");
