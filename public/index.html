@@ -177,7 +177,11 @@
   .st-ico { display: grid; place-items: center; color: var(--muted); } .st-ico svg { width: 18px; height: 18px; }
   .st-sub { display: block; color: var(--muted); font-size: .76rem; }
   .viewtoggle { display: flex; margin: 10px -16px 0; padding: 0 16px; border-bottom: 1px solid var(--line); }
-  .viewtoggle button { white-space: nowrap; font-size: .8rem !important; padding: 6px 4px !important; }
+  .mapswitch { display: flex; gap: 0; margin: 10px 0 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .mapswitch button { flex: 1; border: 0; background: #fff; padding: 7px 8px; font: inherit; font-size: .82rem; font-weight: 600; color: var(--muted); cursor: pointer; }
+  .mapswitch button + button { border-left: 1px solid var(--line); }
+  .mapswitch button[aria-pressed="true"] { background: var(--gmt); color: #fff; }
+  .mapswitch button:hover:not([aria-pressed="true"]) { color: var(--ink); background: var(--hover); }
   .viewtoggle button { flex: 1; border: 0; background: none; border-radius: 0; padding: 9px 4px 8px; font-size: .84rem; font-weight: 600; cursor: pointer; color: var(--muted);
     border-bottom: 3px solid transparent; margin-bottom: -1px; }
   .viewtoggle button:hover { color: var(--ink); }
@@ -2511,13 +2515,18 @@ function buildSystemPanel() {
       <div class="viewtoggle" role="group" aria-label="Map view">
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
         <button type="button" data-view="plan" aria-pressed="${view === "plan"}">Trip planner</button>
-        <button type="button" data-view="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
-        ${desktopTools() ? `<button type="button" data-view="reach" aria-pressed="${view === "reach"}">Travel time</button>` : ""}
+        <button type="button" data-view="maps" aria-pressed="${view === "frequency" || view === "reach"}">Maps</button>
       </div>
+      ${(view === "frequency" || view === "reach") && desktopTools() ? `<div class="mapswitch" role="group" aria-label="Map type">
+        <button type="button" data-map="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
+        <button type="button" data-map="reach" aria-pressed="${view === "reach"}">Travel time</button></div>` : ""}
       ${view === "routes" ? searchBox(true) : ""}</header>
     ${view === "plan" ? plannerHtml() : view === "reach" ? reachHtml() : legend}`, view === "routes");
   if (view === "reach") wireReach();
-  document.querySelectorAll(".viewtoggle button").forEach((b) => b.onclick = () => setView(b.dataset.view));
+  // Tabs: Routes, Trip planner, Maps. Maps opens the last map used (Frequency or Travel time; phones: Frequency only).
+  document.querySelectorAll(".viewtoggle button").forEach((b) => b.onclick = () =>
+    setView(b.dataset.view === "maps" ? (desktopTools() ? lastMap : "frequency") : b.dataset.view));
+  document.querySelectorAll(".mapswitch button").forEach((b) => b.onclick = () => setView(b.dataset.map));
   document.querySelectorAll("[data-period]").forEach((b) => b.onclick = () => { freqPeriod = b.dataset.period; buildSystemPanel(); applyFreq(); });
   document.querySelectorAll("[data-tier]").forEach((b) => b.onclick = () => {
     const t = +b.dataset.tier;
@@ -2586,7 +2595,9 @@ function buildSystemPanel() {
   scroll.addEventListener("focusin", (e) => { const r = rowOf(e); if (r && !hidden.has(r.dataset.route)) highlight([r.dataset.route]); });
   scroll.addEventListener("focusout", () => highlight([]));
 }
+let lastMap = "frequency"; // which map the Maps tab opens: "frequency" or "reach" (Travel time)
 function setView(v) {
+  if (v === "frequency" || v === "reach") lastMap = v;
   if (v === view) return;
   view = v;
   if (isPhone() && sheetState === "open") setTimeout(() => snapSheet(document.getElementById("panel"), "open"), 0); // the planner opens taller
