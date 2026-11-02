@@ -319,7 +319,7 @@
   #activate:hover .act-pill, #activate:focus-visible .act-pill { transform: translateY(-1px); box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); }
   @keyframes act-in { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { #activate .act-pill { animation: none; } }
-  .expand-ctrl .expand-btn { width: 36px; height: 36px; display: grid; place-items: center; color: var(--ink); }
+  .expand-ctrl .expand-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); } /* same size as the other map buttons */
   #alert-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: min(420px, calc(100% - 120px)); }
   #alert-banner[hidden] { display: none; }
   .ab-btn { display: flex; align-items: center; gap: 8px; margin: 0 auto; border: 1px solid #f3c5a0; background: #fff4ea; color: #7c2d12; border-radius: 4px;
@@ -586,7 +586,15 @@ let basemap = BASEMAPS[0];
 const liveBusesOn = true; // live buses are always shown
 // Desktop-only tools (3D and the Travel time map): a computer screen with a mouse or touchpad -- including touchscreen
 // laptops -- but not phones or touch-only tablets.
-function desktopTools() { return innerWidth > 640 && matchMedia("(any-pointer: fine)").matches; }
+// Desktop tools (Travel time, 3D): computers -- Windows, Mac, Linux and ChromeOS, touchscreen or not -- wider than phone
+// size. Phones and tablets are recognized by their operating system: browsers on touchscreen laptops don't reliably
+// report a mouse or touchpad (e.g. in tablet mode), so pointer checks hid these tools on laptops like a Lenovo IdeaPad.
+function mobileOS() {
+  const ua = navigator.userAgent || "";
+  return navigator.userAgentData?.mobile === true || /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(ua)
+    || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); // iPadOS reports itself as a Mac
+}
+function desktopTools() { return innerWidth > 640 && !mobileOS(); }
 let view = ["frequency", "plan", ...(desktopTools() ? ["reach"] : [])].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
 let tripCosts = null; // driving-cost settings from route-info.json (trip_costs)
 const money2 = (x) => `$${Number(x) % 1 ? Number(x).toFixed(2) : Number(x)}`;
@@ -725,7 +733,7 @@ const params0 = new URLSearchParams(location.search);
 const fullPageMode = params0.get("full") === "1"; // opened full page from an embed
 const canFullscreen = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
 const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
-map.addControl({
+const expandControl = { // full-screen button: added below "Choose a location" in the top-right stack (see below)
   onAdd() {
     const el = document.createElement("div");
     el.className = "mapboxgl-ctrl mapboxgl-ctrl-group expand-ctrl";
@@ -764,7 +772,7 @@ map.addControl({
     return el;
   },
   onRemove() {},
-}, "bottom-right");
+};
 
 // The current view (camera, tab, legend selection, open stop), packed into a short string for the full-page tab.
 // The complete view, packed into a short string: camera, base layer, 3D, tab, legend selection, open stop or nearby
@@ -1356,6 +1364,7 @@ map.addControl({
     return el;
   }, onRemove() {},
 }, "top-right");
+map.addControl(expandControl, "top-right"); // full screen, directly under "Choose a location"
 function setPickingSpot(on) {
   pickingSpot = on;
   document.querySelector(".spot-btn")?.setAttribute("aria-pressed", String(on));
