@@ -3721,14 +3721,17 @@ function planResultsHtml() {
   // when the rider is biking) gets there sooner than every bus trip, it's marked "Faster than the bus".
   const byArrival = (x, y) => (r.arriveBy ? y.depart - x.depart : x.arrive - y.arrive);
   const byPref = { fastest: byArrival, walk: (x, y) => x.walk - y.walk || byArrival(x, y), transfers: (x, y) => x.rides - y.rides || byArrival(x, y) }[sort] || byArrival;
-  entries.sort((x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : (!!x.extra - !!y.extra) || (x.bus ? byPref(x, y) : byArrival(x, y))));
+  // Fastest: every option by arrival time, so the quickest (bus, walk or bike) is first. Other preferences: bus trips first.
+  if (sort === "fastest") entries.sort((x, y) => byArrival(x, y) || (x.bus === y.bus ? 0 : x.bus ? -1 : 1));
+  else entries.sort((x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : (!!x.extra - !!y.extra) || (x.bus ? byPref(x, y) : byArrival(x, y))));
   const busEntries = entries.filter((e) => e.bus), bestBus = busEntries.length ? busEntries.reduce((a, b) => (byArrival(a, b) <= 0 ? a : b)) : null;
   const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
   // One recommended BUS itinerary per selected optimization. Other bus
   // candidates remain in the planner's result only for internal comparisons.
   const visibleEntries = entries; // every bus trip (up to four), then walking and biking
   const cards = visibleEntries.map((e, i) => {
-    const tag = e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
+    const tag = sort === "fastest" ? (e === entries[0] ? "Fastest" : "")
+      : e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
     return e.html.replace("@@BADGE@@", tag ? `<span class="pl-fast-tag">${tag}</span>` : "");
   }).join("");
   // Fastest / Least walking / Fewest transfers: shown once there are trips to sort.
