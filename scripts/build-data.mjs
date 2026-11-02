@@ -540,12 +540,20 @@ const freqFeatures = [];
     });
     const covered = isCovered.filter(Boolean).length;
     if (sm.length && covered === sm.length) continue; // entirely drawn already
-    // Draw only the parts not already drawn (the whole piece if none of it is). Skipping a mostly-covered
-    // piece outright used to leave its uncovered end as a gap in the line.
-    const pieces = covered === 0 || !sm.length ? [{ coords: c.coords, whole: true }] : uncoveredParts(c.coords, sm, isCovered);
+    // Which periods have buses at each point ("yyn" = rush and midday, no evening). A piece that runs from a main line
+    // onto a branch only some trips use (e.g. Route 2's GlobalFoundries spur, served at rush hour and in the evening
+    // but not midday) is split where that changes, so each part shows only the periods its own buses run.
+    const W = Object.keys(FREQ_WINDOWS), sig = (c.atSample || []).map((h) => W.map((w) => (h.v[w] != null ? "y" : "n")).join(""));
+    for (let i = 1; i + 1 < sig.length; i++) if (sig[i - 1] === sig[i + 1] && sig[i] !== sig[i - 1]) sig[i] = sig[i - 1]; // smooth single odd points
+    const sigs = [...new Set(sig.filter((_, i) => !isCovered[i]))];
+    // Draw only the parts not already drawn (the whole piece if none of it is, and its service doesn't change along it).
+    // Skipping a mostly-covered piece outright used to leave its uncovered end as a gap in the line.
+    const pieces = (covered === 0 || !sm.length) && sigs.length <= 1 ? [{ coords: c.coords, whole: true }]
+      : sigs.flatMap((g) => uncoveredParts(c.coords, sm, isCovered.map((cv, i) => cv || sig[i] !== g)).map((pc) => ({ ...pc, sig: g })));
     for (const p of sm.filter((_, i) => !isCovered[i])) { const k = `${Math.floor(p.x / DCELL)}:${Math.floor(p.y / DCELL)}`; if (!drawn.has(k)) drawn.set(k, []); drawn.get(k).push(p); }
     for (const pc of pieces) if (pc.coords.length >= 2) {
       const props = pc.whole ? c.props : describe(c, pc.from, pc.to);
+      if (pc.sig) W.forEach((w, k) => { if (pc.sig[k] === "n") props["h_" + w] = null; }); // no buses in that period here
       if (Object.keys(FREQ_WINDOWS).every((w) => props["h_" + w] == null)) continue;
       freqFeatures.push({ type: "Feature", properties: props, geometry: { type: "LineString", coordinates: pc.coords } });
       for (const id of c.routeIds) drawnByRoute.set(id, (drawnByRoute.get(id) || 0) + 1);
