@@ -283,6 +283,7 @@
   .ctrl-tip { position: absolute; z-index: 6; transform: translateY(-50%); background: var(--ink); color: #fff; font-size: .78rem; font-weight: 600;
     padding: 6px 10px; border-radius: 3px; white-space: nowrap; pointer-events: none; box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); }
   .ctrl-tip[hidden] { display: none; }
+  .ctrl-tip.below { transform: none; }
   .expand-ctrl[hidden] { display: none; }
   .three-ctrl[hidden] { display: none; }
   .three-btn { width: 36px !important; height: 30px !important; font-weight: 800; font-size: .78rem; color: var(--ink); }
@@ -366,6 +367,12 @@
   .rc-mode { display: flex; margin: 10px 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .rc-mode button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; background: #fff; padding: 8px; font: inherit; font-weight: 600; cursor: pointer; color: var(--ink); }
   .rc-mode button svg { width: 15px; height: 15px; } .rc-mode button[aria-checked="true"] { background: var(--gmt); color: #fff; }
+  .rc-slider { margin: 10px 0; } .rc-slider-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .rc-slider input[type=range] { width: 100%; accent-color: var(--gmt); cursor: pointer; margin: 0; }
+  .rc-slider input[type=range]:focus-visible { outline: 3px solid var(--gmt); outline-offset: 3px; }
+  .rc-btn[aria-pressed="true"] { background: var(--gmt); color: #fff; border-color: var(--gmt); }
+  .rc-scale { display: flex; justify-content: space-between; font-size: .7rem; color: var(--muted); margin-top: 2px; }
+  .rc-keys { margin: 4px 0 0; font-size: .74rem; color: var(--muted); }
   .rc-legend { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-wrap: wrap; gap: 10px; } .rc-legend li { display: flex; align-items: center; gap: 6px; }
   .rc-legend .sw { width: 18px; height: 12px; border-radius: 2px; opacity: .85; }
   .rc-summary { margin: 10px 0; font-weight: 600; line-height: 1.45; } .rc-note { margin: 8px 0; font-size: .76rem; color: var(--muted); line-height: 1.4; }
@@ -1381,7 +1388,13 @@ function setPickingSpot(on) {
 }
 // Hover labels on map buttons (location, choose a location, 3D, full screen). Mapbox adds some buttons a moment
 // after the map starts, so this listens on the page and reads each button's label when hovered.
+const BASEMAP_HINTS = { light: "Simple map: routes stand out", standard: "Detailed map: buildings, places and labels", satellite: "Satellite photos with street names" };
 const HOVER_LABELS = {
+  '.basemaps button[data-id="light"]': () => BASEMAP_HINTS.light,
+  '.basemaps button[data-id="standard"]': () => BASEMAP_HINTS.standard,
+  '.basemaps button[data-id="satellite"]': () => BASEMAP_HINTS.satellite,
+  ".mapboxgl-ctrl-zoom-in": () => "Zoom in",
+  ".mapboxgl-ctrl-zoom-out": () => "Zoom out",
   ".mapboxgl-ctrl-geolocate": () => `${tapOrClick()} to see next service near you`,
   ".spot-btn": () => `${tapOrClick()} a location on the map to see nearby service`,
   ".three-btn": () => (three.on ? "Leave 3D view" : "View in 3D"),
@@ -1396,12 +1409,21 @@ const HOVER_LABELS = {
     const sel = Object.keys(HOVER_LABELS).find((k) => e.target.closest?.(k));
     if (!sel || document.querySelector(".fs-hint")) { tipEl.hidden = true; return; } // the big hints already explain it
     const btn = e.target.closest(sel), text = HOVER_LABELS[sel]();
-    btn.removeAttribute("title"); btn.setAttribute("aria-label", text);
-    tipEl.textContent = text;
-    const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect(), left = sel === ".help-btn";
-    tipEl.hidden = false; tipEl.style.top = (r.top - w.top + r.height / 2) + "px";
-    if (left) { tipEl.style.left = (r.right - w.left + 8) + "px"; tipEl.style.right = ""; } else { tipEl.style.right = (w.right - r.left + 8) + "px"; tipEl.style.left = ""; }
+    if (tipEl._for === btn && !tipEl.hidden) return; // already showing for this control
+    btn.removeAttribute("title");
+    if (!sel.startsWith(".basemaps")) btn.setAttribute("aria-label", text); // basemap buttons keep their own names
+    tipEl.textContent = text; tipEl._for = btn;
+    const r = btn.getBoundingClientRect(), w = document.getElementById("wrap").getBoundingClientRect(), left = sel === ".help-btn", below = sel.startsWith(".basemaps");
+    tipEl.hidden = false; tipEl.classList.toggle("below", below);
+    if (below) { // the Map / Detailed / Satellite switcher runs along the top edge: show the hint underneath
+      tipEl.style.top = (r.bottom - w.top + 6) + "px"; tipEl.style.right = Math.max(8, w.right - r.right) + "px"; tipEl.style.left = "";
+    } else {
+      tipEl.style.top = (r.top - w.top + r.height / 2) + "px";
+      if (left) { tipEl.style.left = (r.right - w.left + 8) + "px"; tipEl.style.right = ""; } else { tipEl.style.right = (w.right - r.left + 8) + "px"; tipEl.style.left = ""; }
+    }
+    clearTimeout(tipEl._timer); tipEl._timer = setTimeout(() => { tipEl.hidden = true; }, 5000); // hints fade after 5 seconds
   });
+  document.addEventListener("mouseout", (e) => { if (tipEl._for && !e.relatedTarget?.closest?.(".mapboxgl-ctrl")) { tipEl.hidden = true; tipEl._for = null; } });
   document.addEventListener("click", () => (tipEl.hidden = true));
 }
 geolocate.on("geolocate", (e) => {
@@ -1928,6 +1950,21 @@ function reachTimeSelects(hhmm) {
     <span aria-hidden="true">:</span><label class="sr-only" for="rc-mm">Minute</label><select id="rc-mm">${Array.from({ length: 60 }, (_, i) => opt(i, String(i).padStart(2, "0"), i === M)).join("")}</select>
     <label class="sr-only" for="rc-ap">AM or PM</label><select id="rc-ap">${opt("AM", "AM", H < 12)}${opt("PM", "PM", H >= 12)}</select>`;
 }
+// The departure time as a slider: every minute of the day. Keyboard (with the slider selected): Left/Right 1 minute,
+// Shift+Left/Right 15 minutes, Home/End the start and end of the day. Today also offers "Leave now".
+const minToHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const hhmmToMin = (t) => { const [h, m] = (t || "08:00").split(":").map(Number); return h * 60 + m; };
+const t12 = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
+function reachSliderHtml() {
+  const now = !reachState.dayOffset && reachState.when === "now", val = hhmmToMin(now ? nowHHMM() : reachState.time);
+  return `<div class="rc-slider">
+    <div class="rc-slider-top"><label for="rc-range"><strong id="rc-time-label">${now ? `Leave now (${t12(minToHHMM(val))})` : `Leave at ${t12(minToHHMM(val))}`}</strong></label>
+      ${reachState.dayOffset ? "" : `<button type="button" id="rc-now" class="rc-btn" aria-pressed="${now}">Leave now</button>`}</div>
+    <input type="range" id="rc-range" min="0" max="1439" step="1" value="${val}" aria-valuetext="${t12(minToHHMM(val))}">
+    <div class="rc-scale" aria-hidden="true"><span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>12 AM</span></div>
+    <p class="rc-keys">${isPhone() ? "Drag to change the time." : "Drag, or select the slider and use ← → (1 min), Shift + ← → (15 min)."}</p>
+  </div>`;
+}
 function readReachTime() {
   const h = +document.getElementById("rc-hh")?.value, m = +document.getElementById("rc-mm")?.value, ap = document.getElementById("rc-ap")?.value;
   if (!h) return reachState.time; const H = (h % 12) + (ap === "PM" ? 12 : 0);
@@ -1943,9 +1980,8 @@ function reachHtml() {
       <button type="button" id="rc-locate" class="rc-btn">${ICON.locate || ""}Use my location</button></p>
     <div class="rc-when">
       <label><span class="sr-only">Day</span><select id="rc-day">${planDays().map((d, i) => `<option value="${i}" ${i === reachState.dayOffset ? "selected" : ""}>${esc(d)}</option>`).join("")}</select></label>
-      ${reachState.dayOffset ? "" : `<label><span class="sr-only">When</span><select id="rc-when"><option value="now" ${reachState.when === "now" ? "selected" : ""}>Leave now</option><option value="at" ${reachState.when === "at" ? "selected" : ""}>Leave at</option></select></label>`}
     </div>
-    ${reachState.when === "at" || reachState.dayOffset ? `<div class="rc-time" role="group" aria-label="Departure time">${reachTimeSelects(reachState.time)}</div>` : ""}
+    ${reachSliderHtml()}
     <div class="rc-mode" role="radiogroup" aria-label="How you get to and from the bus">
       <button type="button" role="radio" data-mode="walk" aria-checked="${reachState.mode === "walk"}">${ICON.walk}Walk + bus</button>
       <button type="button" role="radio" data-mode="bike" aria-checked="${reachState.mode === "bike"}">${ICON.bike}Bike + bus</button>
@@ -1955,15 +1991,37 @@ function reachHtml() {
     <p class="rc-note">Times include waiting for the bus, transfers, and walking at about 2.8 mph (or biking at about 9.5 mph, plus a minute to load your bike) along streets. Areas are approximate. ${reachState.dayOffset || reachState.when !== "now" ? "Uses the timetable." : "Uses live bus times where available."}</p>
   </div>`;
 }
+function wireReachSlider() {
+  const range = document.getElementById("rc-range"); if (!range) return;
+  const label = document.getElementById("rc-time-label");
+  let timer = null;
+  const set = (m, immediate) => {
+    m = Math.max(0, Math.min(1439, m)); range.value = m;
+    const hhmm = minToHHMM(m); reachState.when = "at"; reachState.time = hhmm;
+    label.textContent = `Leave at ${t12(hhmm)}`; range.setAttribute("aria-valuetext", t12(hhmm));
+    document.getElementById("rc-now")?.setAttribute("aria-pressed", "false");
+    clearTimeout(timer); timer = setTimeout(computeReach, immediate ? 0 : 120); // redraw as it moves (debounced)
+  };
+  range.addEventListener("input", () => set(+range.value));
+  range.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 15 : 1, v = +range.value;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); set(v - step); }
+    else if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); set(v + step); }
+    else if (e.key === "Home") { e.preventDefault(); set(0); }
+    else if (e.key === "End") { e.preventDefault(); set(1439); }
+    else if (e.key === "PageDown") { e.preventDefault(); set(v - 60); }
+    else if (e.key === "PageUp") { e.preventDefault(); set(v + 60); }
+  });
+  const nowBtn = document.getElementById("rc-now");
+  if (nowBtn) nowBtn.onclick = () => { reachState.when = "now"; buildSystemPanel(); computeReach(); };
+}
 function wireReach() {
+  wireReachSlider();
   document.getElementById("rc-day").onchange = (e) => {
     reachState.dayOffset = +e.target.value;
     if (reachState.dayOffset && !reachState.time) reachState.time = "08:00"; // another day: pick a time (no "now")
     buildSystemPanel(); computeReach();
   };
-  const when = document.getElementById("rc-when");
-  if (when) when.onchange = () => { reachState.when = when.value; if (reachState.when === "at" && !reachState.time) reachState.time = nowHHMM(); buildSystemPanel(); computeReach(); };
-  document.querySelectorAll("#rc-hh, #rc-mm, #rc-ap").forEach((el) => (el.onchange = () => { reachState.time = readReachTime(); computeReach(); }));
   document.querySelectorAll(".rc-mode [data-mode]").forEach((b) => (b.onclick = () => { reachState.mode = b.dataset.mode; buildSystemPanel(); computeReach(); }));
   document.getElementById("rc-locate").onclick = () => {
     if (!navigator.geolocation) return;
@@ -2016,9 +2074,14 @@ async function computeReach() {
   say(r.stops.length
     ? `Within an hour: about ${sqmi(cum(60))} sq mi and ${byBus(60)} bus stops. Within 30 minutes: ${sqmi(cum(30))} sq mi and ${byBus(30)} stops.`
     : `No buses can be reached within the hour from here at that time; the area shows how far you can ${r.bike ? "bike" : "walk"}.`);
-  // Fit the map to the hour's area.
-  const sw = toLL(minX, minY), ne = toLL(maxX, maxY);
-  map.fitBounds([sw, ne], { padding: panelPad(), duration: reduceMotion ? 0 : 500, maxZoom: 14 });
+  // Fit the map to the hour's area -- only for a new starting point or mode, not while the time changes (so moving the
+  // time slider doesn't keep re-zooming the map).
+  const fitKey = `${reachState.from.c.join(",")}|${reachState.mode}`;
+  if (computeReach.fitted !== fitKey) {
+    computeReach.fitted = fitKey;
+    const sw = toLL(minX, minY), ne = toLL(maxX, maxY);
+    map.fitBounds([sw, ne], { padding: panelPad(), duration: reduceMotion ? 0 : 500, maxZoom: 14 });
+  }
 }
 // ---------- visibility and highlight ----------
 function visibleRoutes() {
