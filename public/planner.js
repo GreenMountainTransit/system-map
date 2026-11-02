@@ -522,7 +522,11 @@
     };
     // Times can never go backward along a trip (a bus can't reach a stop before the previous one). Live delays can
     // otherwise produce impossible trips, e.g. a late bus "arriving" 64 stops later 5 minutes after boarding.
-    const forward = (times) => { for (let i = 1; i < times.length; i++) if (times[i] < times[i - 1]) times[i] = times[i - 1]; return times; };
+    // A skipped stop (a detour) stays unusable -- Infinity: no getting on or off there -- but must not make the rest of the
+    // trip unusable too: only real times are compared, so the stops after it keep their own times.
+    const forward = (times) => { let last = -Infinity;
+      for (let i = 0; i < times.length; i++) { if (!isFinite(times[i])) continue; if (times[i] < last) times[i] = last; last = times[i]; }
+      return times; };
     for (const p of n.patterns) for (const t of p.trips) if (t.parts) { // through trip: its two halves
       const A = t.parts[0], B = t.parts[1];
       const a = liveFor(A.t) || { times: A.t.sched, live: false };
