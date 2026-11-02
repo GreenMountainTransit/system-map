@@ -676,12 +676,18 @@
   // From one place at one time, the earliest arrival BY BUS at every stop within maxSecs (same engine, transfers and
   // GTFS calendar as the trip planner: only the chosen day's service), plus the speeds for finishing on foot or by bike.
   // The page turns this into 30/45/60-minute areas: min(direct walk/bike, bus to a stop + walk/bike from it).
-  async function reach({ from, depart, dayOffset = 0, mode = "walk", maxSecs = 3600, accessible = false }) {
+  // windowSecs > 0: "time your trip" -- each stop's best travel time among departures every 5 minutes from depart to
+  // depart + windowSecs (as if you leave just in time for a bus), instead of counting the wait from exactly depart.
+  async function reach({ from, depart, dayOffset = 0, mode = "walk", maxSecs = 3600, accessible = false, windowSecs = 0 }) {
     const n = await network(dayOffset);
     if (dayOffset === 0) await applyLive(n); else n.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; }));
-    const bike = mode === "bike", { bestRide } = raptor(n, from, from, depart, { bike, accessible, reachUntil: depart + maxSecs });
+    const bike = mode === "bike", best = new Float64Array(n.stops.length).fill(Infinity);
+    for (let d = depart; d <= depart + windowSecs; d += 300) {
+      const { bestRide } = raptor(n, from, from, d, { bike, accessible, reachUntil: d + maxSecs });
+      for (let i = 0; i < n.stops.length; i++) if (bestRide[i] - d < best[i]) best[i] = bestRide[i] - d;
+    }
     const stops = [];
-    for (let i = 0; i < n.stops.length; i++) if (bestRide[i] <= depart + maxSecs) stops.push([n.stops[i].c[0], n.stops[i].c[1], Math.round(bestRide[i] - depart)]);
+    for (let i = 0; i < n.stops.length; i++) if (best[i] <= maxSecs) stops.push([n.stops[i].c[0], n.stops[i].c[1], Math.round(best[i])]);
     // Speeds over the ground in meters per second (streets aren't straight lines), and a minute to lock or load a bike.
     return { stops, mps: (bike ? BIKE_MPS : WALK_MPS) / DETOUR, startSecs: bike ? 60 : 0, maxSecs, bike };
   }
