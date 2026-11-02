@@ -2986,9 +2986,17 @@ async function refreshDetours() {
       const rid = sel.trips.map((t) => t2r[t]).find(Boolean); if (!rid || !routes[rid]) continue;
       const color = routes[rid].color;
       byRoute[rid] = (byRoute[rid] || 0) + 1;
-      // Swiftly sends the WHOLE shape of a detoured trip; draw only the stretches that leave the route's
-      // normal path, so the rest of the route keeps its usual solid line.
-      if (sel.path?.length > 1) for (const piece of offRoutePieces(sel.path, rid)) {
+      // The detoured trip's own normal path (its GTFS shape), to compare the detour with in travel order.
+      const schedR = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch(() => []);
+      const tripR = schedR.find((t) => sel.trips.includes(t.t));
+      const normal = tripR?.p && linesData.features.find((f) => f.properties.route_id === rid && (f.properties.shape_id === tripR.p || f.properties.also?.includes(tripR.p)))?.geometry.coordinates;
+      // Swiftly sends the WHOLE shape of a detoured trip; draw only the stretches that leave the trip's normal path,
+      // so the rest of the route keeps its usual solid line, and fade exactly the stretch each one bypasses.
+      if (sel.path?.length > 1 && normal?.length > 1) for (const pc of detourPieces(sel.path, normal)) {
+        feats.push({ type: "Feature", properties: { kind: "path", route_id: rid, color, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "LineString", coordinates: pc.path } });
+        if (pc.closed?.length > 1) feats.push({ type: "Feature", properties: { kind: "closed", route_id: rid, color, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "LineString", coordinates: pc.closed } });
+      }
+      else if (sel.path?.length > 1) for (const piece of offRoutePieces(sel.path, rid)) { // fallback: no shape for the trip
         feats.push({ type: "Feature", properties: { kind: "path", route_id: rid, color, modification_id: det.id, service_dates: (det.dates || []).join(",") }, geometry: { type: "LineString", coordinates: piece } });
         // The stretch of the regular route the detour bypasses, between where it leaves and rejoins.
         const closedPart = routeBetween(rid, piece[0], piece[piece.length - 1]);
@@ -3068,6 +3076,44 @@ function routeBetween(rid, from, to) {
 }
 // Pieces of a detour shape more than ~25 m from any of the route's usual shapes (with the joining
 // points on each end, so the dashed line meets the route).
+// A detour compared with the detoured trip's OWN normal path, in travel order: walk along Swiftly's detour path while
+// tracking where the bus is on its normal path; a point is "on route" only if it matches the normal path AHEAD of that
+// position. On a loop (e.g. Route 8, starting and ending at the Downtown Transit Center) this stops the detour matching a
+// part of the loop the bus reaches earlier or later, which broke the drawn detour into pieces and faded the wrong
+// stretch. Returns each off-route piece with the exact stretch of the normal path it bypasses.
+function detourPieces(path, normal) {
+  const k = Math.cos((path[0][1] * Math.PI) / 180), M = 111320, NEAR = 25;
+  const pts = [];
+  for (let i = 0; i < path.length; i++) {
+    if (i) { const [a, b] = [path[i - 1], path[i]], n = Math.ceil(Math.hypot((b[0] - a[0]) * k, b[1] - a[1]) * M / 20);
+      for (let j = 1; j < n; j++) pts.push([a[0] + (b[0] - a[0]) * j / n, a[1] + (b[1] - a[1]) * j / n]); }
+    pts.push(path[i]);
+  }
+  const segDist = (p, i) => { const [ax, ay] = [normal[i][0] * k, normal[i][1]], [bx, by] = [normal[i + 1][0] * k, normal[i + 1][1]], px = p[0] * k, py = p[1];
+    const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy, t = L ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L)) : 0;
+    return Math.hypot(px - ax - t * dx, py - ay - t * dy) * M; };
+  // The first segment at or ahead of "from" that the point is near (while on route, only a short way ahead).
+  const ahead = (p, from, limit) => { for (let i = from; i < Math.min(normal.length - 1, from + limit); i++) if (segDist(p, i) < NEAR) return i; return -1; };
+  // Rejoining the normal path means FOLLOWING it again: the next ~100 m of the detour must keep matching the normal path
+  // just ahead. A detour that only crosses another part of a loop (a street the bus uses earlier or later) doesn't.
+  const follows = (k0, i) => { let j = i;
+    for (let q = k0 + 1; q < Math.min(pts.length, k0 + 6); q++) { const n = ahead(pts[q], j, 12); if (n < 0) return false; j = n; } return true; };
+  const rejoin = (k0, from) => { for (let i = from; i < normal.length - 1; i++) if (segDist(pts[k0], i) < NEAR && follows(k0, i)) return i; return -1; };
+  let pos = -1; // where the bus is on its normal path (segment index); -1 until the path first meets it
+  const on = [], at = [];
+  pts.forEach((p, q) => {
+    const i = pos < 0 ? rejoin(q, 0) : on[on.length - 1] ? ahead(p, pos, 40) : rejoin(q, pos); // off route: only a real rejoin counts
+    if (i >= 0) { pos = i; on.push(true); } else on.push(false);
+    at.push(pos);
+  });
+  const pieces = []; let cur = null, leaveAt = -1;
+  pts.forEach((p, i) => {
+    if (!on[i]) { if (!cur) { cur = i > 0 ? [pts[i - 1]] : []; leaveAt = i > 0 ? at[i - 1] : 0; } cur.push(p); }
+    else if (cur) { cur.push(p); if (cur.length > 1) pieces.push({ path: cur, closed: leaveAt >= 0 && at[i] > leaveAt ? [cur[0], ...normal.slice(leaveAt + 1, at[i] + 1), p] : null }); cur = null; }
+  });
+  if (cur && cur.length > 1) pieces.push({ path: cur, closed: null });
+  return pieces;
+}
 function offRoutePieces(path, rid) {
   const lines = linesData.features.filter((f) => f.properties.route_id === rid).map((f) => f.geometry.coordinates);
   const k = Math.cos((path[0][1] * Math.PI) / 180), M = 111320;
