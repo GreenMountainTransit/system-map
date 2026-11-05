@@ -3734,7 +3734,9 @@ function planResultsHtml() {
   const byPref = { fastest: byArrival, walk: (x, y) => x.walk - y.walk || byArrival(x, y), transfers: (x, y) => x.rides - y.rides || byArrival(x, y) }[sort] || byArrival;
   // Fastest: every option by arrival time, so the quickest (bus, walk or bike) is first. Other preferences: bus trips first.
   const travel = (e) => e.arrive - e.depart;
-  if (sort === "fastest") entries.sort((x, y) => travel(x) - travel(y) || byArrival(x, y) || (x.bus === y.bus ? 0 : x.bus ? -1 : 1));
+  // Fastest: by travel time -- except the Bike comparison card (shown when "Bike to and from the bus" is off), which
+  // always goes after the bus trips.
+  if (sort === "fastest") entries.sort((x, y) => (!!x.extra - !!y.extra) || travel(x) - travel(y) || byArrival(x, y) || (x.bus === y.bus ? 0 : x.bus ? -1 : 1));
   else entries.sort((x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : (!!x.extra - !!y.extra) || (x.bus ? byPref(x, y) : byArrival(x, y))));
   const busEntries = entries.filter((e) => e.bus), bestBus = busEntries.length ? busEntries.reduce((a, b) => (byArrival(a, b) <= 0 ? a : b)) : null;
   const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
@@ -3745,7 +3747,7 @@ function planResultsHtml() {
     const tag = sort === "fastest" ? (e === entries[0] ? "Fastest" : "")
       : e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
     let leave = "";
-    if (!planState.dayOffset && isFinite(e.depart)) {
+    if (e.bus && !planState.dayOffset && isFinite(e.depart)) { // bus trips only: biking or walking, you can leave any time
       const mins = Math.round((e.depart - Date.now() / 1000) / 60);
       leave = `<span class="pl-leave">${mins <= 0 ? "Leave now" : mins < 90 ? `Leave in ${mins} min` : `Leave at ${clock(e.depart)}`}</span>`;
     }
