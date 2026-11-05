@@ -4460,6 +4460,7 @@ function snapSheet(el, state) {
   if (!isPhone()) { el.style.height = ""; el.classList.remove("collapsed"); return; }
   const H = document.getElementById("wrap").clientHeight;
   if (el.id === "panel") { sheetState = state; sheetOpen = state !== "collapsed"; }
+  el.dataset.snap = state; // which step the sheet is on (the stop panel steps compact -> half -> open)
   el.classList.toggle("collapsed", state === "collapsed");
   // open = bottom three-quarters (the top quarter stays map). The trip planner opens to nearly the full screen, so the
   // From/To boxes sit at the top and their suggestions show above the phone's keyboard instead of under it.
@@ -4497,7 +4498,10 @@ function draggable(el, handleSel) {
     if (document.activeElement?.id === "q" && !start_focusedSearch) document.activeElement.blur(); // a drag isn't a tap on search
     // One swipe: up opens to three-quarters, down collapses (or closes the stop sheet).
     const up = el.offsetHeight > startH;
-    if (el.id === "stop-panel") return snapSheet(el, up ? "half" : "compact");
+    if (el.id === "stop-panel") { // one step at a time: compact -> half -> three-quarters
+      const steps = ["compact", "half", "open"], i = Math.max(0, steps.indexOf(el.dataset.snap || "half"));
+      return snapSheet(el, steps[Math.max(0, Math.min(steps.length - 1, i + (up ? 1 : -1)))]);
+    }
     snapSheet(el, up ? "open" : "collapsed");
   };
   addEventListener("pointerup", end); addEventListener("pointercancel", end);
@@ -4522,7 +4526,11 @@ function swipeAnywhere(el, handleSel, scrollSel) {
       if (Math.abs(dx) > Math.abs(dy)) { t = null; return; } // sideways: not a tray swipe
       const collapsed = el.classList.contains("collapsed") || (el.id === "panel" && sheetState === "collapsed");
       const listAtTop = !t.sc || t.sc.scrollTop <= 0;
-      t.take = dy < 0 ? listAtTop : collapsed || !t.sc || t.sc.scrollHeight <= t.sc.clientHeight;
+      // The stop panel, one predictable rule: swiping UP grows it a step (compact -> half -> three-quarters) whatever its
+      // content -- opening a section like Ridership no longer changes what a swipe does; once at the top step, the
+      // content scrolls. Swiping DOWN scrolls the content back to the top first, then shrinks the panel a step.
+      t.take = el.id === "stop-panel" ? (dy < 0 ? listAtTop : el.dataset.snap !== "open")
+        : dy < 0 ? listAtTop : collapsed || !t.sc || t.sc.scrollHeight <= t.sc.clientHeight;
       if (!t.take) { t = null; return; } // let the list scroll instead
       el.classList.remove("collapsed"); el.classList.add("dragging");
     }
@@ -4536,7 +4544,10 @@ function swipeAnywhere(el, handleSel, scrollSel) {
     el.classList.remove("dragging");
     if (!took) return;
     el._dragged = true; setTimeout(() => (el._dragged = false), 50);
-    if (el.id === "stop-panel") return snapSheet(el, up ? "half" : "compact");
+    if (el.id === "stop-panel") { // one step at a time: compact -> half -> three-quarters
+      const steps = ["compact", "half", "open"], i = Math.max(0, steps.indexOf(el.dataset.snap || "half"));
+      return snapSheet(el, steps[Math.max(0, Math.min(steps.length - 1, i + (up ? 1 : -1)))]);
+    }
     snapSheet(el, up ? "open" : "collapsed");
   };
   el.addEventListener("touchend", end); el.addEventListener("touchcancel", end);
