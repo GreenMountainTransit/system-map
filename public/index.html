@@ -107,6 +107,7 @@
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
   .pl-same { font-weight: 700; color: var(--muted); }
+  .pl-leave { display: inline-block; margin-right: 8px; font-size: .8rem; font-weight: 700; color: var(--live); }
   .pl-nomore { margin: 10px 0; padding: 10px 12px; border-radius: 4px; background: #fff7e6; border: 1px solid #f0d49a; font-size: .84rem; line-height: 1.45; color: var(--ink); }
   .pl-nomore .pl-nextday { display: block; margin-top: 8px; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; font: inherit; font-weight: 700; padding: 7px 12px; cursor: pointer; }
   .pl-nomore .pl-nextday:hover, .pl-nomore .pl-nextday:focus-visible { background: #054d2b; color: #fff; }
@@ -494,6 +495,7 @@
     /* Phones: service alerts in the top-left corner, clear of the basemap buttons on the right */
     #alert-banner { top: calc(10px + env(safe-area-inset-top, 0px)); left: 10px; transform: none; max-width: calc(100% - 215px); }
     #alert-banner .ab-btn { margin: 0; padding: 7px 11px; font-size: .8rem; max-width: 100%; }
+    body.tray-up #alert-banner, body.stop-up #alert-banner { display: none; } /* hidden while a tray covers the top */
     #alert-banner .ab-btn .ab-text, #alert-banner .ab-btn svg:last-child { display: none; } /* phones: just the warning symbol */
     #alert-banner .ab-btn { padding: 7px 9px; }
     #alert-banner .ab-list { box-sizing: border-box; width: calc(100vw - 20px); max-width: 420px; max-height: 55vh; }
@@ -2848,6 +2850,7 @@ async function tempStopTimes(t) {
 }
 function closeStop() {
   if (stopView) exitStopView();
+  document.body.classList.remove("stop-up"); // the stop tray is going: show the alerts button again
   if (!openStopId) return;
   openStopId = null; showAllTimes = false; svOpen = false; setCamera(null);
   stopPanel.hidden = true; stopPanel.innerHTML = ""; stopPanel.style.height = "";
@@ -3730,7 +3733,8 @@ function planResultsHtml() {
   const byArrival = (x, y) => (r.arriveBy ? y.depart - x.depart : x.arrive - y.arrive);
   const byPref = { fastest: byArrival, walk: (x, y) => x.walk - y.walk || byArrival(x, y), transfers: (x, y) => x.rides - y.rides || byArrival(x, y) }[sort] || byArrival;
   // Fastest: every option by arrival time, so the quickest (bus, walk or bike) is first. Other preferences: bus trips first.
-  if (sort === "fastest") entries.sort((x, y) => byArrival(x, y) || (x.bus === y.bus ? 0 : x.bus ? -1 : 1));
+  const travel = (e) => e.arrive - e.depart;
+  if (sort === "fastest") entries.sort((x, y) => travel(x) - travel(y) || byArrival(x, y) || (x.bus === y.bus ? 0 : x.bus ? -1 : 1));
   else entries.sort((x, y) => (x.bus !== y.bus ? (x.bus ? -1 : 1) : (!!x.extra - !!y.extra) || (x.bus ? byPref(x, y) : byArrival(x, y))));
   const busEntries = entries.filter((e) => e.bus), bestBus = busEntries.length ? busEntries.reduce((a, b) => (byArrival(a, b) <= 0 ? a : b)) : null;
   const badge = { fastest: "Fastest", walk: "Least walking", transfers: "Fewest transfers" }[sort] || "Fastest";
@@ -3740,7 +3744,12 @@ function planResultsHtml() {
   const cards = visibleEntries.map((e, i) => {
     const tag = sort === "fastest" ? (e === entries[0] ? "Fastest" : "")
       : e.bus ? (e === busEntries[0] ? badge : "") : !e.extra && (!bestBus || byArrival(e, bestBus) < 0) ? "Faster than the bus" : "";
-    return e.html.replace("@@BADGE@@", tag ? `<span class="pl-fast-tag">${tag}</span>` : "");
+    let leave = "";
+    if (!planState.dayOffset && isFinite(e.depart)) {
+      const mins = Math.round((e.depart - Date.now() / 1000) / 60);
+      leave = `<span class="pl-leave">${mins <= 0 ? "Leave now" : mins < 90 ? `Leave in ${mins} min` : `Leave at ${clock(e.depart)}`}</span>`;
+    }
+    return e.html.replace("@@BADGE@@", leave + (tag ? `<span class="pl-fast-tag">${tag}</span>` : ""));
   }).join("");
   // Fastest / Least walking / Fewest transfers: shown once there are trips to sort.
   const sortNote = busEntries.length ? `<div class="pl-sort" role="radiogroup" aria-label="Show bus trips by">${[["fastest", "Fastest"], ["walk", "Least walking"], ["transfers", "Fewest transfers"]]
@@ -4469,6 +4478,8 @@ function snapSheet(el, state) {
   const H = document.getElementById("wrap").clientHeight;
   if (el.id === "panel") { sheetState = state; sheetOpen = state !== "collapsed"; }
   el.dataset.snap = state; // which step the sheet is on (the stop panel steps compact -> half -> open)
+  // Phones: a tray raised to its top step covers the alerts button's corner, so hide the button until it comes down.
+  document.body.classList.toggle(el.id === "panel" ? "tray-up" : "stop-up", state === "open");
   if (el.id === "stop-panel" && state !== "open") { const b = el.querySelector(".sp-body"); if (b) b.scrollTop = 0; } // content scrolls only at the top step
   el.classList.toggle("collapsed", state === "collapsed");
   // open = bottom three-quarters (the top quarter stays map). The trip planner opens to nearly the full screen, so the
