@@ -500,6 +500,9 @@
     #panel, #stop-panel { transition: height .22s ease; touch-action: none; }
     #panel.dragging, #stop-panel.dragging { transition: none; }
     #panel .scroll, .sp-body { touch-action: pan-y; }
+    /* Stop and "service near" panel below its top step: swipes move the tray only (no content scrolling at the same time,
+       which flickered); at the top step (three-quarters) the content scrolls natively. */
+    #stop-panel:not([data-snap="open"]) .sp-body { overflow-y: hidden; touch-action: none; }
     #panel header input { touch-action: manipulation; }
     #stop-panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 75%; z-index: 6; border-radius: 10px 10px 0 0;
       box-shadow: 0 -1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -2875,7 +2878,12 @@ async function refreshPopup(announce) {
   if (id !== openStopId) return;
   const body = stopPanel.querySelector(".sp-body"); if (!body) return;
   const scrollTop = body.scrollTop, keepSv = body.querySelector("#sv-box[data-wired]"), keepRd = body.querySelector("#rider-box[data-wired]");
-  try { body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive); }
+  // Don't redraw mid-swipe (try again shortly), and keep open sections (e.g. Ridership) and the scroll position.
+  if (stopPanel.classList.contains("dragging")) { setTimeout(() => refreshPopup(), 600); return; }
+  const openSecs = [...body.querySelectorAll("details[open] > summary")].map((x) => x.textContent.trim()), keepY = body.scrollTop;
+  try { body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
+    body.querySelectorAll("details > summary").forEach((x) => { if (openSecs.includes(x.textContent.trim())) x.parentElement.open = true; });
+    body.scrollTop = keepY; }
   catch (e) { // show something useful rather than leaving "Loading arrivals..." up
     noteError("stop panel", e);
     try { body.innerHTML = stopHtml(stopsById[id], "error", null, false); }
@@ -4461,12 +4469,13 @@ function snapSheet(el, state) {
   const H = document.getElementById("wrap").clientHeight;
   if (el.id === "panel") { sheetState = state; sheetOpen = state !== "collapsed"; }
   el.dataset.snap = state; // which step the sheet is on (the stop panel steps compact -> half -> open)
+  if (el.id === "stop-panel" && state !== "open") { const b = el.querySelector(".sp-body"); if (b) b.scrollTop = 0; } // content scrolls only at the top step
   el.classList.toggle("collapsed", state === "collapsed");
   // open = bottom three-quarters (the top quarter stays map). The trip planner opens to nearly the full screen, so the
   // From/To boxes sit at the top and their suggestions show above the phone's keyboard instead of under it.
   const full = el.id === "panel" && view === "plan" && !routeParam;
   // half = halfway up the screen: a chosen trip on the map above, its details in the tray below.
-  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : state === "half" ? Math.round(H * 0.5) + "px" : state === "compact" ? "min(180px, 25vh)" : "";
+  el.style.height = state === "open" ? Math.round(full ? H - 8 : H * 0.75) + "px" : state === "half" ? Math.round(H * 0.5) + "px" : state === "compact" ? Math.round(Math.min(180, H * 0.25)) + "px" : "";
   el.classList.toggle("plan-full", full && state === "open");
   const t = el.querySelector("#toggle"); if (t) t.setAttribute("aria-expanded", String(state !== "collapsed"));
 }
@@ -4529,7 +4538,7 @@ function swipeAnywhere(el, handleSel, scrollSel) {
       // The stop panel, one predictable rule: swiping UP grows it a step (compact -> half -> three-quarters) whatever its
       // content -- opening a section like Ridership no longer changes what a swipe does; once at the top step, the
       // content scrolls. Swiping DOWN scrolls the content back to the top first, then shrinks the panel a step.
-      t.take = el.id === "stop-panel" ? (dy < 0 ? listAtTop : el.dataset.snap !== "open")
+      t.take = el.id === "stop-panel" ? (el.dataset.snap !== "open" || (dy < 0 && listAtTop))
         : dy < 0 ? listAtTop : collapsed || !t.sc || t.sc.scrollHeight <= t.sc.clientHeight;
       if (!t.take) { t = null; return; } // let the list scroll instead
       el.classList.remove("collapsed"); el.classList.add("dragging");
@@ -4554,7 +4563,13 @@ function swipeAnywhere(el, handleSel, scrollSel) {
 }
 swipeAnywhere(document.getElementById("panel"), "header", ".scroll");
 swipeAnywhere(stopPanel, ".sp-head", ".sp-body");
-addEventListener("resize", () => { setSheet(sheetOpen); if (openStopId) snapSheet(stopPanel, stopPanel.style.height === "min(180px, 25vh)" ? "compact" : "half"); });
+// Phones fire "resize" whenever the address bar slides in or out (constantly while scrolling): keep each tray on the step
+// it's on (resizing it to the new screen height), never reset it, and leave it alone mid-drag.
+addEventListener("resize", () => {
+  const panel = document.getElementById("panel");
+  if (!panel.classList.contains("dragging")) snapSheet(panel, sheetState || (sheetOpen ? "open" : "collapsed"));
+  if (openStopId && !stopPanel.classList.contains("dragging")) snapSheet(stopPanel, stopPanel.dataset.snap || "half");
+});
 // Status line (how many buses are running, when last updated). Live buses are always on.
 const statusRow = () => `<div class="status-row"><p class="status${busStatusProblem ? " problem" : ""}" id="status" aria-live="polite">${esc(busStatusText)}</p></div>`;
 function wireLiveToggle() {} // (the live-buses switch was removed; kept so existing calls stay harmless)
