@@ -107,6 +107,7 @@
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
   .pl-same { font-weight: 700; color: var(--muted); }
+  .sp-titles { flex: 1; min-width: 0; } .sp-coords { margin: 1px 0 0; font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .pl-leave { display: inline-block; margin-right: 8px; font-size: .8rem; font-weight: 700; color: var(--live); }
   .pl-nomore { margin: 10px 0; padding: 10px 12px; border-radius: 4px; background: #fff7e6; border: 1px solid #f0d49a; font-size: .84rem; line-height: 1.45; color: var(--ink); }
   .pl-nomore .pl-nextday { display: block; margin-top: 8px; border: 0; border-radius: 4px; background: var(--gmt); color: #fff; font: inherit; font-weight: 700; padding: 7px 12px; cursor: pointer; }
@@ -1490,7 +1491,8 @@ async function showNearby(here, title, onlyRoutes, place) {
   const routeIds = [...new Set(near.flatMap(o => o.services.map(e => e.rid)))];
   const nearbyKey = "near:" + here.join(",");
   openStopId = nearbyKey;
-  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}<h2 id="sp-title" tabindex="-1">${esc(title)}</h2>
+  const coords = place?.pinned ? `<p class="sp-coords">${here[1].toFixed(4)}, ${here[0].toFixed(4).replace("-", "−")}</p>` : "";
+  stopPanel.innerHTML = `<div class="sp-head"><span class="sp-grip" aria-hidden="true"></span>${stopBackButton()}<div class="sp-titles"><h2 id="sp-title" tabindex="-1">${esc(title)}</h2>${coords}</div>
       <button type="button" class="sp-close" aria-label="Close">×</button></div>
     <div class="sp-body">${place?.label ? `<div class="near-actions"><button type="button" class="dir-btn" id="near-dir">${ICON.directions}Directions</button></div>` : ""}
       <div class="pop" id="near-list">${near.length ? "<p class='none'>Loading upcoming arrivals…</p>" : `<p class="none">No GMT stops are within about a 10-minute walk of this location.</p>`}</div></div>`;
@@ -1498,7 +1500,7 @@ async function showNearby(here, title, onlyRoutes, place) {
   wireStopNavigation();
   stopPanel.querySelector(".sp-close").onclick = () => { stopNav = []; closeStop(); map.getSource("near")?.setData({ type: "FeatureCollection", features: [] }); };
   if (isPhone()) { setSheet(false); snapSheet(stopPanel, "half"); }
-  map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: { name: place?.label || "" }, geometry: { type: "Point", coordinates: here } }] });
+  map.getSource("near")?.setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: { name: place?.pinned ? "" : place?.label || "", pinned: place?.pinned ? 1 : 0 }, geometry: { type: "Point", coordinates: here } }] });
   document.getElementById("near-dir")?.addEventListener("click", () => goDirections({ c: here, label: place.label }));
   if (near.length) {
     const bounds = new mapboxgl.LngLatBounds(here, here);
@@ -1748,6 +1750,25 @@ map.on("style.load", async () => {
   tick(true);
 });
 
+// The pinned-location marker: a simple standing person (no gendered details), GMT green with a white outline, drawn at
+// 2x for sharp screens. Its feet are at the bottom center, which sits on the chosen spot.
+function personPinImage() {
+  const W = 44, H = 76, c = document.createElement("canvas"); c.width = W; c.height = H; const g = c.getContext("2d");
+  g.fillStyle = "rgba(0,0,0,.22)"; g.beginPath(); g.ellipse(W / 2, H - 4, 11, 3.5, 0, 0, Math.PI * 2); g.fill(); // shadow
+  const shape = () => {
+    const p = new Path2D(); p.arc(W / 2, 13, 9, 0, Math.PI * 2);                                     // head
+    const body = new Path2D(); body.roundRect ? body.roundRect(W / 2 - 11, 25, 22, 26, 8) : body.rect(W / 2 - 11, 25, 22, 26); // body
+    const armL = new Path2D(), armR = new Path2D(), legL = new Path2D(), legR = new Path2D();
+    const R = (path, x, y, w, h, r) => (path.roundRect ? path.roundRect(x, y, w, h, r) : path.rect(x, y, w, h));
+    R(armL, W / 2 - 17, 27, 7, 20, 3.5); R(armR, W / 2 + 10, 27, 7, 20, 3.5);
+    R(legL, W / 2 - 9, 47, 8, 22, 4); R(legR, W / 2 + 1, 47, 8, 22, 4);
+    return [p, body, armL, armR, legL, legR];
+  };
+  const parts = shape();
+  g.lineJoin = "round"; g.lineWidth = 5; g.strokeStyle = "#fff"; parts.forEach((p) => g.stroke(p));   // white outline
+  g.fillStyle = "#0b6b3a"; parts.forEach((p) => g.fill(p));                                          // GMT green
+  return g.getImageData(0, 0, W, H);
+}
 function addOverlay() {
   const slot = (s) => (basemap.standard ? { slot: s } : {});
   const add = (layer, s) => { if (!map.getLayer(layer.id)) map.addLayer({ ...layer, ...slot(s) }); };
@@ -1861,7 +1882,11 @@ function addOverlay() {
   add({ id: "near-label", type: "symbol", source: "near", layout: { "text-field": ["get", "name"], "text-size": 13, "text-anchor": "bottom", "text-offset": [0, -1.1],
       "text-max-width": 14, "text-allow-overlap": true, "text-ignore-placement": true },
     paint: { "text-color": sat ? "#fff" : "#0b3d6e", "text-halo-color": sat ? "rgba(0,0,0,.8)" : "#fff", "text-halo-width": 2 } }, "top");
-  add({ id: "near-pt", type: "circle", source: "near", paint: { "circle-radius": 8, "circle-color": "#0b5cad", "circle-stroke-color": "#fff", "circle-stroke-width": 3 } }, "top");
+  add({ id: "near-pt", type: "circle", source: "near", filter: ["!=", ["get", "pinned"], 1], paint: { "circle-radius": 8, "circle-color": "#0b5cad", "circle-stroke-color": "#fff", "circle-stroke-width": 3 } }, "top");
+  // A pinned location ("Choose a location"): a small standing person figure, feet on the spot.
+  if (!map.hasImage("person-pin")) map.addImage("person-pin", personPinImage(), { pixelRatio: 2 });
+  add({ id: "near-person", type: "symbol", source: "near", filter: ["==", ["get", "pinned"], 1],
+    layout: { "icon-image": "person-pin", "icon-anchor": "bottom", "icon-allow-overlap": true, "icon-ignore-placement": true } }, "top");
   // Trip planner: the chosen trip's rides (route colors), walks (dashed) and start/end points.
   if (!map.getSource("plan")) map.addSource("plan", { type: "geojson", data: planGeo() });
   add({ id: "plan-casing", type: "line", source: "plan", filter: ["==", ["get", "kind"], "ride"], layout: { "line-join": "round", "line-cap": "round" },
@@ -2209,7 +2234,7 @@ map.on("click", (e) => {
   if (pickingSpot) { // Choose a location: nearby service for wherever was tapped; tap again to move it (Cancel to stop)
     const c = [e.lngLat.lng, e.lngLat.lat], near = nearestStop(c, 400);
     const bar = document.querySelector("#spot-bar span"); if (bar) bar.textContent = `${tapOrClick()} anywhere else to move the location`;
-    showNearby(c, near ? `Near ${near.name}` : "Service near this location", null);
+    showNearby(c, "Service near pinned location", null, { pinned: true });
     return;
   }
   if (Date.now() - followDragged < 400) return; // the end of a look-around drag isn't a click
