@@ -949,7 +949,9 @@ function addBusModelLayer() {
   const m = followState?.model; if (!m) return;
   followState.anchor = null; // the next frame sets a fresh anchor point
   if (!map.hasModel?.(m.id)) map.addModel(m.id, m.url); // after a basemap change
-  if (!map.getSource("bus3d-pt")) map.addSource("bus3d-pt", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  // maxzoom 14: Mapbox cuts this point into tiles only up to zoom 14 and reuses that tile when zoomed further in (still
+  // accurate to ~0.3 m), so zooming while following no longer reloads the model and makes the bus blink out.
+  if (!map.getSource("bus3d-pt")) map.addSource("bus3d-pt", { type: "geojson", maxzoom: 14, data: { type: "FeatureCollection", features: [] } });
   if (map.getLayer("bus3d-model")) map.removeLayer("bus3d-model");
   const scale = BUS_LEN / GMTBus3D.LENGTH_M; // ~100 ft at map scale
   map.addLayer({ id: "bus3d-model", type: "model", source: "bus3d-pt", layout: { "model-id": m.id },
@@ -983,6 +985,7 @@ function startFollow(p) {
   followState.orbit = 0; // degrees added to the bus's heading
   followState.cam = { zoom: 17.5, zoomTo: 17.5, pitch: 62 };
   map.dragPan.disable(); map.dragRotate.disable(); map.scrollZoom.disable(); map.doubleClickZoom.disable(); map.touchZoomRotate.disable();
+  map.getCanvasContainer().style.touchAction = "none"; // the map takes all touch gestures (pinch, twist) while following
   setBasemapLabels(false); // the moving camera makes basemap labels jump around
   if (followState.shown) map.easeTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: reduceMotion ? 0 : 1200 });
   toast("Click a stop to watch this bus arrive. Drag to look around the bus.");
@@ -994,6 +997,7 @@ function stopFollow() {
     clearInterval(followState.timer); cancelAnimationFrame(followState.raf);
     if (followState.model) { if (map.getLayer("bus3d-model")) map.removeLayer("bus3d-model"); try { map.removeModel?.(followState.model.id); } catch {} URL.revokeObjectURL(followState.model.url); }
     map.dragPan.enable(); if (three.on) map.dragRotate.enable();
+    map.getCanvasContainer().style.touchAction = ""; // touch back to normal
     map.scrollZoom.enable(); map.doubleClickZoom.enable(); map.touchZoomRotate.enable();
     setBasemapLabels(true);
   }
@@ -1114,7 +1118,7 @@ function followFrame() {
     st.shown.heading = (st.shown.heading + dh * 0.12 + 360) % 360; // turn smoothly through corners
     if (st.model && !map.getLayer("bus3d-model") && basemapReady()) addBusModelLayer(); // lost in a basemap reload
     if (st.model && map.getLayer("bus3d-model")) {
-      if (!st.boxCleared) { map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] }); st.boxCleared = true; }
+      if (!st.boxCleared) { map.getSource("bus3d")?.setData({ type: "FeatureCollection", features: [] }); st.boxCleared = true; } // remove any box
       // Keep the model's point fixed and slide the model with model-translation (meters [east, south, up]).
       // Replacing the point's data every frame makes Mapbox reload it constantly and the bus can vanish.
       if (!st.anchor || meters(st.anchor, st.shown.c) > 400) {
@@ -1127,7 +1131,9 @@ function followFrame() {
       // Turn the model to face its direction of travel. Model rotation turns clockwise, and at rotation 0 the
       // model's front points east, so heading - 90 points it the way the bus is driving (checked in all directions).
       map.setPaintProperty("bus3d-model", "model-rotation", [0, 0, (st.shown.heading + 270) % 360]);
-    } else map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c"));
+    } else if (!st.model) { // the simple box bus only while the detailed model is first being built
+      map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c")); st.boxCleared = false;
+    } // (model built but its layer briefly missing, e.g. after a style reload: wait for it -- no box flash)
     const cam = st.cam; cam.zoom += (cam.zoomTo - cam.zoom) * 0.18; // smooth zoom, always centered on the bus
     map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0), pitch: cam.pitch, zoom: cam.zoom,
       padding: { top: 0, bottom: 0, left: 0, right: 0 } }); // no leftover margins: the bus sits dead center
@@ -1161,15 +1167,30 @@ let followDragged = 0;
 {
   let drag = null;
   const el = map.getCanvasContainer();
-  el.addEventListener("pointerdown", (e) => { if (followState && e.button === 0) { drag = { x: e.clientX, y: e.clientY, moved: 0 }; el.setPointerCapture?.(e.pointerId); } });
+  // Touch screens (e.g. a touchscreen laptop): two fingers pinch to zoom, twist to circle the bus, move up/down to tilt.
+  const pts = new Map(); let two = null;
+  const pair = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(b.x - a.x, b.y - a.y), ang: Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI, y: (a.y + b.y) / 2 }; };
+  el.addEventListener("pointerdown", (e) => {
+    if (!followState) return;
+    if (e.pointerType === "touch") { pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size === 2) { two = pair(); drag = null; followDragged = Date.now(); return; } }
+    if (e.button === 0 && pts.size < 2) { drag = { x: e.clientX, y: e.clientY, moved: 0 }; el.setPointerCapture?.(e.pointerId); }
+  });
   el.addEventListener("pointermove", (e) => {
+    if (followState && two && pts.has(e.pointerId)) {
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (pts.size < 2) return;
+      const now = pair(), cam = followState.cam;
+      if (two.d > 0 && now.d > 0) cam.zoomTo = Math.max(14.5, Math.min(20, cam.zoomTo + Math.log2(now.d / two.d)));
+      followState.orbit = ((followState.orbit || 0) - (((now.ang - two.ang + 540) % 360) - 180)) % 360;
+      cam.pitch = Math.max(0, Math.min(map.getMaxPitch(), cam.pitch - (now.y - two.y) * 0.3));
+      two = now; return;
+    }
     if (!drag || !followState) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY, moved: drag.moved + Math.abs(dx) + Math.abs(dy) };
     if (drag.moved > 4) followDragged = Date.now(); // a drag, not a click: don't open popups when it ends
     followState.orbit = ((followState.orbit || 0) + dx * 0.4) % 360;
     followState.cam.pitch = Math.max(0, Math.min(map.getMaxPitch(), followState.cam.pitch - dy * 0.3));
   });
-  const end = () => (drag = null);
+  const end = (e) => { drag = null; if (e?.pointerId != null) pts.delete(e.pointerId); if (pts.size < 2) two = null; };
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   // Scroll to zoom in or out on the bus (street level to close-up).
   el.addEventListener("wheel", (e) => {
@@ -1199,7 +1220,7 @@ async function ensureFleetModel(p) {
 function addFleetLayer() {
   if (!fleet.on) return;
   for (const e of fleet.models.values()) if (e.ready && !map.hasModel?.(e.id)) map.addModel(e.id, e.url); // after a basemap reload
-  if (!map.getSource("fleet3d")) map.addSource("fleet3d", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  if (!map.getSource("fleet3d")) map.addSource("fleet3d", { type: "geojson", maxzoom: 14, data: { type: "FeatureCollection", features: [] } });
   fleet.sig = ""; // send data again to a new layer
   if (!map.getLayer("fleet3d")) {
     const scale = BUS_LEN / GMTBus3D.LENGTH_M;
