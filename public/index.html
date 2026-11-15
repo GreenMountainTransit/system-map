@@ -107,6 +107,12 @@
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
   .pl-same { font-weight: 700; color: var(--muted); }
+  #stop-panel .dep-row[data-trip] { cursor: pointer; } #stop-panel .dep-row[data-trip]:hover { background: var(--hover); }
+  .trip-etas-row { display: block !important; padding: 2px 0 8px 10px !important; } .te-note { margin: 2px 0 4px; font-size: .74rem; color: var(--muted); }
+  .trip-etas { list-style: none; margin: 0; padding: 0 0 0 6px; border-left: 3px solid var(--rc); font-size: .8rem; }
+  .trip-etas li { display: grid !important; grid-template-columns: 64px 1fr; gap: 6px; padding: 2px 0 2px 8px !important; border: 0 !important; }
+  .trip-etas li.here, .trip-etas li.end { font-weight: 700; } .trip-etas em { font-style: normal; font-weight: 400; color: var(--muted); }
+  .te-time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .sp-titles { flex: 1; min-width: 0; } .sp-coords { margin: 1px 0 0; font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .pl-leave { display: inline-block; margin-right: 8px; font-size: .8rem; font-weight: 700; color: var(--live); }
   .pl-nomore { margin: 10px 0; padding: 10px 12px; border-radius: 4px; background: #fff7e6; border: 1px solid #f0d49a; font-size: .84rem; line-height: 1.45; color: var(--ink); }
@@ -567,7 +573,7 @@ const GOOGLE_KEY = "__GOOGLE_KEY__";            // optional, for the embedded St
 const RELAY_URL = "__RELAY_URL__";               // the GMT relay (Cloudflare Worker), filled in at publish time (GitHub secret RELAY_URL)
 const SWIFTLY_KEY = "__SWIFTLY_KEY__";          // filled in automatically when the site is published (GitHub secret SWIFTLY_KEY)
 const REFRESH_MS = 15000;                       // how often live buses and arrival times update
-const HOME_BOUNDS = [[-73.30, 44.35], [-72.95, 44.60]]; // opening view: Burlington area out to Shelburne, Essex and Williston
+const HOME_BOUNDS = [[-73.28, 44.365], [-72.97, 44.585]]; // opening view: Burlington area out to Shelburne, Essex and Williston
 const BASEMAPS = [
   { id: "light", label: "Map", url: "mapbox://styles/mapbox/light-v11" },
   { id: "standard", label: "Detailed", url: "mapbox://styles/mapbox/standard", standard: true },
@@ -1977,6 +1983,9 @@ function applyFreq() {
   map.setPaintProperty("freq-casing", "line-width", w([1, 7, 2, 4.5, 3], [1, 15, 2, 10, 7]));
 }
 function applyView() {
+  const inPlan = view === "plan" && !routeParam;
+  document.querySelector(".spot-ctrl")?.toggleAttribute("hidden", inPlan);
+  const geo = document.querySelector(".mapboxgl-ctrl-geolocate")?.closest(".mapboxgl-ctrl"); if (geo) geo.style.display = inPlan ? "none" : "";
   if (!map.getLayer("route-lines")) return;
   const freq = view === "frequency" && !routeParam, plan = view === "plan" && !routeParam, reachV = view === "reach" && !routeParam, routesOn = !freq && !plan;
   const vis = (on) => (on ? "visible" : "none");
@@ -2179,6 +2188,9 @@ function applyFilters() {
   // While a route is hovered, everything else steps back: other lines, their casings and their buses.
   const isHl = ["in", ["get", "route_id"], ["literal", highlighted]], any = highlighted.length > 0;
   map.setPaintProperty("route-lines", "line-opacity", any ? ["case", isHl, 1, 0.2] : 1);
+  const hlStop = any ? ["any", ...highlighted.map((id) => ["in", `|${id}|`, ["get", "routes_key"]])] : true; // stops on a highlighted route
+  map.setPaintProperty("stops", "circle-opacity", any ? ["case", hlStop, 1, 0.2] : 1);
+  map.setPaintProperty("stops", "circle-stroke-opacity", any ? ["case", hlStop, 1, 0.2] : 1);
   map.setPaintProperty("route-casing", "line-opacity", any ? ["case", isHl, 1, 0.15] : (basemap.id === "satellite" ? 0.5 : 1));
   // In 3D view the flat badges fade out as the 3D buses take over up close; highlighting still dims other routes.
   const zoomFade = ["interpolate", ["linear"], ["zoom"], 14, any ? ["case", isHl, 1, 0.3] : 1, 15, 0];
@@ -2674,6 +2686,9 @@ function fitVisible() {
   const vis = visibleRoutes();
   if (!vis.length) return;
   if (vis.length === Object.keys(routes).length) return goHome();
+  // The map's starting routes (or more): back to the opening view, never further out (some routes reach Montpelier).
+  const start = Object.keys(routes).filter((r) => !defaultHidden().has(r));
+  if (start.every((r) => vis.includes(r))) return goHome();
   fitTo(linesData.features.filter((f) => vis.includes(f.properties.route_id)), true);
 }
 function goHome() { map.fitBounds(HOME_BOUNDS, { padding: panelPad(), duration: reduceMotion ? 0 : 600 }); }
@@ -2748,7 +2763,7 @@ const stopPanel = document.getElementById("stop-panel");
 stopPanel.addEventListener("click", (e) => e.stopPropagation());
 stopPanel.addEventListener("pointerup", (e) => e.stopPropagation());
 // From a stop's About routes panel, show the currently reporting buses on that route.
-stopPanel.addEventListener("click", (e) => {
+stopPanel.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-stop-route]");
   if (!btn) return;
   const rid = btn.dataset.stopRoute;
@@ -2759,10 +2774,23 @@ stopPanel.addEventListener("click", (e) => {
   }
   const vehicles = (lastBuses?.features || []).filter((f) => f.properties?.route_id === rid &&
     f.geometry?.type === "Point" && Number.isFinite(f.geometry.coordinates?.[0]) && Number.isFinite(f.geometry.coordinates?.[1]));
-  const features = [...(linesData?.features || []).filter((f) => f.properties?.route_id === rid), ...vehicles];
-  if (features.length) fitTo(features, true);
+  // The bus that will NEXT reach this stop: match the stop's upcoming arrivals on this route to live buses by trip;
+  // otherwise the nearest live bus on the route. Frame that bus and the stop together.
+  const stopC = stopsById[openStopId]?.coords;
+  let bus = null;
+  if (stopC && vehicles.length) {
+    const arr = await GMTLive.arrivals({ stop: openStopId, only: [rid] }).catch(() => null);
+    for (const a of (arr?.arrivals?.[openStopId] || []).filter((x) => !x.past).sort((x, y) => x.time - y.time)) {
+      bus = vehicles.find((v) => String(v.properties.trip_id) === String(a.trip)); if (bus) break;
+    }
+    bus ||= vehicles.reduce((b, v) => (!b || meters(v.geometry.coordinates, stopC) < meters(b.geometry.coordinates, stopC) ? v : b), null);
+  }
+  if (bus && stopC) {
+    const b = new mapboxgl.LngLatBounds(stopC, stopC); b.extend(bus.geometry.coordinates);
+    map.fitBounds(b, { padding: panelPad(), maxZoom: 16, duration: reduceMotion ? 0 : 700 });
+  } else { const features = (linesData?.features || []).filter((f) => f.properties?.route_id === rid); if (features.length) fitTo(features, true); }
   document.getElementById("announce").textContent = vehicles.length
-    ? `Showing Route ${routes[rid].short_name} and ${vehicles.length} currently reporting bus${vehicles.length===1?"":"es"}.`
+    ? `Showing the next Route ${routes[rid].short_name} bus coming to this stop.`
     : `Showing Route ${routes[rid].short_name}; no live buses currently reporting on this route.`;
 });
 
@@ -2854,7 +2882,7 @@ function showStop(id, fly) {
     : { top: 20, bottom: 20, left: 20, right: 20 };
   const inView = map.getBounds().contains(s.coords);
   if (three.on && !isPhone()) enterStopView(s); // 3D view: street-level stop view
-  else if (fly || !inView || isPhone()) map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 });
+  else map.easeTo({ center: s.coords, padding, zoom: fly ? Math.max(map.getZoom(), 15) : map.getZoom(), duration: reduceMotion ? 0 : 500 }); // always center the selected stop
   refreshPopup(true);
 }
 // A detour's temporary stop: its name, the detoured route, and next times (live from Swiftly when it predicts
@@ -2894,7 +2922,28 @@ async function tempStopTimes(t) {
   const now = Date.now() / 1000;
   return out.filter((a) => a.time >= now - 30).sort((a, b) => a.time - b.time).slice(0, 3);
 }
+// A departure in the stop panel: that trip's times at every remaining stop to the end of the line (live delay applied
+// when the bus is reporting). Tap again to close; it stays open through live updates.
+let openTripEtas = null; // trip id currently expanded
+async function toggleTripEtas(row, keepOpen) {
+  const trip = row.dataset.trip, rid = row.dataset.route, t0 = +row.dataset.time, live = row.dataset.live === "1";
+  const next = row.nextElementSibling;
+  if (next?.classList.contains("trip-etas-row")) { next.remove(); row.setAttribute("aria-expanded", "false"); if (!keepOpen) { openTripEtas = null; return; } }
+  const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch(() => []);
+  const t = sched.find((x) => x.t === trip); if (!t) return;
+  const i = t.st.findIndex((x) => x[0] === openStopId); if (i < 0) return;
+  // Which service day the trip is on (today's or yesterday's late-night trip): whichever puts this stop nearest its time.
+  const today = GMTLive.localClock().ymd, days = [today, GMTLive.shiftYmd(today, -1).ymd].map((d) => GMTLive.serviceDayStart(d));
+  const base = days.reduce((b, d) => (Math.abs(d + t.st[i][1] - t0) < Math.abs(b + t.st[i][1] - t0) ? d : b));
+  const delay = live ? t0 - (base + t.st[i][1]) : 0;
+  const rows = t.st.slice(i).map(([sid, sec], k, arr) => `<li class="${k === 0 ? "here" : k === arr.length - 1 ? "end" : ""}"><span class="te-time">${clock(base + sec + delay)}</span><span>${esc(stopsById[sid]?.name || "Stop")}${k === arr.length - 1 ? " <em>∙ end of the line</em>" : ""}</span></li>`).join("");
+  row.insertAdjacentHTML("afterend", `<li class="trip-etas-row"><p class="te-note">${live ? "Live times" : "Scheduled times"} for this trip:</p><ol class="trip-etas" style="--rc:${esc(routes[rid]?.color || "#0b6b3a")}">${rows}</ol></li>`);
+  row.setAttribute("aria-expanded", "true"); openTripEtas = trip;
+}
+document.addEventListener("click", (e) => { const r = e.target.closest?.("#stop-panel .dep-row[data-trip]"); if (r) toggleTripEtas(r); });
+document.addEventListener("keydown", (e) => { const r = e.target.closest?.("#stop-panel .dep-row[data-trip]"); if (r && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleTripEtas(r); } });
 function closeStop() {
+  openTripEtas = null;
   if (stopView) exitStopView();
   document.body.classList.remove("stop-up"); // the stop tray is going: show the alerts button again
   if (!openStopId) return;
@@ -2932,7 +2981,8 @@ async function refreshPopup(announce) {
   const openSecs = [...body.querySelectorAll("details[open] > summary")].map((x) => x.textContent.trim()), keepY = body.scrollTop;
   try { body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
     body.querySelectorAll("details > summary").forEach((x) => { if (openSecs.includes(x.textContent.trim())) x.parentElement.open = true; });
-    body.scrollTop = keepY; }
+    body.scrollTop = keepY;
+    if (openTripEtas) { const r = [...body.querySelectorAll(".dep-row[data-trip]")].find((x) => x.dataset.trip === openTripEtas); if (r) toggleTripEtas(r, true); else openTripEtas = null; } }
   catch (e) { // show something useful rather than leaving "Loading arrivals..." up
     noteError("stop panel", e);
     try { body.innerHTML = stopHtml(stopsById[id], "error", null, false); }
@@ -2969,7 +3019,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
   if (arrivals === null) body = `<p class="none">Loading arrivals…</p>`;
   else if (arrivals === "error") body = `<p class="none">Arrival times are unavailable right now.</p>`;
   else if (!arrivals.length) body = `<p class="none">No more buses scheduled at this stop today.</p>`;
-  else body = `<ol aria-labelledby="next-h">${arrivals.map((a) => `<li>${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })}
+  else body = `<ol aria-labelledby="next-h">${arrivals.map((a) => `<li class="dep-row" ${a.trip ? `data-trip="${esc(a.trip)}" data-route="${esc(a.route_id)}" data-time="${a.time}" data-live="${a.live ? 1 : 0}" role="button" tabindex="0" aria-expanded="false" title="Show this trip's times at each stop"` : ""}>${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })}
       <span>${esc(a.headsign ? "To " + a.headsign : "")}</span>
       <span class="when ${a.live ? "live" : ""}">${when(a.time)}<small>${a.live ? "Live" : "Scheduled"}</small></span></li>`).join("")}</ol>`;
 
@@ -3732,6 +3782,7 @@ function bikeBusIntro(o) {
 // No bus trips left on the chosen day: say so plainly, with when buses run again for this trip and a button to see
 // that day's trips -- never mixing in another day's buses or suggesting an overnight wait.
 function noMoreBusesHtml(r) {
+  if (r.walkFaster && !r.options.length) return `<div class="pl-nomore" role="status"><strong>Walking is faster than any bus for this trip${planState.dayOffset ? " at that time" : " right now"}.</strong> Bus trips that would take longer than walking aren’t shown.</div>`;
   if (r.options.length || r.error || r.arriveBy) return "";
   const today = !planState.dayOffset, dayName = planDays()[planState.dayOffset] || "that day";
   const head = today ? "No more buses today for this trip." : `No buses on ${esc(dayName)} for this trip at that time.`;

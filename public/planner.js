@@ -579,10 +579,17 @@
       for (const o of runs) collect(n, from, to, depart, o, options, seen);
       result = finish(options, from, to);
     }
+    // Bus trips slower than simply walking the whole way are dropped (as Google Maps and OpenTripPlanner do): e.g. riding
+    // a bus out to the end of the line and back late at night. If none are left, the page shows the walk instead.
+    if (!prefs.bike) {
+      const walkAll = walkSecs(meters(from, to)), before = result.options.length;
+      result.options = result.options.filter((o) => (arriveBy ? o.arrive - o.depart : o.arrive - depart) < walkAll);
+      if (before && !result.options.length) result.walkFaster = true;
+    }
     // No bus trips left on this day: find the next day with service for this trip, and its first departure, so the
     // page can say so plainly ("Buses run again tomorrow (Monday) from 5:42 AM") instead of mixing days.
     let next = null;
-    if (!result.options.length && !arriveBy) {
+    if (!result.options.length && !arriveBy && !result.walkFaster) {
       for (let k = 1; dayOffset + k <= 6 && !next; k++) { // within the days the page offers (today + 6)
         const o2 = dayOffset + k, n2 = await network(o2), d2 = dayAt(o2);
         n2.patterns.forEach((p) => p.trips.forEach((t) => { t.times = t.sched.slice(); t.live = false; }));
