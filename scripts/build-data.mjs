@@ -210,6 +210,18 @@ for (const [routeId, list] of tripsByRoute) {
 }
 
 // ---------- legend groups and descriptions ----------
+// Staff descriptions in route-info.json "routes": { "<route number>": "<text>" }. Blank means "use the GTFS description".
+// Mistakes are warnings in the build summary, never a failed build: a route number that isn't in the schedule, or a
+// value that isn't text, is skipped and the rest publishes normally.
+const staffDesc = (short) => { const v = routeInfo.routes?.[short]; return typeof v === "string" ? v.trim() : ""; };
+{
+  const known = new Set(routes.map((r) => String(r.route_short_name || "").trim()));
+  for (const [k, v] of Object.entries(routeInfo.routes || {})) {
+    if (k.startsWith("_")) continue;
+    if (!known.has(k)) console.log(`::warning::route-info.json describes route "${k}", which isn't in the current schedule (check the route number).`);
+    else if (typeof v !== "string") console.log(`::warning::route-info.json: route ${k}'s description isn't text in quotes, so it was skipped.`);
+  }
+}
 function groupFor(short) {
   for (const g of routeInfo.groups || []) {
     if (g.routes?.includes(short)) return g.id;
@@ -224,7 +236,8 @@ const routeMeta = (r) => {
     route_id: r.route_id, short_name: short, long_name: r.route_long_name || "",
     color: "#" + (r.route_color || "00703C"), text_color: "#" + (r.route_text_color || "FFFFFF"),
     sort: Number(r.route_sort_order) || 0, group,
-    description: routeInfo.routes?.[short] || (group === "school" ? `School-day trips: ${r.route_long_name}.` : ""),
+    // Description: route-info.json (staff) first, then the GTFS route_desc, then (school trippers) an automatic line.
+    description: staffDesc(short) || (r.route_desc || "").trim() || (group === "school" ? `School-day trips: ${r.route_long_name}.` : ""),
     service: service[r.route_id] || null,
   };
 };
