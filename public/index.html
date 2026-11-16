@@ -398,6 +398,11 @@
   .ra-box > summary svg { flex: 0 0 auto; width: 16px; height: 16px; }
   .ra-box .alerts { margin: 0 !important; padding: 0 8px 8px; }
   .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
+  /* Mapbox sets Helvetica on the map, which popups and map buttons would inherit: use the site's Overpass (Highway
+     Gothic style) there too, so hover tips, popups and controls all match. */
+  .mapboxgl-map, .mapboxgl-map button, .mapboxgl-popup, .mapboxgl-ctrl { font-family: "Overpass", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  /* Mapbox sets Helvetica on the map; use the page's Overpass (Highway Gothic style) for popups and map controls too. */
+  .mapboxgl-map, .mapboxgl-popup, .mapboxgl-ctrl, .mapboxgl-ctrl button { font-family: "Overpass", "Helvetica Neue", Helvetica, Arial, sans-serif; }
   .mapboxgl-popup-content { font-family: inherit; padding: 14px 16px 12px; border-radius: 4px; box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); }
   .mapboxgl-popup-close-button { font-size: 20px; width: 28px; height: 28px; right: 4px; top: 4px; color: var(--muted); }
   .pop { min-width: 240px; }
