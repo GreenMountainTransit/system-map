@@ -110,7 +110,8 @@
   #stop-panel .dep-row[data-trip] { cursor: pointer; } #stop-panel .dep-row[data-trip]:hover { background: var(--hover); }
   .trip-etas-row { display: block !important; padding: 2px 0 8px 10px !important; } .te-note { margin: 2px 0 4px; font-size: .74rem; color: var(--muted); }
   .trip-etas { list-style: none; margin: 0; padding: 0 0 0 6px; border-left: 3px solid var(--rc); font-size: .8rem; }
-  .trip-etas li { display: grid !important; grid-template-columns: 64px 1fr; gap: 6px; padding: 2px 0 2px 8px !important; border: 0 !important; }
+  .trip-etas li { display: grid !important; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; padding: 2px 0 2px 8px !important; border: 0 !important; }
+  .trip-etas li > span:last-child { overflow-wrap: anywhere; min-width: 0; } .trip-etas-row, .trip-etas { max-width: 100%; box-sizing: border-box; }
   .trip-etas li.here, .trip-etas li.end { font-weight: 700; } .trip-etas em { font-style: normal; font-weight: 400; color: var(--muted); }
   .te-time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .sp-titles { flex: 1; min-width: 0; } .sp-coords { margin: 1px 0 0; font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -2939,9 +2940,18 @@ async function toggleTripEtas(row, keepOpen) {
   const rows = t.st.slice(i).map(([sid, sec], k, arr) => `<li class="${k === 0 ? "here" : k === arr.length - 1 ? "end" : ""}"><span class="te-time">${clock(base + sec + delay)}</span><span>${esc(stopsById[sid]?.name || "Stop")}${k === arr.length - 1 ? " <em>∙ end of the line</em>" : ""}</span></li>`).join("");
   row.insertAdjacentHTML("afterend", `<li class="trip-etas-row"><p class="te-note">${live ? "Live times" : "Scheduled times"} for this trip:</p><ol class="trip-etas" style="--rc:${esc(routes[rid]?.color || "#0b6b3a")}">${rows}</ol></li>`);
   row.setAttribute("aria-expanded", "true"); openTripEtas = trip;
+  if (!keepOpen) {
+    if (isPhone() && stopPanel.dataset.snap !== "open") snapSheet(stopPanel, "open"); // phones: room for the list
+    setTimeout(() => row.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" }), 250);
+  }
 }
-document.addEventListener("click", (e) => { const r = e.target.closest?.("#stop-panel .dep-row[data-trip]"); if (r) toggleTripEtas(r); });
-document.addEventListener("keydown", (e) => { const r = e.target.closest?.("#stop-panel .dep-row[data-trip]"); if (r && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleTripEtas(r); } });
+// Listened for on the stop panel itself: the panel stops clicks from reaching the page (see stopPanel listeners).
+stopPanel.addEventListener("click", (e) => { // service alerts inside a stop's panel: show the affected routes
+  const li = e.target.closest?.(".al-click"); if (!li || e.target.closest("a")) return;
+  focusAlertRoutes(li.dataset.routes.split(","));
+});
+stopPanel.addEventListener("click", (e) => { const r = e.target.closest?.(".dep-row[data-trip]"); if (r) toggleTripEtas(r); });
+stopPanel.addEventListener("keydown", (e) => { const r = e.target.closest?.(".dep-row[data-trip]"); if (r && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleTripEtas(r); } });
 function closeStop() {
   openTripEtas = null;
   if (stopView) exitStopView();
@@ -2970,7 +2980,7 @@ async function refreshPopup(announce) {
   const open = (list) => list.filter((a) => !closed.includes(a.route_id));
   // Never wait forever: after 10 seconds, show what we have (scheduled times, or a message) and try again next update.
   const limit = (p) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timed out after 10 s")), 10000))]);
-  try { const r = await limit(GMTLive.arrivals({ stop: id, only })); arrivals = open(r.arrivals[id] || []); feedLive = r.live; }
+  try { const r = await limit(GMTLive.arrivals({ stop: id, only, count: 8 })); arrivals = open(r.arrivals[id] || []); feedLive = r.live; }
   catch (e) { noteError("departures", e); }
   if (showAllTimes) try { allTimes = open((await limit(GMTLive.arrivals({ stop: id, all: true, only }))).arrivals[id] || []); } catch (e) { noteError("all times", e); }
   if (id !== openStopId) return;

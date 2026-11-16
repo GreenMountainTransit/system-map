@@ -351,7 +351,7 @@
     return best === day ? tu : null;
   }
 
-  async function arrivals({ stop, route, all, only }) {
+  async function arrivals({ stop, route, all, only, count = COUNT }) { // count: how many upcoming departures per stop
     const [meta, cal, stops] = await Promise.all([data("routes.json"), data("calendar.json"), data("stops.geojson")]);
     // Live predictions (one stop at a time) are optional: if Swiftly can't be reached, scheduled times still show.
     let live = false, preds = [], tus = new Map();
@@ -416,7 +416,7 @@
       }
       result[stop] = list;
     }
-    const next = (list) => list.filter((a) => all || a.time >= clock.now - 30).sort((a, b) => a.time - b.time).slice(0, COUNT);
+    const next = (list) => list.filter((a) => all || a.time >= clock.now - 30).sort((a, b) => a.time - b.time).slice(0, count);
     for (const sid in result) {
       if (all) { result[sid].sort((a, b) => a.time - b.time); continue; }
       if (stop) { result[sid] = next(result[sid]); continue; }
