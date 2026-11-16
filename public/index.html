@@ -113,6 +113,7 @@
   .trip-etas li { display: grid !important; grid-template-columns: 64px minmax(0, 1fr); gap: 6px; padding: 2px 0 2px 8px !important; border: 0 !important; }
   .trip-etas li > span:last-child { overflow-wrap: anywhere; min-width: 0; } .trip-etas-row, .trip-etas { max-width: 100%; box-sizing: border-box; }
   .trip-etas li.here, .trip-etas li.end { font-weight: 700; } .trip-etas em { font-style: normal; font-weight: 400; color: var(--muted); }
+  .dep-cont { display: block; font-size: .74rem; color: var(--muted); font-weight: 400; }
   .te-time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .sp-titles { flex: 1; min-width: 0; } .sp-coords { margin: 1px 0 0; font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .pl-leave { display: inline-block; margin-right: 8px; font-size: .8rem; font-weight: 700; color: var(--live); }
@@ -2926,8 +2927,31 @@ async function tempStopTimes(t) {
 // A departure in the stop panel: that trip's times at every remaining stop to the end of the line (live delay applied
 // when the bus is reporting). Tap again to close; it stays open through live updates.
 let openTripEtas = null; // trip id currently expanded
+// Does this bus carry on past the end of its trip? The same bus (same GTFS block) leaving the last stop again within
+// 10 minutes -- a short pause, not a real layover -- on the same route or as another route (interlining).
+const CONTINUE_MAX = 10 * 60;
+async function continuation(t, rid) {
+  if (!t?.b) return null;
+  const last = t.st[t.st.length - 1], lastStop = last[0], lastTime = last[1];
+  const rids = [...new Set([rid, ...(stopsById[lastStop]?.routes || [])])];
+  for (const r of rids) {
+    const sched = await GMTLive.data(`sched/${encodeURIComponent(r)}.json`).catch(() => []);
+    const next = sched.find((x) => x.b === t.b && x.s === t.s && x.t !== t.t && x.st[0][0] === lastStop && x.st[0][1] >= lastTime && x.st[0][1] - lastTime <= CONTINUE_MAX);
+    if (next) return { route: r, short: routes[r]?.short_name || r, to: next.h || stopsById[next.st[next.st.length - 1][0]]?.name || "" , sameRoute: r === rid };
+  }
+  return null;
+}
+const continuesText = (c) => (c.sameRoute ? `continues to ${c.to}` : `continues as Route ${c.short} to ${c.to}`);
+// After the departures are drawn: note on each one whose bus continues past the end of its trip.
+async function noteContinuations(body) {
+  for (const row of body.querySelectorAll(".dep-row[data-trip]")) {
+    const sched = await GMTLive.data(`sched/${encodeURIComponent(row.dataset.route)}.json`).catch(() => []);
+    const c = await continuation(sched.find((x) => x.t === row.dataset.trip), row.dataset.route);
+    if (c && row.isConnected && !row.querySelector(".dep-cont")) row.children[1]?.insertAdjacentHTML("beforeend", `<small class="dep-cont">then ${esc(continuesText(c))}</small>`);
+  }
+}
 async function toggleTripEtas(row, keepOpen) {
-  const trip = row.dataset.trip, rid = row.dataset.route, t0 = +row.dataset.time, live = row.dataset.live === "1";
+  const trip = row.dataset.trip, rid = row.dataset.route, t0 = +row.dataset.time, live = row.dataset.islive === "1"; // (not data-live: that's the route list's live-count slot)
   const next = row.nextElementSibling;
   if (next?.classList.contains("trip-etas-row")) { next.remove(); row.setAttribute("aria-expanded", "false"); if (!keepOpen) { openTripEtas = null; return; } }
   const sched = await GMTLive.data(`sched/${encodeURIComponent(rid)}.json`).catch(() => []);
@@ -2937,7 +2961,9 @@ async function toggleTripEtas(row, keepOpen) {
   const today = GMTLive.localClock().ymd, days = [today, GMTLive.shiftYmd(today, -1).ymd].map((d) => GMTLive.serviceDayStart(d));
   const base = days.reduce((b, d) => (Math.abs(d + t.st[i][1] - t0) < Math.abs(b + t.st[i][1] - t0) ? d : b));
   const delay = live ? t0 - (base + t.st[i][1]) : 0;
-  const rows = t.st.slice(i).map(([sid, sec], k, arr) => `<li class="${k === 0 ? "here" : k === arr.length - 1 ? "end" : ""}"><span class="te-time">${clock(base + sec + delay)}</span><span>${esc(stopsById[sid]?.name || "Stop")}${k === arr.length - 1 ? " <em>∙ end of the line</em>" : ""}</span></li>`).join("");
+  const cont = await continuation(t, rid);
+  const endNote = cont ? `the bus ${esc(continuesText(cont))}` : "end of the line";
+  const rows = t.st.slice(i).map(([sid, sec], k, arr) => `<li class="${k === 0 ? "here" : k === arr.length - 1 ? "end" : ""}"><span class="te-time">${clock(base + sec + delay)}</span><span>${esc(stopsById[sid]?.name || "Stop")}${k === arr.length - 1 ? ` <em>∙ ${endNote}</em>` : ""}</span></li>`).join("");
   row.insertAdjacentHTML("afterend", `<li class="trip-etas-row"><p class="te-note">${live ? "Live times" : "Scheduled times"} for this trip:</p><ol class="trip-etas" style="--rc:${esc(routes[rid]?.color || "#0b6b3a")}">${rows}</ol></li>`);
   row.setAttribute("aria-expanded", "true"); openTripEtas = trip;
   if (!keepOpen) {
@@ -2992,6 +3018,7 @@ async function refreshPopup(announce) {
   try { body.innerHTML = stopHtml(stopsById[id], arrivals, allTimes, feedLive);
     body.querySelectorAll("details > summary").forEach((x) => { if (openSecs.includes(x.textContent.trim())) x.parentElement.open = true; });
     body.scrollTop = keepY;
+    noteContinuations(body);
     if (openTripEtas) { const r = [...body.querySelectorAll(".dep-row[data-trip]")].find((x) => x.dataset.trip === openTripEtas); if (r) toggleTripEtas(r, true); else openTripEtas = null; } }
   catch (e) { // show something useful rather than leaving "Loading arrivals..." up
     noteError("stop panel", e);
@@ -3029,7 +3056,7 @@ function stopHtml(s, arrivals, allTimes, feedLive) {
   if (arrivals === null) body = `<p class="none">Loading arrivals…</p>`;
   else if (arrivals === "error") body = `<p class="none">Arrival times are unavailable right now.</p>`;
   else if (!arrivals.length) body = `<p class="none">No more buses scheduled at this stop today.</p>`;
-  else body = `<ol aria-labelledby="next-h">${arrivals.map((a) => `<li class="dep-row" ${a.trip ? `data-trip="${esc(a.trip)}" data-route="${esc(a.route_id)}" data-time="${a.time}" data-live="${a.live ? 1 : 0}" role="button" tabindex="0" aria-expanded="false" title="Show this trip's times at each stop"` : ""}>${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })}
+  else body = `<ol aria-labelledby="next-h">${arrivals.map((a) => `<li class="dep-row" ${a.trip ? `data-trip="${esc(a.trip)}" data-route="${esc(a.route_id)}" data-time="${a.time}" data-islive="${a.live ? 1 : 0}" role="button" tabindex="0" aria-expanded="false" title="Show this trip's times at each stop"` : ""}>${chip(routes[a.route_id] || { short_name: a.short_name, color: a.color })}
       <span>${esc(a.headsign ? "To " + a.headsign : "")}</span>
       <span class="when ${a.live ? "live" : ""}">${when(a.time)}<small>${a.live ? "Live" : "Scheduled"}</small></span></li>`).join("")}</ol>`;
 
