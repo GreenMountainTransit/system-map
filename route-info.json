@@ -1,5 +1,12 @@
 {
   "_help": "STAFF CONTENT: Change routes descriptions and groups here (no code). Commit; GitHub Actions automatically rebuilds and publishes. Frequency overrides are manual exceptions, not the preferred source. See STAFF_EDITING_GUIDE.md.",
+  "_how_to_edit_route_descriptions": [
+    "Each route's description (shown in the route list and on the route's page) is under \"routes\" below, by route number.",
+    "To change one: edit only the text between the quotes after the route number. Keep the quotes and the comma at the end of the line.",
+    "To use the description from GMT's GTFS (if it has one), leave the quotes empty: \"\".",
+    "A new route? Add a line like  \"12\": \"Downtown to the airport via Airport Drive.\",  (any position is fine).",
+    "Commit the change on GitHub: the map rebuilds and publishes within a few minutes. A typo in a route number shows as a warning, not an error."
+  ],
   "ridership": {
     "layer": "https://services6.arcgis.com/1pxfKKnRqKBsikRV/arcgis/rest/services/Detail_Ridership_V2/FeatureServer/0",
     "dashboard": "https://ridegmt.com/dashboards/"
@@ -68,6 +75,16 @@
     "20": "Wednesday shopping trip from Winooski and Burlington senior housing to Market 32.",
     "86": "Downtown Burlington to Montpelier via I-89, stopping in Williston, Richmond and Waterbury.",
     "96": "Downtown Burlington to St. Albans via US 7 and I-89, serving Winooski, Colchester, Milton and Georgia.",
+    "109": "",
+    "326": "",
+    "334": "",
+    "336": "",
+    "337": "",
+    "342": "",
+    "344": "",
+    "347": "",
+    "348": "",
+    "349": "",
     "756": "Sunday loop from downtown Burlington through the South End via Pine Street and Shelburne Road.",
     "778": "Sunday loop from downtown Burlington through the North End via North Avenue."
   },

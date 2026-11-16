@@ -11,6 +11,20 @@ For route legend groups, edit the **groups** entries in the same file. The `defa
 
 For stop amenities, edit **amenities.csv** with a spreadsheet editor, preserving column names and stop IDs. See MAINTENANCE.md for field definitions. Commit the CSV and wait for Actions.
 
+## Route descriptions
+
+Each route's one-line description (shown in the route list and on its route page) lives in **`route-info.json`**, under `"routes"`, listed by route number. Every route is already in the list.
+
+1. On GitHub, open `route-info.json` and click the **pencil** (Edit).
+2. Find the route number, for example `"2": "Downtown Burlington to the Essex Junction Amtrak station ..."`.
+3. Change **only the text between the quotes**. Keep the quotes and the comma at the end of the line.
+4. Click **Commit changes**. The map rebuilds and publishes within a few minutes.
+
+- **Leave the quotes empty (`""`)** to use the description from GMT's GTFS, if it has one, or show none.
+- **A new route:** add a line like `"12": "Downtown to the airport via Airport Drive.",` anywhere in the list.
+- **Mistakes are safe:** a route number that isn't in the schedule only shows a warning in the build summary. If the file itself can't be read (for example a missing quote or comma), the build stops, the current map stays up, and a "Map update failed" issue explains what happened.
+- Don't edit `public/data/routes.json`: it's rebuilt every night from the GTFS and `route-info.json`.
+
 ## Frequency map — how to explain it to riders
 
 It shows estimated scheduled local buses per hour on shared street segments, expressed in approximate intervals. Routes sharing streets are combined. The current build classifies trips using a reference time at DTC, or the route's origin when DTC is not served. This is a corridor-level average, not actual stop headways, and does not capture bunching or direction-specific departures. The stop timetable and trip planner are better for time-specific travel decisions.
