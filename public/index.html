@@ -2300,6 +2300,8 @@ map.on("click", (e) => {
   const f = map.queryRenderedFeatures(box, { layers: clickable })[0];
   // Clicking anywhere except another stop closes the stop panel.
   if (f?.layer.id !== "stops" && f?.layer.id !== "detour-temp") closeStop();
+  // Clicking anywhere that isn't a bus lets a clicked bus go: the route list goes back to what it was.
+  if (busFocus && f?.layer.id !== "buses") restoreBusFocus();
   if (!f) return;
   const p = f.properties;
   hideTip();
@@ -2310,7 +2312,10 @@ map.on("click", (e) => {
   if (f.layer.id === "buses" && three.on) { openPopup?.remove(); startFollow(p); return; }
   if (f.layer.id === "buses") {
     if (!routeParam && view === "routes" && routes[p.route_id]) { // show just this bus's route, as if chosen in the list
+      // Remember the route list as it was, to put back when the bus is let go (click elsewhere or close its popup).
+      if (!busFocus) busFocus = { hidden: new Set(hidden), picking, stopFocus };
       stopFocus = null; hidden = new Set(Object.keys(routes).filter((x) => x !== p.route_id)); picking = true;
+      busFocus.applied = [...hidden].sort().join(",");
       buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
       document.getElementById("announce").textContent = `Showing only Route ${routes[p.route_id].short_name}. Tap the route in the list again to show all routes.`;
     }
@@ -2335,6 +2340,9 @@ map.on("click", (e) => {
       <p class="sub">${many ? `Routes ${esc(p.routes)} combined` : `Route ${esc(p.routes)}`} ∙ ${per.note}</p></div>`;
   }
   openPopup = new mapboxgl.Popup({ offset: 12, maxWidth: "min(330px, 92vw)" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
+  if (f.layer.id === "buses" && busFocus) { // closing the bus's popup (its ×) also lets the bus go -- unless another bus's popup replaced it
+    const mine = openPopup; mine.on("close", () => setTimeout(() => { if (openPopup === mine || !openPopup?.isOpen()) restoreBusFocus(); }, 0));
+  }
   openPopup.on("close", () => { if (!openStopId) highlight([]); });
   openPopup.getElement().querySelector("[data-solo]")?.addEventListener("click", (ev) => { openPopup.remove(); focusRoute(ev.target.dataset.solo); });
 });
@@ -2983,6 +2991,16 @@ stopPanel.addEventListener("click", (e) => { // service alerts inside a stop's p
 });
 stopPanel.addEventListener("click", (e) => { const r = e.target.closest?.(".dep-row[data-trip]"); if (r) toggleTripEtas(r); });
 stopPanel.addEventListener("keydown", (e) => { const r = e.target.closest?.(".dep-row[data-trip]"); if (r && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleTripEtas(r); } });
+// A bus click filters to its route; letting the bus go puts the route list back as it was -- unless the rider changed
+// the list in the meantime (then their change stays).
+let busFocus = null;
+function restoreBusFocus() {
+  const bf = busFocus; busFocus = null; if (!bf) return;
+  if ([...hidden].sort().join(",") !== bf.applied) return; // the rider changed the list since: keep it
+  hidden = bf.hidden; picking = bf.picking; stopFocus = bf.stopFocus;
+  buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
+  document.getElementById("announce").textContent = "Showing the routes you had selected.";
+}
 function closeStop() {
   openTripEtas = null;
   if (stopView) exitStopView();
