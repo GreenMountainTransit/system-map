@@ -7,6 +7,11 @@
     "A new route? Add a line like  \"12\": \"Downtown to the airport via Airport Drive.\",  (any position is fine).",
     "Commit the change on GitHub: the map rebuilds and publishes within a few minutes. A typo in a route number shows as a warning, not an error."
   ],
+  "_how_to_edit_route_list_lines": [
+    "The short line under each route's name in the route list (e.g. \"Daily · weekdays every 20 min, 35 min evenings\") is worked out from the schedule.",
+    "To write your own for a route, put it between the quotes after the route number under \"legend_lines\". Keep the quotes and the comma.",
+    "Leave the quotes empty (\"\") to keep the automatic line. The live bus count (\"· 4 live\") is still added after your text."
+  ],
   "ridership": {
     "layer": "https://services6.arcgis.com/1pxfKKnRqKBsikRV/arcgis/rest/services/Detail_Ridership_V2/FeatureServer/0",
     "dashboard": "https://ridegmt.com/dashboards/"
@@ -87,6 +92,34 @@
     "349": "",
     "756": "Sunday loop from downtown Burlington through the South End via Pine Street and Shelburne Road.",
     "778": "Sunday loop from downtown Burlington through the North End via North Avenue."
+  },
+  "legend_lines": {
+    "1": "",
+    "2": "",
+    "4": "",
+    "5": "",
+    "6": "",
+    "7": "",
+    "8": "",
+    "9": "",
+    "11": "",
+    "16": "",
+    "19": "",
+    "20": "",
+    "86": "",
+    "96": "",
+    "109": "",
+    "326": "",
+    "334": "",
+    "336": "",
+    "337": "",
+    "342": "",
+    "344": "",
+    "347": "",
+    "348": "",
+    "349": "",
+    "756": "",
+    "778": ""
   },
   "trip_costs": {
     "_help": "Used for 'Save about $X vs. driving' in the trip planner. Update gas_price (and gas_price_as_of) every few months. Per-mile costs are cents per mile.",

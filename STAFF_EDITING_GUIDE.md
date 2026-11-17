@@ -25,6 +25,8 @@ Each route's one-line description (shown in the route list and on its route page
 - **Mistakes are safe:** a route number that isn't in the schedule only shows a warning in the build summary. If the file itself can't be read (for example a missing quote or comma), the build stops, the current map stays up, and a "Map update failed" issue explains what happened.
 - Don't edit `public/data/routes.json`: it's rebuilt every night from the GTFS and `route-info.json`.
 
+**The short line under each route's name** in the route list (for example "Daily · weekdays every 20 min, 35 min evenings") is worked out from the schedule. To write your own, use **`"legend_lines"`** in the same file, in the same way: text between the quotes replaces the automatic line for that route, and empty quotes (`""`) keep the automatic one. The live bus count ("· 4 live") is still added after your text. Remember to update your line if the schedule changes, since it won't update itself.
+
 ## Frequency map — how to explain it to riders
 
 It shows estimated scheduled local buses per hour on shared street segments, expressed in approximate intervals. Routes sharing streets are combined. The current build classifies trips using a reference time at DTC, or the route's origin when DTC is not served. This is a corridor-level average, not actual stop headways, and does not capture bunching or direction-specific departures. The stop timetable and trip planner are better for time-specific travel decisions.
