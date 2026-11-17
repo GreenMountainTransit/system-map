@@ -102,7 +102,7 @@ The legend is clickable to show or hide each tier. Link straight to it with `?vi
 
 ## What updates automatically
 
-Every night the workflow downloads GMT's current GTFS and rebuilds everything that comes from it: routes, names, colors, route shapes, stops, stop order, timepoints, schedules and arrival times, frequencies and the service wording ("every 20 min peak, 30 min other times"), first and last trips, and the frequency map. New routes appear on their own (300-series routes go in School trippers automatically; anything else not listed in `route-info.json` goes in Local routes).
+Every night the workflow downloads GMT's current GTFS and rebuilds everything that comes from it: routes, names, colors, route shapes, stops, stop order, timepoints, schedules and arrival times, frequencies and the service wording ("every 20 min peak, 30 min other times"), first and last trips, and the frequency map. New routes appear on their own (300-series routes go in Neighborhood Specials automatically; anything else not listed in `route-info.json` goes in Local routes).
 
 Not automatic: route descriptions and group assignments in `route-info.json`, stop amenities in `amenities.csv` (if GMT renumbers stops, regenerate it), and the opening map view (`HOME_BOUNDS` in `public/index.html`).
 

@@ -56,7 +56,7 @@
     },
     {
       "id": "school",
-      "name": "School trippers",
+      "name": "Neighborhood Specials",
       "range": [
         300,
         399
@@ -95,7 +95,7 @@
   },
   "legend_lines": {
     "1": "",
-    "2": "Daily ∙ weekdays every 20 min",
+    "2": "",
     "4": "",
     "5": "",
     "6": "",

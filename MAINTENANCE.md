@@ -50,7 +50,7 @@ Descriptions appear when hovering a route, in stop details, and at the top of ro
 If you break the file's formatting (a missing quote or comma), the build fails and the old version stays up. Open the failed run to see the line number, then fix it.
 
 ### A new route appears, or a route changes groups
-New routes appear on the map automatically, in **Local routes** (300-series routes go to **School trippers** automatically).
+New routes appear on the map automatically, in **Local routes** (300-series routes go to **Neighborhood Specials** automatically).
 - To give it a description, add a line to `"routes"` in `route-info.json`, like `"12": "Downtown Burlington to …",`
 - To put it in a different group, add its number to that group's `"routes"` list near the top of `route-info.json`.
 - To change whether a group is shown when the map opens, change its `"default"` to `"on"`, `"off"` or `"sundays"`.
