@@ -238,9 +238,9 @@ const routeMeta = (r) => {
     route_id: r.route_id, short_name: short, long_name: r.route_long_name || "",
     color: "#" + (r.route_color || "00703C"), text_color: "#" + (r.route_text_color || "FFFFFF"),
     sort: Number(r.route_sort_order) || 0, group,
-    // Description: route-info.json (staff) first, then the GTFS route_desc, then (school trippers) an automatic line.
+    // Description: route-info.json (staff) first, then the GTFS route_desc, then (Neighborhood Specials) an automatic line.
     legend: staffLegend(short), // staff override for the route list's short line ("" = automatic)
-    description: staffDesc(short) || (r.route_desc || "").trim() || (group === "school" ? `School-day trips: ${r.route_long_name}.` : ""),
+    description: staffDesc(short) || (r.route_desc || "").trim() || (group === "school" ? `Neighborhood Special: ${r.route_long_name}.` : ""),
     service: service[r.route_id] || null,
   };
 };
