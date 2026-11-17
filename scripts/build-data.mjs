@@ -214,9 +214,11 @@ for (const [routeId, list] of tripsByRoute) {
 // Mistakes are warnings in the build summary, never a failed build: a route number that isn't in the schedule, or a
 // value that isn't text, is skipped and the rest publishes normally.
 const staffDesc = (short) => { const v = routeInfo.routes?.[short]; return typeof v === "string" ? v.trim() : ""; };
+// Staff's short line for the route list (route-info.json "legend_lines"); blank keeps the line worked out from the schedule.
+const staffLegend = (short) => { const v = routeInfo.legend_lines?.[short]; return typeof v === "string" ? v.trim() : ""; };
 {
   const known = new Set(routes.map((r) => String(r.route_short_name || "").trim()));
-  for (const [k, v] of Object.entries(routeInfo.routes || {})) {
+  for (const [k, v] of [...Object.entries(routeInfo.routes || {}), ...Object.entries(routeInfo.legend_lines || {})]) {
     if (k.startsWith("_")) continue;
     if (!known.has(k)) console.log(`::warning::route-info.json describes route "${k}", which isn't in the current schedule (check the route number).`);
     else if (typeof v !== "string") console.log(`::warning::route-info.json: route ${k}'s description isn't text in quotes, so it was skipped.`);
@@ -237,6 +239,7 @@ const routeMeta = (r) => {
     color: "#" + (r.route_color || "00703C"), text_color: "#" + (r.route_text_color || "FFFFFF"),
     sort: Number(r.route_sort_order) || 0, group,
     // Description: route-info.json (staff) first, then the GTFS route_desc, then (school trippers) an automatic line.
+    legend: staffLegend(short), // staff override for the route list's short line ("" = automatic)
     description: staffDesc(short) || (r.route_desc || "").trim() || (group === "school" ? `School-day trips: ${r.route_long_name}.` : ""),
     service: service[r.route_id] || null,
   };
