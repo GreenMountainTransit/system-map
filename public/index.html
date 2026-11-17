@@ -107,6 +107,9 @@
   .t-last { margin: 4px 0 0; font-size: .74rem; font-weight: 600; color: var(--ink); }
   .st-stay { display: block; margin: 2px 0; font-size: .74rem; font-weight: 700; color: var(--live); }
   .pl-same { font-weight: 700; color: var(--muted); }
+  .svc-box { margin: 8px 0; font-size: .84rem; } .svc-box > summary { cursor: pointer; list-style: none; color: var(--ink); }
+  .svc-box > summary::-webkit-details-marker { display: none; } .svc-box > summary::after { content: " ▸"; color: var(--muted); } .svc-box[open] > summary::after { content: " ▾"; }
+  .svc-box .svc { margin-top: 6px; }
   #stop-panel .dep-row[data-trip] { cursor: pointer; } #stop-panel .dep-row[data-trip]:hover { background: var(--hover); }
   .trip-etas-row { display: block !important; padding: 2px 0 8px 10px !important; } .te-note { margin: 2px 0 4px; font-size: .74rem; color: var(--muted); }
   .trip-etas { list-style: none; margin: 0; padding: 0 0 0 6px; border-left: 3px solid var(--rc); font-size: .8rem; }
@@ -625,7 +628,7 @@ function mobileOS() {
     || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1); // iPadOS reports itself as a Mac
 }
 function desktopTools() { return innerWidth > 640 && !mobileOS(); }
-let view = ["frequency", "plan", ...(desktopTools() ? ["reach"] : [])].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
+let view = ["plan", ...(innerWidth <= 640 ? [] : ["frequency"]), ...(desktopTools() ? ["reach"] : [])].includes(new URLSearchParams(location.search).get("view")) ? new URLSearchParams(location.search).get("view") : "routes";
 let tripCosts = null; // driving-cost settings from route-info.json (trip_costs)
 const money2 = (x) => `$${Number(x) % 1 ? Number(x).toFixed(2) : Number(x)}`;
 // Stops GMT's GTFS marks as timed transfer points (transfers.txt type 1), for "Timed transfer" wording in trip steps.
@@ -1663,7 +1666,7 @@ const dataReady = Promise.all(["routes.geojson", "stops.geojson", "routes.json"]
     if (routeParam && !routes[routeParam]) { missingRoute = routeParam; routeParam = null; }
     hidden = defaultHidden();
   });
-// The routes hidden when the map opens: groups set "off" (school trippers, Shopping Specials) and Sunday-only routes
+// The routes hidden when the map opens: groups set "off" (Neighborhood Specials, Shopping Specials) and Sunday-only routes
 // on other days. Also where the route list returns when the only route shown is tapped again.
 function defaultHidden() {
   const out = new Set();
@@ -1820,7 +1823,7 @@ function addOverlay() {
   if (!map.getSource("stops")) map.addSource("stops", { type: "geojson", data: stopsData });
   if (!map.getSource("buses")) map.addSource("buses", { type: "geojson", data: lastBuses });
   const sat = basemap.id === "satellite";
-  // Local routes draw on top of commuter, Sunday, shopping and school routes where they overlap.
+  // Local routes draw on top of commuter, Sunday, shopping and Neighborhood Special routes where they overlap.
   const onTop = ["match", ["get", "group"], "local", 1, 0];
   const width = (a, b) => ["interpolate", ["linear"], ["zoom"], 9, a, 15, b];
 
@@ -2012,7 +2015,15 @@ function applyView() {
 const REACH_WINDOW = 30 * 60; // travel times assume you leave in time for a bus within 30 minutes of the chosen time
 const REACH_COLORS = { 30: "#0b6b3a", 45: "#3f9b5f", 60: "#a7d7a0" };
 const reachState = { from: null, dayOffset: 0, when: "now", time: "", mode: "walk", busy: false, summary: "" };
-addEventListener("resize", () => { if (view === "reach" && !desktopTools()) setView("routes"); });
+// Maps (frequency, travel time) is for desktops and tablets; travel time for desktops. Narrowing to phone size switches
+// to Routes, and crossing that size redraws the tabs (shows or hides Maps).
+let wasPhone = isPhone();
+addEventListener("resize", () => {
+  if ((view === "frequency" || view === "reach") && isPhone()) setView("routes");
+  else if (view === "reach" && !desktopTools()) setView("routes");
+  else if (wasPhone !== isPhone() && !routeParam) buildSystemPanel();
+  wasPhone = isPhone();
+});
 let reachGeo = null;
 // Hour, minute (every minute) and AM/PM for the Travel time map.
 function reachTimeSelects(hhmm) {
@@ -2596,7 +2607,7 @@ function buildSystemPanel() {
       <div class="viewtoggle" role="group" aria-label="Map view">
         <button type="button" data-view="routes" aria-pressed="${view === "routes"}">Routes</button>
         <button type="button" data-view="plan" aria-pressed="${view === "plan"}">Trip planner</button>
-        <button type="button" data-view="maps" aria-pressed="${view === "frequency" || view === "reach"}">Maps</button>
+        ${isPhone() ? "" : `<button type="button" data-view="maps" aria-pressed="${view === "frequency" || view === "reach"}">Maps</button>`}
       </div>
       ${(view === "frequency" || view === "reach") && desktopTools() ? `<div class="mapswitch" role="group" aria-label="Map type">
         <button type="button" data-map="frequency" aria-pressed="${view === "frequency"}">Frequency</button>
@@ -2729,7 +2740,7 @@ function buildRoutePanel() {
     <header>${toggleBtn("Stops")}${showBack ? `<a class="back" href="?">${ICON.back} All routes</a>` : ""}
       <h1>${chip(r)} ${esc(r.long_name)}</h1>
       ${r.description ? `<p class="route-about">${esc(r.description)}</p>` : ""}
-      ${serviceTable(r)}
+      ${isPhone() ? `<details class="svc-box"><summary><strong>Service hours:</strong> ${esc(freqText(r) || "see times")}</summary>${serviceTable(r)}</details>` : serviceTable(r)}
       <div id="route-alerts">${routeAlertsBox(alertsFor({ route: routeParam }))}</div>
       <div style="margin-top:8px">${statusRow()}</div>
       ${searchBox(false, ids)}</header>
