@@ -4555,6 +4555,7 @@ function tripCounts(d) {
 }
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 function freqText(r) {
+  if (r.legend) return r.legend; // written by staff in route-info.json "legend_lines"
   const s = r.service; if (!s) return "";
   const days = daysLabel(s.days);
   const main = s.weekday || s.saturday || s.sunday;
