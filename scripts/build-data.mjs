@@ -215,10 +215,12 @@ for (const [routeId, list] of tripsByRoute) {
 // value that isn't text, is skipped and the rest publishes normally.
 const staffDesc = (short) => { const v = routeInfo.routes?.[short]; return typeof v === "string" ? v.trim() : ""; };
 // Staff's short line for the route list (route-info.json "legend_lines"); blank keeps the line worked out from the schedule.
+// Staff's route name (route-info.json "names"); blank keeps the GTFS name.
+const staffName = (short) => { const v = routeInfo.names?.[short]; return typeof v === "string" ? v.trim() : ""; };
 const staffLegend = (short) => { const v = routeInfo.legend_lines?.[short]; return typeof v === "string" ? v.trim() : ""; };
 {
   const known = new Set(routes.map((r) => String(r.route_short_name || "").trim()));
-  for (const [k, v] of [...Object.entries(routeInfo.routes || {}), ...Object.entries(routeInfo.legend_lines || {})]) {
+  for (const [k, v] of [...Object.entries(routeInfo.routes || {}), ...Object.entries(routeInfo.legend_lines || {}), ...Object.entries(routeInfo.names || {})]) {
     if (k.startsWith("_")) continue;
     if (!known.has(k)) console.log(`::warning::route-info.json describes route "${k}", which isn't in the current schedule (check the route number).`);
     else if (typeof v !== "string") console.log(`::warning::route-info.json: route ${k}'s description isn't text in quotes, so it was skipped.`);
@@ -235,12 +237,12 @@ const routeMeta = (r) => {
   const short = r.route_short_name || r.route_id;
   const group = groupFor(short);
   return {
-    route_id: r.route_id, short_name: short, long_name: r.route_long_name || "",
+    route_id: r.route_id, short_name: short, long_name: staffName(short) || r.route_long_name || "",
     color: "#" + (r.route_color || "00703C"), text_color: "#" + (r.route_text_color || "FFFFFF"),
     sort: Number(r.route_sort_order) || 0, group,
     // Description: route-info.json (staff) first, then the GTFS route_desc, then (Neighborhood Specials) an automatic line.
     legend: staffLegend(short), // staff override for the route list's short line ("" = automatic)
-    description: staffDesc(short) || (r.route_desc || "").trim() || (group === "school" ? `Neighborhood Special: ${r.route_long_name}.` : ""),
+    description: staffDesc(short) || (r.route_desc || "").trim() || (group === "school" ? "Neighborhood Special: open to the public during the school year. Regular fares apply." : ""),
     service: service[r.route_id] || null,
   };
 };
