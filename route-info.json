@@ -94,8 +94,8 @@
     "778": "Sunday loop from downtown Burlington through the North End via North Avenue."
   },
   "legend_lines": {
-    "1": "",
-    "2": "",
+    "1": "Weekdays every 30 min",
+    "2": "Weekdays every 20 min",
     "4": "",
     "5": "",
     "6": "",
