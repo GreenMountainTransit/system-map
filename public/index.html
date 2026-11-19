@@ -584,9 +584,11 @@ const RELAY_URL = "__RELAY_URL__";               // the GMT relay (Cloudflare Wo
 const SWIFTLY_KEY = "__SWIFTLY_KEY__";          // filled in automatically when the site is published (GitHub secret SWIFTLY_KEY)
 const REFRESH_MS = 15000;                       // how often live buses and arrival times update
 const HOME_BOUNDS = [[-73.28, 44.365], [-72.97, 44.585]]; // opening view: Burlington area out to Shelburne, Essex and Williston
+// The first is the default. Mapbox Standard: a soft, detailed map with 3D buildings (the closest to Trillium's system map
+// that GMT's Mapbox account can use); then a plain greyscale map; then satellite photos.
 const BASEMAPS = [
-  { id: "light", label: "Map", url: "mapbox://styles/mapbox/light-v11" },
-  { id: "standard", label: "Detailed", url: "mapbox://styles/mapbox/standard", standard: true },
+  { id: "standard", label: "Map", url: "mapbox://styles/mapbox/standard", standard: true },
+  { id: "light", label: "Greyscale", url: "mapbox://styles/mapbox/light-v11" },
   { id: "satellite", label: "Satellite", url: "mapbox://styles/mapbox/satellite-streets-v12" },
 ];
 // --------------------------------
@@ -733,7 +735,7 @@ function animateBuild() {
   const vis = visibleRoutes(), feats = linesData.features.filter((f) => vis.includes(f.properties.route_id));
   if (!feats.length) return;
   real.forEach((l) => map.setLayoutProperty(l, "visibility", "none"));
-  const slot = basemap.standard ? { slot: "middle" } : {};
+  const slot = {}; // the route-drawing animation, like the routes: above the basemap's labels
   const empty = { type: "FeatureCollection", features: [] };
   map.addSource("build", { type: "geojson", data: empty });
   const width = (a, b) => ["interpolate", ["linear"], ["zoom"], 9, a, 15, b];
@@ -1435,7 +1437,7 @@ function setPickingSpot(on) {
 }
 // Hover labels on map buttons (location, choose a location, 3D, full screen). Mapbox adds some buttons a moment
 // after the map starts, so this listens on the page and reads each button's label when hovered.
-const BASEMAP_HINTS = { light: "Simple map: routes stand out", standard: "Detailed map: buildings, places and labels", satellite: "Satellite photos with street names" };
+const BASEMAP_HINTS = { standard: "Map with buildings, places and 3D", light: "Greyscale map: routes stand out", satellite: "Satellite photos with street names" };
 const HOVER_LABELS = {
   '.basemaps button[data-id="light"]': () => BASEMAP_HINTS.light,
   '.basemaps button[data-id="standard"]': () => BASEMAP_HINTS.standard,
@@ -1732,7 +1734,7 @@ function ensureBusLayer() {
             "text-halo-width": 1.6
           }
         };
-        if (basemap.standard) layer.slot = "top";
+        // (no slot on Mapbox Standard: buses draw above the basemap's place and neighborhood labels)
         map.addLayer(layer);
       }
     } catch (badgeError) {
@@ -1807,7 +1809,9 @@ function personPinImage() {
   return g.getImageData(0, 0, W, H);
 }
 function addOverlay() {
-  const slot = (s) => (basemap.standard ? { slot: s } : {});
+  // Mapbox Standard: route lines, stops, buses and trip lines ("middle"/"top") get no slot, which draws them above the basemap's
+  // place, town and neighborhood labels (Standard's own "top" slot sits below those labels). Low layers keep their slot.
+  const slot = (s) => (basemap.standard && s === "bottom" ? { slot: s } : {}); // only the lowest layers keep a slot
   const add = (layer, s) => { if (!map.getLayer(layer.id)) map.addLayer({ ...layer, ...slot(s) }); };
   if (!map.hasImage("route-arrow")) map.addImage("route-arrow", chevronImage(), { sdf: true, pixelRatio: 2 });
   Object.values(routes).forEach((r) => { if (!map.hasImage(`bus-${r.route_id}`)) map.addImage(`bus-${r.route_id}`, busBadge(r), { pixelRatio: 2 }); });
@@ -4589,8 +4593,26 @@ function freqText(r) {
   const days = daysLabel(s.days);
   const main = s.weekday || s.saturday || s.sunday;
   if (!main) return days;
+  // One consistent wording for every route (staff can override any route in route-info.json "legend_lines"):
+  //   Neighborhood Specials: "School days · morning trip" / "afternoon trip" (Wednesday early-release runs count as afternoon)
+  //   Shopping Specials:     "Thursdays only · free morning shuttle"
+  //   frequent routes:       "Mon–Sat · weekdays every 20–30 min, evenings every 60 min" (always "every N min", never "hourly")
+  //   limited routes:        "Weekdays · 3 morning and 4 afternoon trips"
+  if (r.group === "school") {
+    const p = main.parts || {}, am = (p.morning || 0) > 0, pm = (p.midday || 0) + (p.afternoon || 0) + (p.evening || 0) > 0;
+    return `School days ∙ ${am && pm ? "morning and afternoon trips" : am ? "morning trip" : "afternoon trip"}`;
+  }
+  if (r.group === "shopping") return `${days} ∙ free morning shuttle`;
   const weekend = main === s.weekday && (s.days[5] || s.days[6]) && s.days.slice(0, 5).filter(Boolean).length > 1;
-  return `${days} ∙ ${weekend ? "weekdays " : ""}${phrase(main)}`;
+  const pre = weekend ? "weekdays " : "", P = main.periods || {};
+  const day = [P.am, P.mid, P.pm].filter((x) => x > 0);
+  if (!day.length && main.headway && main.trips >= 6) day.push(main.headway); // e.g. the Sunday circulators: every 90 min
+  if (main.trips >= 6 && day.length && r.group !== "express") { // commuter routes list their trips instead // regular all-day service: every N min (a range when rush hour is more frequent)
+    const lo = Math.min(...day), hi = Math.max(...day);
+    const eve = P.eve > hi ? `, evenings every ${P.eve} min` : "";
+    return `${days} ∙ ${pre}every ${lo === hi ? lo : `${lo}–${hi}`} min${eve}`;
+  }
+  return `${days} ∙ ${pre}${tripCounts(main)}`; // a few trips a day
 }
 function serviceTable(r) {
   const s = r.service; if (!s) return "";
