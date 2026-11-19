@@ -12,6 +12,11 @@
     "To write your own for a route, put it between the quotes after the route number under \"legend_lines\". Keep the quotes and the comma.",
     "Leave the quotes empty (\"\") to keep the automatic line. The live bus count (\"· 4 live\") is still added after your text."
   ],
+  "_how_to_edit_route_names": [
+    "Each route's name (shown next to its number, e.g. 2 Essex Junction) comes from GMT's GTFS.",
+    "To use a different name for a route, put it between the quotes after the route number under \"names\". Keep the quotes and the comma.",
+    "Leave the quotes empty (\"\") to keep the GTFS name. Neighborhood Specials are named as in the Bus Map & Guide."
+  ],
   "ridership": {
     "layer": "https://services6.arcgis.com/1pxfKKnRqKBsikRV/arcgis/rest/services/Detail_Ridership_V2/FeatureServer/0",
     "dashboard": "https://ridegmt.com/dashboards/"
@@ -93,9 +98,37 @@
     "756": "Sunday loop from downtown Burlington through the South End via Pine Street and Shelburne Road.",
     "778": "Sunday loop from downtown Burlington through the North End via North Avenue."
   },
+  "names": {
+    "1": "",
+    "2": "",
+    "4": "",
+    "5": "",
+    "6": "",
+    "7": "",
+    "8": "",
+    "9": "",
+    "11": "",
+    "16": "Hannaford: Tuesdays",
+    "19": "Market 32: Thursdays",
+    "20": "Market 32: Wednesdays",
+    "86": "",
+    "96": "",
+    "109": "",
+    "326": "South End to Edmunds, Champlain, & Integrated Arts Academy",
+    "334": "Old North End to Integrated Arts Academy & Edmunds | South End to Champlain",
+    "336": "New North End to Lyman C. Hunt, John J. Flynn, & CP. Smith",
+    "337": "Old North End & New North End to Burlington High School, Lyman C. Hunt & John J. Flynn",
+    "342": "CP. Smith & John J. Flynn to New North End",
+    "344": "Champlain to South End | Edmunds to Old North End & Riverside",
+    "347": "Edmunds to Old North End",
+    "348": "Champlain & Edmunds to South End",
+    "349": "Lyman C. Hunt to New North End",
+    "756": "South End Circulator",
+    "778": "North End Circulator"
+  },
   "legend_lines": {
-    "1": "Weekdays every 30 min",
-    "2": "Weekdays every 20 min",
+    "1": "",
+    "2": "",
     "4": "",
     "5": "",
     "6": "",
