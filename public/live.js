@@ -73,7 +73,10 @@
     const timer = ctl && setTimeout(() => ctl.abort(), RELAY_TIMEOUT_MS);
     const promise = fetch(RELAY + path, { ...(ctl ? { signal: ctl.signal } : {}), cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`Relay ${r.status}`);
+        if (!r.ok) { // include the relay's reason (and Cloudflare location) in the error, for ?debug=1
+          const why = await r.json().catch(() => null);
+          throw new Error(`Relay ${r.status}${why?.error ? `: ${why.error}` : ""}${why?.colo ? ` (at ${why.colo})` : ""}`);
+        }
         const body = await r.json();
         const ageHeader = Number(r.headers.get("X-Relay-Age"));
         const atHeader = Number(r.headers.get("X-Relay-Fetched-At"));
