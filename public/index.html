@@ -337,7 +337,7 @@
   #activate:hover .act-pill, #activate:focus-visible .act-pill { transform: translateY(-1px); box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); }
   @keyframes act-in { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { #activate .act-pill { animation: none; } }
-  .three-ctrl .night-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); border-top: 1px solid var(--line); }
+  .three-ctrl .night-btn { width: 36px !important; height: 30px !important; display: grid; place-items: center; color: var(--ink); border-top: 1px solid var(--line); }
   .mapboxgl-ctrl-group.three-ctrl .night-btn[aria-pressed="true"], .mapboxgl-ctrl-group.three-ctrl .night-btn[aria-pressed="true"]:hover { background: #1d2a44; color: #ffe08a; }
   .three-ctrl .night-btn[hidden] { display: none; }
   .expand-ctrl .expand-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); } /* same size as the other map buttons */
@@ -979,18 +979,36 @@ setInterval(() => { if (three.on) applyLighting(); }, 5 * 60 * 1000); // follow 
 // Headlight beams: a soft, warm cone on the road ahead of each 3D bus (Mapbox can't cast light onto buildings, so the
 // beam is painted on the street and glows at night). headlights: id -> [position, heading].
 const headlights = new Map(); let lightsDrawn = 0;
+// Doors open: a bus within 100 ft (30.5 m) of a stop that has stayed within ~12 m of the same spot for over 15 s.
+const dwell = new Map(); // bus id -> { c, t0 }
+function busLook(id, c) {
+  const night = isNight(); if (!night) return { night: false, door: false };
+  const now = Date.now(), d = dwell.get(id);
+  if (!d || meters(d.c, c) > 12) { dwell.set(id, { c: [...c], t0: now }); return { night, door: false }; }
+  return { night, door: now - d.t0 > 15000 && !!nearestStop(c, 30.5) };
+}
+const lookKey = (l) => (l.night ? "n" : "d") + (l.door ? "o" : "");
 function drawHeadlights(force) {
   const src = map.getSource("headlights"); if (!src) return;
   const now = performance.now(); if (!force && now - lightsDrawn < 80) return; lightsDrawn = now;
   if (!three.on || !(isNight() || lightNow() === "dusk")) { src.setData({ type: "FeatureCollection", features: [] }); return; }
   const feats = [];
-  for (const [c, h] of headlights.values()) {
+  for (const [c, h, door] of headlights.values()) {
     const k = Math.cos((c[1] * Math.PI) / 180), rad = (h * Math.PI) / 180, fx = Math.sin(rad), fy = Math.cos(rad); // forward (east, north)
     const at = (ahead, side) => [c[0] + (fx * ahead + fy * side) / (111320 * k), c[1] + (fy * ahead - fx * side) / 110540];
     feats.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[at(6, -1.3), at(6, 1.3), at(42, 7.5), at(42, -7.5), at(6, -1.3)]] } });
+    if (door) feats.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[at(3.2, 1.3), at(5.8, 1.3), at(5.8, 4.5), at(3.2, 4.5), at(3.2, 1.3)]] } }); // light from the open front door (curb side)
   }
   src.setData({ type: "FeatureCollection", features: feats });
 }
+const EMISSIVE = { line: ["line-emissive-strength"], circle: ["circle-emissive-strength"], fill: ["fill-emissive-strength"],
+  symbol: ["icon-emissive-strength", "text-emissive-strength"], "fill-extrusion": ["fill-extrusion-emissive-strength"] };
+function glowOurLayers() { // Mapbox Standard dims every layer at dusk and night unless it's emissive
+  if (!basemap.standard) return;
+  for (const l of map.getStyle()?.layers || []) for (const prop of EMISSIVE[l.type] || [])
+    if (map.getPaintProperty(l.id, prop) == null) try { map.setPaintProperty(l.id, prop, 1); } catch {}
+}
+{ let t = null; map.on("styledata", () => { clearTimeout(t); t = setTimeout(glowOurLayers, 250); }); } // also layers added later (trip plans...)
 function setThreeD(on) {
   three.on = on;
   document.querySelector(".three-btn")?.setAttribute("aria-pressed", String(on));
@@ -1029,14 +1047,32 @@ async function loadBusModel(p) {
   if (!basemapReady()) await new Promise((res) => { const check = () => (basemapReady() ? res() : setTimeout(check, 150)); check(); });
   try {
     const r = routes[p.route_id] || {};
-    const url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "" });
+    const look = busLook(p.id, followState?.shown?.c || [p.lon ?? 0, p.lat ?? 0]);
+    followState.busInfo = { route_id: p.route_id, headsign: p.headsign };
+    const url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "", night: look.night, door: look.door });
     if (!followState || followState.id !== p.id) { URL.revokeObjectURL(url); return false; }
     const id = "gmt-bus-" + Date.now();
     map.addModel(id, url);
-    followState.model = { id, url };
+    followState.model = { id, url }; followState.lookKey = lookKey(look); followState.variants = { [lookKey(look)]: { id, url } };
     addBusModelLayer();
     return true;
   } catch { return false; }
+}
+// Switch the followed bus to another look in place: the current model stays until the new one is ready (no flicker).
+async function swapFollowLook(look, lk) {
+  const st = followState; if (!st?.busInfo) return;
+  st.lookBusy = true;
+  try {
+    let v = st.variants?.[lk];
+    if (!v) {
+      const r = routes[st.busInfo.route_id] || {};
+      const url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(st.busInfo.headsign) || r.long_name || "", night: look.night, door: look.door });
+      if (followState !== st) { URL.revokeObjectURL(url); return; }
+      v = { id: "gmt-bus-" + Date.now(), url }; map.addModel(v.id, v.url); (st.variants ||= {})[lk] = v;
+    }
+    st.model = v; st.lookKey = lk;
+    if (map.getLayer("bus3d-model")) map.setLayoutProperty("bus3d-model", "model-id", v.id);
+  } catch {} finally { st.lookBusy = false; }
 }
 function addBusModelLayer() {
   const m = followState?.model; if (!m) return;
@@ -1233,7 +1269,9 @@ function followFrame() {
     } else if (!st.model) { // the simple box bus only while the detailed model is first being built
       map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c")); st.boxCleared = false;
     } // (model built but its layer briefly missing, e.g. after a style reload: wait for it -- no box flash)
-    headlights.set("follow", [st.shown.c, st.shown.heading]); drawHeadlights();
+    const look = busLook(st.id, st.shown.c), lk = lookKey(look);
+    if (st.model && lk !== st.lookKey && !st.lookBusy) swapFollowLook(look, lk); // e.g. night falls, or the doors open
+    headlights.set("follow", [st.shown.c, st.shown.heading, look.door]); drawHeadlights();
     const now = performance.now();
     if (st.flyUntil && now < st.flyUntil) { st.raf = requestAnimationFrame(followFrame); return; } // flying in: hands off
     if (st.flyUntil) { st.flyUntil = 0; st.blend = { from: map.getCenter().toArray(), t0: now }; } // landed: blend to the bus
@@ -1312,13 +1350,13 @@ let followDragged = 0;
 // One map layer draws them all; each route-and-destination gets its own model, so signs read e.g. "2 ESSEX JUNCTION".
 // Positions glide toward each new report so buses don't jump. Zoomed far out, the flat badges show instead.
 const fleet = { on: false, models: new Map(), shown: new Map(), raf: 0, last: 0, n: 0 };
-const fleetKey = (p) => `${p.route_id}|${niceDest(p.headsign)}`;
-async function ensureFleetModel(p) {
-  const key = fleetKey(p); if (fleet.models.has(key)) return;
+const fleetKey = (p, look = {}) => `${p.route_id}|${niceDest(p.headsign)}|${lookKey(look)}`;
+async function ensureFleetModel(p, look = {}) {
+  const key = fleetKey(p, look); if (fleet.models.has(key)) return;
   const entry = { id: `fleet-${++fleet.n}`, url: null, ready: false }; fleet.models.set(key, entry);
   try {
     const r = routes[p.route_id] || {};
-    entry.url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "" });
+    entry.url = await GMTBus3D.build({ color: r.color || "#00703c", short: r.short_name || "", headsign: niceDest(p.headsign) || r.long_name || "", night: !!look.night, door: !!look.door });
     while (!basemapReady()) await new Promise((res) => setTimeout(res, 150));
     map.addModel(entry.id, entry.url); entry.ready = true;
     // Keep the layer stable; model-id is feature driven and does not need a rebuild.
@@ -1368,8 +1406,11 @@ function fleetFrame(now) {
     const p = f.properties;
     if (!vis.includes(p.route_id) || p.id === followState?.id) continue;
     seen.add(p.id);
-    const m = fleet.models.get(fleetKey(p)); if (!m) { ensureFleetModel(p); continue; }
-    if (!m.ready) continue;
+    const look = busLook(p.id, f.geometry.coordinates), want = fleetKey(p, look);
+    if (!fleet.models.has(want)) ensureFleetModel(p, look);
+    // The version this bus should wear (day, night, doors open) -- or, while that one builds, any ready version.
+    const m = [want, fleetKey(p, { night: look.night }), fleetKey(p, {}), fleetKey(p, { night: true })].map((k) => fleet.models.get(k)).find((x) => x?.ready);
+    if (!m) { if (!fleet.models.has(fleetKey(p, {}))) ensureFleetModel(p, {}); continue; }
     const tgt = f.geometry.coordinates, h = p.heading ?? 0;
     let sh = fleet.shown.get(p.id);
     if (!sh || meters(sh.c, tgt) > 400) sh = { c: [...tgt], h }; // new bus, or a big jump: just place it
@@ -1377,7 +1418,7 @@ function fleetFrame(now) {
     const dh = ((h - sh.h + 540) % 360) - 180; sh.h = (sh.h + dh * k + 360) % 360;
     fleet.shown.set(p.id, sh);
     feats.push({ type: "Feature", properties: { model: m.id, r: [0, 0, (sh.h + 270) % 360] }, geometry: { type: "Point", coordinates: sh.c } });
-    headlights.set(p.id, [sh.c, sh.h]);
+    headlights.set(p.id, [sh.c, sh.h, look.door]);
   }
   for (const id of fleet.shown.keys()) if (!seen.has(id)) { fleet.shown.delete(id); headlights.delete(id); }
   drawHeadlights();

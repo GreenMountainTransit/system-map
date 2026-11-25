@@ -123,6 +123,33 @@
     return c;
   }
 
+  // ---------- night: what glows ----------
+  // Same layout as the bus texture, black except the parts that give off light. Signs are copied from the painted
+  // texture, so they glow in their own amber LED color.
+  function glowTexture(color, o) {
+    const c = document.createElement("canvas"); c.width = c.height = 1024;
+    const g = c.getContext("2d"); g.fillStyle = "#000"; g.fillRect(0, 0, 1024, 1024);
+    const copy = (x, y, w, h) => g.drawImage(color, x, y, w, h, x, y, w, h);
+    const WARM = "rgba(255, 226, 160, 0.92)";                                       // interior lights
+    for (const [right, box] of [[true, R.right], [false, R.left]]) {
+      const [x0, y0, w, h] = box, fx = (f) => (right ? x0 + f * w : x0 + (1 - f) * w);
+      g.fillStyle = WARM; g.fillRect(x0 + w * 0.015, y0 + h * 0.12, w * 0.97, h * 0.4);      // windows
+      g.fillStyle = "#000"; for (let i = 1; i < 8; i++) g.fillRect(fx(i / 8) - 3, y0 + h * 0.12, 6, h * 0.4); // pillars stay dark
+      copy(fx(0.84) - w * 0.06, y0 + h * 0.025, w * 0.12, h * 0.075);                          // side headsign
+      if (right && o.door) { g.fillStyle = "#fffbe8"; g.fillRect(fx(0.9) - w * 0.035, y0 + h * 0.1, w * 0.07, h * 0.73); } // doors open: lit
+    }
+    { const [x, y, w, h] = R.front;
+      copy(x + w * 0.1, y + h * 0.05, w * 0.8, h * 0.11);                                          // front headsign
+      g.fillStyle = "rgba(255, 226, 160, 0.45)"; g.fillRect(x + w * 0.07, y + h * 0.19, w * 0.86, h * 0.44); // windshield: lit cabin
+      g.fillStyle = "#fffef2"; for (const f of [0.08, 0.8]) g.fillRect(x + w * f, y + h * 0.8, w * 0.12, h * 0.06); // headlights
+      g.fillStyle = "#ff9a2e"; for (const f of [0.22, 0.7]) g.fillRect(x + w * f, y + h * 0.81, w * 0.07, h * 0.04); }  // amber markers
+    { const [x, y, w, h] = R.back;
+      copy(x + w * 0.35, y + h * 0.03, w * 0.3, h * 0.08);                                         // rear route number
+      g.fillStyle = WARM; g.fillRect(x + w * 0.12, y + h * 0.14, w * 0.76, h * 0.3);              // rear window
+      g.fillStyle = "#ff2a20"; for (const f of [0.05, 0.85]) g.fillRect(x + w * f, y + h * 0.48, w * 0.1, h * 0.16); } // taillights
+    return c;
+  }
+
   // ---------- stop sign texture: GMT's sign (arched top, white bus, BUS STOP, green hills) ----------
   async function signTexture() {
     const logo = await loadLogo();
@@ -177,8 +204,9 @@
   const rect = (r, size = 1024) => [r[0] / size, r[1] / size, (r[0] + r[2]) / size, (r[1] + r[3]) / size];
 
   // ---------- pack meshes + one texture into a binary glTF (GLB) ----------
-  async function packGLB(canvas, prims, materials) {
-    const png = new Uint8Array(await (await new Promise((res) => canvas.toBlob(res, "image/png"))).arrayBuffer());
+  async function packGLB(canvas, prims, materials, glow) {
+    const toPng = async (cv) => new Uint8Array(await (await new Promise((res) => cv.toBlob(res, "image/png"))).arrayBuffer());
+    const png = await toPng(canvas), glowPng = glow ? await toPng(glow) : null;
     const parts = [], views = [], accessors = []; let offset = 0;
     const add = (typed, target) => {
       const pad = (4 - (offset % 4)) % 4; if (pad) { parts.push(new Uint8Array(pad)); offset += pad; }
@@ -193,9 +221,10 @@
     };
     const primitives = prims.map((p) => ({ attributes: { POSITION: acc(p.m.pos, "VEC3", 5126, 34962, true), NORMAL: acc(p.m.nrm, "VEC3", 5126, 34962), TEXCOORD_0: acc(p.m.uv, "VEC2", 5126, 34962) },
       indices: acc(p.m.idx, "SCALAR", 5123, 34963), material: p.material }));
-    const imgView = add(png);
+    const imgView = add(png), glowView = glowPng ? add(glowPng) : null;
     const json = { asset: { version: "2.0", generator: "GMT system map" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives }],
-      materials, textures: [{ source: 0, sampler: 0 }], samplers: [{ magFilter: 9729, minFilter: 9987 }], images: [{ bufferView: imgView, mimeType: "image/png" }],
+      materials, textures: [{ source: 0, sampler: 0 }, ...(glowPng ? [{ source: 1, sampler: 0 }] : [])], samplers: [{ magFilter: 9729, minFilter: 9987 }],
+      images: [{ bufferView: imgView, mimeType: "image/png" }, ...(glowPng ? [{ bufferView: glowView, mimeType: "image/png" }] : [])],
       accessors, bufferViews: views, buffers: [{ byteLength: 0 }] };
     const pad4 = (n) => (n + 3) & ~3, binLen = pad4(offset); json.buffers[0].byteLength = binLen;
     const jsonBytes = new TextEncoder().encode(JSON.stringify(json)), jsonLen = pad4(jsonBytes.length);
@@ -210,8 +239,15 @@
 
   // ---------- the bus ----------
   // glTF is Y-up. Length runs along X with the front at +X; +Z is the right (passenger) side.
+  // o.night: lit interior, glowing headsigns and lights (the glow image, and lit windows painted into the texture too).
+  // o.door (night only): the front door lit, as when the doors are open at a stop.
   async function build(o) {
     const canvas = await busTexture(o), body = mesh(), wheels = mesh();
+    let glow = null;
+    if (o.night) {
+      glow = glowTexture(canvas, o);
+      const g = canvas.getContext("2d"); g.globalCompositeOperation = "screen"; g.drawImage(glow, 0, 0); g.globalCompositeOperation = "source-over";
+    }
     const x0 = -L / 2, x1 = L / 2, y0 = LIFT, y1 = LIFT + H, z0 = -W / 2, z1 = W / 2;
     body.quad([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], [0, 0, 1], rect(R.right));
     body.quad([[x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0]], [0, 0, -1], rect(R.left));
@@ -220,8 +256,9 @@
     body.quad([[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]], [0, 1, 0], rect(R.roof));
     body.quad([[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], [0, -1, 0], rect(R.roof));
     for (const ax of [L * 0.32, -L * 0.3]) for (const s of [-1, 1]) wheels.cylinder(ax, 0.5, 0, s * (W / 2 - 0.18), 0.5, 14, [0, 0], 0.16);
+    const bodyMat = glow ? { ...textured, emissiveTexture: { index: 1 }, emissiveFactor: [1, 1, 1] } : textured;
     return packGLB(canvas, [{ m: body, material: 0 }, { m: wheels, material: 1 }],
-      [textured, { pbrMetallicRoughness: { baseColorFactor: [0.06, 0.07, 0.08, 1], metallicFactor: 0, roughnessFactor: 0.9 } }]);
+      [bodyMat, { pbrMetallicRoughness: { baseColorFactor: [0.06, 0.07, 0.08, 1], metallicFactor: 0, roughnessFactor: 0.9 } }], glow);
   }
 
   // ---------- the stop sign: a pole and GMT's sign (same face on both sides) ----------
