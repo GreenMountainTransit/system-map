@@ -337,6 +337,9 @@
   #activate:hover .act-pill, #activate:focus-visible .act-pill { transform: translateY(-1px); box-shadow: 0 1px 3px rgba(20,30,25,.14), 0 0 0 1px rgba(20,30,25,.08); }
   @keyframes act-in { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { #activate .act-pill { animation: none; } }
+  .three-ctrl .night-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); border-top: 1px solid var(--line); }
+  .mapboxgl-ctrl-group.three-ctrl .night-btn[aria-pressed="true"], .mapboxgl-ctrl-group.three-ctrl .night-btn[aria-pressed="true"]:hover { background: #1d2a44; color: #ffe08a; }
+  .three-ctrl .night-btn[hidden] { display: none; }
   .expand-ctrl .expand-btn { width: 29px; height: 29px; display: grid; place-items: center; color: var(--ink); } /* same size as the other map buttons */
   #alert-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 3; max-width: min(420px, calc(100% - 120px)); }
   #alert-banner[hidden] { display: none; }
@@ -399,7 +402,7 @@
   .ra-box > summary::-webkit-details-marker { display: none; }
   .ra-box > summary::after { content: "▸"; margin-left: auto; } .ra-box[open] > summary::after { content: "▾"; }
   .ra-box > summary svg { flex: 0 0 auto; width: 16px; height: 16px; }
-  .ra-box .alerts { margin: 0 !important; padding: 0 8px 8px; }
+  .ra-box .alerts { margin: 0 !important; padding: 0 8px 8px; max-height: min(38vh, 320px); overflow-y: auto; overscroll-behavior: contain; } /* scrolls inside; the stop list stays reachable */
   .mapboxgl-popup { z-index: 3; } /* popups sit above the map controls, important on small screens */
   /* Mapbox sets Helvetica on the map, which popups and map buttons would inherit: use the site's Overpass (Highway
      Gothic style) there too, so hover tips, popups and controls all match. */
@@ -911,13 +914,83 @@ const canThreeD = () => desktopTools(); // a mouse or touchpad is present
 map.addControl({
   onAdd() {
     const el = document.createElement("div"); el.className = "mapboxgl-ctrl mapboxgl-ctrl-group three-ctrl";
-    el.innerHTML = `<button type="button" class="three-btn" aria-pressed="false" title="3D view" aria-label="3D view">3D</button>`;
+    el.innerHTML = `<button type="button" class="three-btn" aria-pressed="false" title="3D view" aria-label="3D view">3D</button>
+      <button type="button" class="night-btn" aria-pressed="false" hidden></button>`;
     el.hidden = !canThreeD();
     addEventListener("resize", () => { el.hidden = !canThreeD(); if (!canThreeD() && three.on) setThreeD(false); });
-    el.querySelector("button").onclick = () => setThreeD(!three.on);
+    el.querySelector(".three-btn").onclick = () => setThreeD(!three.on);
+    el.querySelector(".night-btn").onclick = toggleNight; // day/night lighting, shown only in 3D
     return el;
   }, onRemove() {},
 }, "top-right");
+// ---------- 3D night mode ----------
+// Sunrise and sunset for Burlington, worked out each day (NOAA's simplified solar formula; within a minute or two).
+function sunTimes(d = new Date(), lat = 44.4759, lon = -73.2121) {
+  const rad = Math.PI / 180, start = Date.UTC(d.getUTCFullYear(), 0, 0), day = Math.floor((d.getTime() - start) / 864e5);
+  const g = (2 * Math.PI / 365) * (day - 1);
+  const eq = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g) - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const ha = Math.acos(Math.cos(90.833 * rad) / (Math.cos(lat * rad) * Math.cos(decl)) - Math.tan(lat * rad) * Math.tan(decl)) / rad;
+  const noon = 720 - 4 * lon - eq, midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000;
+  return { rise: midnight + (noon - 4 * ha) * 60, set: midnight + (noon + 4 * ha) * 60 };
+}
+// The 3D map's lighting right now: night after dark, dawn and dusk around sunrise and sunset, day otherwise -- or the
+// rider's choice from the moon/sun button, which lasts until the next sunrise or sunset (then automatic again).
+let lightChoice = null; // { mode: "night" | "day", until: seconds }
+function nextSunChange(t = Date.now() / 1000) {
+  const today = sunTimes(), tomorrow = sunTimes(new Date((t + 86400) * 1000)), M = 20 * 60;
+  return [today.rise - M, today.set - M, tomorrow.rise - M, tomorrow.set - M].filter((x) => x > t).sort((a, b) => a - b)[0] || t + 12 * 3600;
+}
+function toggleNight() {
+  const night = lightNow() === "night";
+  lightChoice = { mode: night ? "day" : "night", until: nextSunChange() };
+  applyLighting();
+  document.getElementById("announce").textContent = night ? "Daylight on." : "Night lighting on.";
+}
+function lightNow() {
+  if (lightChoice && Date.now() / 1000 < lightChoice.until) return lightChoice.mode;
+  lightChoice = null;
+  return autoLight();
+}
+function autoLight() {
+  const t = Date.now() / 1000, { rise, set } = sunTimes(), M = 20 * 60;
+  if (Math.abs(t - rise) <= M) return "dawn";
+  if (Math.abs(t - set) <= M) return "dusk";
+  return t < rise - M || t > set + M ? "night" : "day";
+}
+const isNight = () => three.on && lightNow() === "night";
+const ICON_MOON = `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>`;
+const ICON_SUN = `<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2.5v2.3M12 19.2v2.3M2.5 12h2.3M19.2 12h2.3M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g></svg>`;
+function applyLighting() { // 3D only; 2D always uses daylight
+  const preset = three.on ? lightNow() : "day";
+  if (basemap.standard) try { map.setConfigProperty("basemap", "lightPreset", preset); } catch {}
+  const glow = preset === "night" ? 0.4 : preset === "day" ? 0 : 0.15; // keep buses visible in the dark
+  for (const l of ["bus3d-model", "fleet3d"]) if (map.getLayer(l)) try { map.setPaintProperty(l, "model-emissive-strength", glow); } catch {}
+  if (map.getLayer("headlights")) map.setLayoutProperty("headlights", "visibility", preset === "night" || preset === "dusk" ? "visible" : "none");
+  const nb = document.querySelector(".night-btn");
+  if (nb) {
+    nb.hidden = !three.on; const night = preset === "night";
+    nb.setAttribute("aria-pressed", String(night)); nb.setAttribute("aria-label", night ? "Night lighting is on. Switch to daylight" : "Switch to night lighting");
+    nb.innerHTML = night ? ICON_MOON : ICON_SUN;
+  }
+  drawHeadlights(true);
+}
+setInterval(() => { if (three.on) applyLighting(); }, 5 * 60 * 1000); // follow sunset and sunrise while the map is open
+// Headlight beams: a soft, warm cone on the road ahead of each 3D bus (Mapbox can't cast light onto buildings, so the
+// beam is painted on the street and glows at night). headlights: id -> [position, heading].
+const headlights = new Map(); let lightsDrawn = 0;
+function drawHeadlights(force) {
+  const src = map.getSource("headlights"); if (!src) return;
+  const now = performance.now(); if (!force && now - lightsDrawn < 80) return; lightsDrawn = now;
+  if (!three.on || !(isNight() || lightNow() === "dusk")) { src.setData({ type: "FeatureCollection", features: [] }); return; }
+  const feats = [];
+  for (const [c, h] of headlights.values()) {
+    const k = Math.cos((c[1] * Math.PI) / 180), rad = (h * Math.PI) / 180, fx = Math.sin(rad), fy = Math.cos(rad); // forward (east, north)
+    const at = (ahead, side) => [c[0] + (fx * ahead + fy * side) / (111320 * k), c[1] + (fy * ahead - fx * side) / 110540];
+    feats.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[at(6, -1.3), at(6, 1.3), at(42, 7.5), at(42, -7.5), at(6, -1.3)]] } });
+  }
+  src.setData({ type: "FeatureCollection", features: feats });
+}
 function setThreeD(on) {
   three.on = on;
   document.querySelector(".three-btn")?.setAttribute("aria-pressed", String(on));
@@ -935,11 +1008,13 @@ function setThreeD(on) {
     if (b.isEmpty()) map.easeTo({ pitch: 60, duration: reduceMotion ? 0 : 900 });
     else map.fitBounds(b, { padding: panelPad(), pitch: 60, bearing: map.getBearing(), duration: reduceMotion ? 0 : 1100 });
     toast("Click any bus to follow it.");
+    applyLighting(); // night, dusk, dawn or day for Burlington right now
   } else {
     stopFollow(); exitStopView(); stopFleet();
     map.easeTo({ pitch: 0, bearing: 0, duration: reduceMotion ? 0 : 700 });
     setTimeout(() => { if (!three.on) { map.setMaxPitch(0); map.dragRotate.disable(); map.keyboard.disableRotation(); } }, reduceMotion ? 0 : 750);
     try { map.setConfigProperty("basemap", "show3dObjects", false); } catch {}
+    headlights.clear(); applyLighting(); // back to daylight in 2D
   }
 }
 const FOLLOW_MS = 5000; // while following a bus, ask for its position every 5 seconds
@@ -1005,7 +1080,13 @@ function startFollow(p) {
   map.dragPan.disable(); map.dragRotate.disable(); map.scrollZoom.disable(); map.doubleClickZoom.disable(); map.touchZoomRotate.disable();
   map.getCanvasContainer().style.touchAction = "none"; // the map takes all touch gestures (pinch, twist) while following
   setBasemapLabels(false); // the moving camera makes basemap labels jump around
-  if (followState.shown) map.easeTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: reduceMotion ? 0 : 1200 });
+  // A slow, smooth flight in (4.5 s) so the 3D buildings load as the camera arrives. The follow loop leaves the camera
+  // alone until the flight ends, then blends from where it landed to the bus (which kept moving) -- no snap.
+  if (followState.shown) {
+    const FLY = reduceMotion ? 0 : 4500;
+    followState.flyUntil = performance.now() + FLY; followState.blend = null;
+    map.flyTo({ center: followState.shown.c, bearing: followState.shown.heading, pitch: 62, zoom: 17.5, duration: FLY, curve: 1.2, essential: true });
+  }
   toast("Click a stop to watch this bus arrive. Drag to look around the bus.");
   followState.timer = setInterval(() => refreshBuses(), FOLLOW_MS);
   setTimeout(() => { if (followState) followState.raf = requestAnimationFrame(followFrame); }, reduceMotion ? 0 : 1250);
@@ -1152,8 +1233,18 @@ function followFrame() {
     } else if (!st.model) { // the simple box bus only while the detailed model is first being built
       map.getSource("bus3d")?.setData(busModel(st.shown.c, st.shown.heading, routes[st.route]?.color || "#00703c")); st.boxCleared = false;
     } // (model built but its layer briefly missing, e.g. after a style reload: wait for it -- no box flash)
+    headlights.set("follow", [st.shown.c, st.shown.heading]); drawHeadlights();
+    const now = performance.now();
+    if (st.flyUntil && now < st.flyUntil) { st.raf = requestAnimationFrame(followFrame); return; } // flying in: hands off
+    if (st.flyUntil) { st.flyUntil = 0; st.blend = { from: map.getCenter().toArray(), t0: now }; } // landed: blend to the bus
+    let center = st.shown.c;
+    if (st.blend) {
+      const k = Math.min(1, (now - st.blend.t0) / 900), e = k * k * (3 - 2 * k);
+      center = [st.blend.from[0] + (st.shown.c[0] - st.blend.from[0]) * e, st.blend.from[1] + (st.shown.c[1] - st.blend.from[1]) * e];
+      if (k >= 1) st.blend = null;
+    }
     const cam = st.cam; cam.zoom += (cam.zoomTo - cam.zoom) * 0.18; // smooth zoom, always centered on the bus
-    map.jumpTo({ center: st.shown.c, bearing: st.shown.heading + (st.orbit || 0), pitch: cam.pitch, zoom: cam.zoom,
+    map.jumpTo({ center, bearing: st.shown.heading + (st.orbit || 0), pitch: cam.pitch, zoom: cam.zoom,
       padding: { top: 0, bottom: 0, left: 0, right: 0 } }); // no leftover margins: the bus sits dead center
   }
   st.raf = requestAnimationFrame(followFrame);
@@ -1286,8 +1377,10 @@ function fleetFrame(now) {
     const dh = ((h - sh.h + 540) % 360) - 180; sh.h = (sh.h + dh * k + 360) % 360;
     fleet.shown.set(p.id, sh);
     feats.push({ type: "Feature", properties: { model: m.id, r: [0, 0, (sh.h + 270) % 360] }, geometry: { type: "Point", coordinates: sh.c } });
+    headlights.set(p.id, [sh.c, sh.h]);
   }
-  for (const id of fleet.shown.keys()) if (!seen.has(id)) fleet.shown.delete(id);
+  for (const id of fleet.shown.keys()) if (!seen.has(id)) { fleet.shown.delete(id); headlights.delete(id); }
+  drawHeadlights();
   const sig = feats.map((f) => f.properties.model + f.geometry.coordinates.map((x) => x.toFixed(6)).join() + Math.round(f.properties.r[2])).join("|");
   if (sig !== fleet.sig) { fleet.sig = sig; map.getSource("fleet3d")?.setData({ type: "FeatureCollection", features: feats }); } // only when something moved
 }
@@ -1447,6 +1540,7 @@ const HOVER_LABELS = {
   ".mapboxgl-ctrl-geolocate": () => `${tapOrClick()} to see next service near you`,
   ".spot-btn": () => `${tapOrClick()} a location on the map to see nearby service`,
   ".three-btn": () => (three.on ? "Leave 3D view" : "View in 3D"),
+  ".night-btn": () => (lightNow() === "night" ? "Switch to daylight" : "Switch to night lighting"),
   ".expand-btn": () => (isFullscreen() || new URLSearchParams(location.search).get("full") === "1" ? "Minimize" : "Expand to full screen"),
   ".help-btn": () => (document.querySelector(".fs-hint.persistent") ? "Hide helpful hints" : "Helpful hints"),
 };
@@ -1680,6 +1774,9 @@ function defaultHidden() {
 }
 // Full-page tab: open where the embedded map was (once the map and its data are ready).
 Promise.all([dataReady, mapLoaded]).then(() => setTimeout(() => restoreViewState(), 300));
+// Embedded (e.g. on ridegmt.com): tell the page the map is working. The embed code there switches to a backup map
+// (Swiftly's) if this signal doesn't arrive in time -- see MAINTENANCE.md "Backup map". It carries no data.
+Promise.all([dataReady, mapLoaded]).then(() => { if (window.parent !== window) window.parent.postMessage({ type: "gmt-map-ready" }, "*"); }).catch(() => {});
 
 
 dataReady.then(() => {
@@ -1769,7 +1866,7 @@ setInterval(() => {
 
 // Overlay layers are re-added whenever the basemap changes.
 map.on("style.load", async () => {
-  if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: three.on, showTransitLabels: false, lightPreset: "day" }))
+  if (basemap.standard) for (const [k, v] of Object.entries({ show3dObjects: three.on, showTransitLabels: false, lightPreset: three.on ? lightNow() : "day" }))
     try { map.setConfigProperty("basemap", k, v); } catch {}
   await dataReady.catch(() => {});
   if (!linesData) { ensureBusLayer(); return; }
@@ -1837,6 +1934,10 @@ function addOverlay() {
   add({ id: "freq-lines", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "round" }, paint: {} }, "middle");
   add({ id: "freq-low", type: "line", source: "freq", layout: { "line-join": "round", "line-cap": "butt" },
     paint: { "line-color": FREQ[3].color, "line-width": width(1.2, 3), "line-dasharray": [2, 1.5] } }, "middle");
+  // 3D at night: headlight beams on the street ahead of each bus.
+  if (!map.getSource("headlights")) map.addSource("headlights", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  if (!map.getLayer("headlights")) map.addLayer({ id: "headlights", type: "fill", source: "headlights", layout: { visibility: "none" },
+    paint: { "fill-color": "#fff0b8", "fill-opacity": 0.38, "fill-emissive-strength": 1, "fill-antialias": true }, ...(basemap.standard ? { slot: "middle" } : {}) });
   // Travel time map: reachable areas (30/45/60 min), beneath the routes, and the starting point.
   if (!map.getSource("reach")) map.addSource("reach", { type: "geojson", data: reachGeo || { type: "FeatureCollection", features: [] } });
   add({ id: "reach-cells", type: "fill", source: "reach", filter: ["has", "band"], layout: { visibility: "none" },
@@ -3015,6 +3116,14 @@ function restoreBusFocus() {
   hidden = bf.hidden; picking = bf.picking; stopFocus = bf.stopFocus;
   buildSystemPanel.sync?.(); applyFilters(); refreshBuses();
   document.getElementById("announce").textContent = "Showing the routes you had selected.";
+}
+{ let hoverTimer = null;
+  document.addEventListener("mouseover", (e) => {
+    const row = e.target.closest?.(".stop-list .stop-row[data-stop]"); clearTimeout(hoverTimer);
+    if (!row || !matchMedia("(hover: hover)").matches || followState) return;
+    hoverTimer = setTimeout(() => { const s = stopsById[row.dataset.stop]; if (!s) return;
+      map.easeTo({ center: s.coords, zoom: Math.max(map.getZoom(), 15.5), padding: panelPad(), duration: reduceMotion ? 0 : 600 }); }, 250);
+  });
 }
 function closeStop() {
   openTripEtas = null;
